@@ -96,47 +96,69 @@ def list_network_interfaces():
     return interfaces
 
 
-def scan_wireless_networks(interface):
-    try:
-        result = subprocess.run(
-            ["iw", "dev", interface, "scan"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        logging.error("Required tool 'iw' not found!")
-        return []
-
-    if result.returncode != 0:
-        logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
-        return []
-
+def scan_wireless_networks(interface, duration_seconds=15, show_progress=False):
+    end_time = time.time() + max(1, duration_seconds)
     networks = {}
-    current_signal = None
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if line.startswith("BSS "):
-            current_signal = None
-            continue
-        if line.startswith("signal:"):
-            parts = line.split()
-            try:
-                current_signal = float(parts[1])
-            except (IndexError, ValueError):
+    last_remaining = None
+    while time.time() < end_time:
+        if show_progress and COLOR_ENABLED:
+            remaining = max(0, int(end_time - time.time()))
+            if remaining != last_remaining:
+                last_remaining = remaining
+                message = (
+                    f"{style('Scanning', STYLE_BOLD)}... "
+                    f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
+                )
+                sys.stdout.write("\r" + message)
+                sys.stdout.flush()
+        try:
+            result = subprocess.run(
+                ["iw", "dev", interface, "scan"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            logging.error("Required tool 'iw' not found!")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+
+        if result.returncode != 0:
+            logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+
+        current_signal = None
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("BSS "):
                 current_signal = None
-            continue
-        if line.startswith("SSID:"):
-            ssid = line.split(":", 1)[1].strip()
-            if not ssid:
                 continue
-            existing = networks.get(ssid)
-            if existing is None or (
-                current_signal is not None
-                and (existing["signal"] is None or current_signal > existing["signal"])
-            ):
-                networks[ssid] = {"ssid": ssid, "signal": current_signal}
+            if line.startswith("signal:"):
+                parts = line.split()
+                try:
+                    current_signal = float(parts[1])
+                except (IndexError, ValueError):
+                    current_signal = None
+                continue
+            if line.startswith("SSID:"):
+                ssid = line.split(":", 1)[1].strip()
+                if not ssid:
+                    continue
+                existing = networks.get(ssid)
+                if existing is None or (
+                    current_signal is not None
+                    and (existing["signal"] is None or current_signal > existing["signal"])
+                ):
+                    networks[ssid] = {"ssid": ssid, "signal": current_signal}
+
+        time.sleep(0.2)
+
+    if show_progress and COLOR_ENABLED:
+        sys.stdout.write("\n")
 
     return sorted(
         networks.values(),
@@ -145,9 +167,9 @@ def scan_wireless_networks(interface):
     )
 
 
-def select_network_ssid(interface):
+def select_network_ssid(interface, duration_seconds):
     while True:
-        networks = scan_wireless_networks(interface)
+        networks = scan_wireless_networks(interface, duration_seconds, show_progress=True)
         if not networks:
             logging.warning("No networks found during scan.")
             retry = input(f"{style('Rescan', STYLE_BOLD)}? (Y/N): ").strip().lower()
@@ -410,10 +432,24 @@ def run_portal_session():
     globals()["AP_INTERFACE"] = select_interface(interfaces)
 
     subprocess.run(['ip', 'link', 'set', AP_INTERFACE, 'up'], stderr=subprocess.DEVNULL)
+    scan_prompt = (
+        f"{style('Scan duration', STYLE_BOLD)} in seconds "
+        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
+    )
+    scan_input = input(scan_prompt).strip()
+    try:
+        scan_seconds = int(scan_input) if scan_input else 15
+    except ValueError:
+        logging.warning("Invalid duration. Using 15 seconds.")
+        scan_seconds = 15
+    if scan_seconds < 1:
+        logging.warning("Scan duration too short. Using 1 second.")
+        scan_seconds = 1
+
     input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {AP_INTERFACE}...")
 
     # Nazwa sieci po skanowaniu
-    globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE)
+    globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE, scan_seconds)
 
     input(
         f"{style('Press Enter', STYLE_BOLD)} to start captive portal "

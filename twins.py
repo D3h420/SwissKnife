@@ -178,7 +178,11 @@ def parse_freq_value(text: str) -> Optional[float]:
     return value
 
 
-def scan_wireless_networks(interface: str) -> List[Dict[str, Optional[str]]]:
+def scan_wireless_networks(
+    interface: str,
+    duration_seconds: int = 15,
+    show_progress: bool = False,
+) -> List[Dict[str, Optional[str]]]:
     def run_scan() -> subprocess.CompletedProcess:
         return subprocess.run(
             ["iw", "dev", interface, "scan"],
@@ -188,63 +192,95 @@ def scan_wireless_networks(interface: str) -> List[Dict[str, Optional[str]]]:
             check=False,
         )
 
-    try:
-        result = run_scan()
-    except FileNotFoundError:
-        logging.error("Required tool 'iw' not found!")
-        return []
-
-    if result.returncode != 0 and is_monitor_mode(interface):
-        if set_interface_type(interface, "managed"):
-            result = run_scan()
-            if not set_interface_type(interface, "monitor"):
-                logging.error("Failed to restore monitor mode after scan.")
-
-    if result.returncode != 0:
-        logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
-        return []
-
+    end_time = time.time() + max(1, duration_seconds)
     networks: Dict[str, Dict[str, Optional[str]]] = {}
-    current: Dict[str, Optional[str]] = {}
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if line.startswith("BSS "):
-            if current.get("bssid") and current.get("ssid"):
-                networks[current["bssid"]] = current
-            current = {"bssid": line.split()[1].split("(")[0], "ssid": None, "signal": None, "channel": None}
-            continue
-        if line.startswith("freq:"):
-            parts = line.split()
-            freq_val = parse_freq_value(parts[1]) if len(parts) > 1 else None
-            current["channel"] = freq_to_channel(freq_val) if freq_val is not None else None
-            continue
-        if line.startswith("DS Parameter set:"):
-            parts = line.split()
-            if len(parts) >= 4 and parts[-2] == "channel":
-                channel_val = parse_channel_value(parts[-1])
-                if channel_val is not None:
-                    current["channel"] = channel_val
-            continue
-        if line.startswith("* primary channel:"):
-            parts = line.split(":")
-            if len(parts) == 2:
-                channel_val = parse_channel_value(parts[1].strip())
-                if channel_val is not None:
-                    current["channel"] = channel_val
-            continue
-        if line.startswith("signal:"):
-            parts = line.split()
-            try:
-                current["signal"] = float(parts[1])
-            except (IndexError, ValueError):
-                current["signal"] = None
-            continue
-        if line.startswith("SSID:"):
-            ssid_val = line.split(":", 1)[1].strip()
-            current["ssid"] = ssid_val if ssid_val else "<hidden>"
+    last_remaining = None
+    while time.time() < end_time:
+        if show_progress and COLOR_ENABLED:
+            remaining = max(0, int(end_time - time.time()))
+            if remaining != last_remaining:
+                last_remaining = remaining
+                message = (
+                    f"{style('Scanning', STYLE_BOLD)}... "
+                    f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
+                )
+                sys.stdout.write("\r" + message)
+                sys.stdout.flush()
+        try:
+            result = run_scan()
+        except FileNotFoundError:
+            logging.error("Required tool 'iw' not found!")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
 
-    if current.get("bssid") and current.get("ssid"):
-        networks[current["bssid"]] = current
+        if result.returncode != 0 and is_monitor_mode(interface):
+            if set_interface_type(interface, "managed"):
+                result = run_scan()
+                if not set_interface_type(interface, "monitor"):
+                    logging.error("Failed to restore monitor mode after scan.")
+
+        if result.returncode != 0:
+            logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+
+        current: Dict[str, Optional[str]] = {}
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("BSS "):
+                if current.get("bssid") and current.get("ssid"):
+                    existing = networks.get(current["bssid"])
+                    if existing is None or (
+                        current.get("signal") is not None
+                        and (existing.get("signal") is None or current["signal"] > existing["signal"])
+                    ):
+                        networks[current["bssid"]] = current
+                current = {"bssid": line.split()[1].split("(")[0], "ssid": None, "signal": None, "channel": None}
+                continue
+            if line.startswith("freq:"):
+                parts = line.split()
+                freq_val = parse_freq_value(parts[1]) if len(parts) > 1 else None
+                current["channel"] = freq_to_channel(freq_val) if freq_val is not None else None
+                continue
+            if line.startswith("DS Parameter set:"):
+                parts = line.split()
+                if len(parts) >= 4 and parts[-2] == "channel":
+                    channel_val = parse_channel_value(parts[-1])
+                    if channel_val is not None:
+                        current["channel"] = channel_val
+                continue
+            if line.startswith("* primary channel:"):
+                parts = line.split(":")
+                if len(parts) == 2:
+                    channel_val = parse_channel_value(parts[1].strip())
+                    if channel_val is not None:
+                        current["channel"] = channel_val
+                continue
+            if line.startswith("signal:"):
+                parts = line.split()
+                try:
+                    current["signal"] = float(parts[1])
+                except (IndexError, ValueError):
+                    current["signal"] = None
+                continue
+            if line.startswith("SSID:"):
+                ssid_val = line.split(":", 1)[1].strip()
+                current["ssid"] = ssid_val if ssid_val else "<hidden>"
+
+        if current.get("bssid") and current.get("ssid"):
+            existing = networks.get(current["bssid"])
+            if existing is None or (
+                current.get("signal") is not None
+                and (existing.get("signal") is None or current["signal"] > existing["signal"])
+            ):
+                networks[current["bssid"]] = current
+
+        time.sleep(0.2)
+
+    if show_progress and COLOR_ENABLED:
+        sys.stdout.write("\n")
 
     sorted_networks = sorted(
         networks.values(),
@@ -254,9 +290,9 @@ def scan_wireless_networks(interface: str) -> List[Dict[str, Optional[str]]]:
     return sorted_networks
 
 
-def select_network(attack_interface: str) -> Dict[str, Optional[str]]:
+def select_network(attack_interface: str, duration_seconds: int) -> Dict[str, Optional[str]]:
     while True:
-        networks = scan_wireless_networks(attack_interface)
+        networks = scan_wireless_networks(attack_interface, duration_seconds, show_progress=True)
         if not networks:
             logging.warning("No networks found during scan.")
             retry = input(f"{style('Rescan', STYLE_BOLD)}? (Y/N): ").strip().lower()
@@ -716,8 +752,22 @@ def run_twins_session() -> bool:
     if not enable_monitor_mode(ATTACK_INTERFACE, None):
         return False
 
+    scan_prompt = (
+        f"{style('Scan duration', STYLE_BOLD)} in seconds "
+        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
+    )
+    scan_input = input(scan_prompt).strip()
+    try:
+        scan_seconds = int(scan_input) if scan_input else 15
+    except ValueError:
+        logging.warning("Invalid duration. Using 15 seconds.")
+        scan_seconds = 15
+    if scan_seconds < 1:
+        logging.warning("Scan duration too short. Using 1 second.")
+        scan_seconds = 1
+
     input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {ATTACK_INTERFACE}...")
-    target_network = select_network(ATTACK_INTERFACE)
+    target_network = select_network(ATTACK_INTERFACE, scan_seconds)
     logging.info(
         "Target selected: %s (%s)",
         style(target_network["ssid"], COLOR_SUCCESS, STYLE_BOLD),
