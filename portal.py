@@ -182,6 +182,85 @@ def list_network_interfaces():
     return interfaces
 
 
+def scan_wireless_networks(interface):
+    try:
+        result = subprocess.run(
+            ["iw", "dev", interface, "scan"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        logging.error("Required tool 'iw' not found!")
+        return []
+
+    if result.returncode != 0:
+        logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+        return []
+
+    networks = {}
+    current_signal = None
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("BSS "):
+            current_signal = None
+            continue
+        if line.startswith("signal:"):
+            parts = line.split()
+            try:
+                current_signal = float(parts[1])
+            except (IndexError, ValueError):
+                current_signal = None
+            continue
+        if line.startswith("SSID:"):
+            ssid = line.split(":", 1)[1].strip()
+            if not ssid:
+                continue
+            existing = networks.get(ssid)
+            if existing is None or (
+                current_signal is not None
+                and (existing["signal"] is None or current_signal > existing["signal"])
+            ):
+                networks[ssid] = {"ssid": ssid, "signal": current_signal}
+
+    return sorted(
+        networks.values(),
+        key=lambda item: item["signal"] if item["signal"] is not None else -1000,
+        reverse=True,
+    )
+
+
+def select_network_ssid(interface):
+    while True:
+        networks = scan_wireless_networks(interface)
+        if not networks:
+            logging.warning("No networks found during scan.")
+            retry = input("Rescan? (Y/N): ").strip().lower()
+            if retry == "y":
+                continue
+            sys.exit(1)
+
+        logging.info("Available networks:")
+        for index, network in enumerate(networks, start=1):
+            signal = (
+                f"{network['signal']:.1f} dBm"
+                if network["signal"] is not None
+                else "signal unknown"
+            )
+            label = f"{index}) {network['ssid']} -"
+            logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), signal)
+
+        choice = input("Select network (number, or R to rescan): ").strip().lower()
+        if choice == "r":
+            continue
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(networks):
+                return networks[idx - 1]["ssid"]
+        logging.warning("Invalid selection. Try again.")
+
+
 def select_interface(interfaces):
     if not interfaces:
         logging.error("No network interfaces found.")
@@ -416,7 +495,7 @@ def main():
         sys.exit(1)
     
     # Sprawdź dostępność wymaganych narzędzi
-    required_tools = ['hostapd', 'dnsmasq', 'iptables', 'ip', 'ethtool']
+    required_tools = ['hostapd', 'dnsmasq', 'iptables', 'ip', 'ethtool', 'iw']
     for tool in required_tools:
         if subprocess.run(['which', tool], stdout=subprocess.DEVNULL).returncode != 0:
             logging.error(f"Required tool '{tool}' not found!")
@@ -426,10 +505,8 @@ def main():
     interfaces = list_network_interfaces()
     globals()["AP_INTERFACE"] = select_interface(interfaces)
 
-    # Nazwa sieci
-    ssid_choice = input(f"Network name (SSID) [{AP_SSID}]: ").strip()
-    if ssid_choice:
-        globals()["AP_SSID"] = ssid_choice
+    # Nazwa sieci po skanowaniu
+    globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE)
 
     capture_filename = sanitize_filename(AP_SSID)
     globals()["CAPTURE_FILE_PATH"] = os.path.join(os.path.dirname(__file__), capture_filename)
