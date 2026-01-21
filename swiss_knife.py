@@ -9,13 +9,16 @@ import os
 import signal
 import subprocess
 import sys
-from typing import Dict
+import shutil
+import platform
+from typing import Dict, List
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
 COLOR_HEADER = "\033[36m" if COLOR_ENABLED else ""
 COLOR_HIGHLIGHT = "\033[35m" if COLOR_ENABLED else ""
 COLOR_SUCCESS = "\033[32m" if COLOR_ENABLED else ""
+COLOR_ERROR = "\033[31m" if COLOR_ENABLED else ""
 STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 
@@ -57,9 +60,165 @@ RECON_MENU: Dict[str, Dict[str, str]] = {
     "2": {"name": "Back", "file": ""},
 }
 
+REQUIRED_TOOLS: List[str] = [
+    "iw",
+    "ip",
+    "ethtool",
+    "aireplay-ng",
+    "hostapd",
+    "dnsmasq",
+    "iptables",
+]
+
+PACKAGE_MAPS = {
+    "apt": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute2",
+    },
+    "apt-get": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute2",
+    },
+    "dnf": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute",
+    },
+    "yum": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute",
+    },
+    "pacman": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute2",
+    },
+    "zypper": {
+        "aireplay-ng": "aircrack-ng",
+        "ip": "iproute2",
+    },
+}
+
 
 def base_dir() -> str:
     return os.path.dirname(os.path.abspath(__file__))
+
+
+def print_banner() -> None:
+    print(color_text(ASCII_HEADER, COLOR_HEADER))
+    print()
+
+
+def extended_path_env() -> str:
+    extra_paths = ["/sbin", "/usr/sbin", "/usr/local/sbin"]
+    env_path = os.environ.get("PATH", "")
+    return os.pathsep.join([env_path, *extra_paths])
+
+
+def tool_exists(tool: str) -> bool:
+    return shutil.which(tool, path=extended_path_env()) is not None
+
+
+def detect_package_manager() -> str:
+    if platform.system() == "Darwin":
+        return "brew" if shutil.which("brew") else ""
+
+    for candidate in ["apt-get", "apt", "dnf", "yum", "pacman", "zypper", "apk"]:
+        if shutil.which(candidate):
+            return candidate
+    return ""
+
+
+def package_names(package_manager: str, tools: List[str]) -> List[str]:
+    mapping = PACKAGE_MAPS.get(package_manager, {})
+    resolved = []
+    for tool in tools:
+        package = mapping.get(tool, tool)
+        if package not in resolved:
+            resolved.append(package)
+    return resolved
+
+
+def install_missing_tools(missing: List[str]) -> bool:
+    if platform.system() == "Darwin":
+        print(color_text("Automatic installation is not supported on macOS. Please install the missing tools manually (e.g., via Homebrew).\n", COLOR_HIGHLIGHT))
+        return False
+
+    package_manager = detect_package_manager()
+    if not package_manager:
+        print(color_text("No supported package manager found; please install tools manually.\n", COLOR_HIGHLIGHT))
+        return False
+
+    packages = package_names(package_manager, missing)
+
+    if package_manager in ("apt", "apt-get"):
+        cmd = [package_manager, "install", "-y", *packages]
+    elif package_manager in ("dnf", "yum"):
+        cmd = [package_manager, "install", "-y", *packages]
+    elif package_manager == "pacman":
+        cmd = ["pacman", "-S", "--noconfirm", "--needed", *packages]
+    elif package_manager == "zypper":
+        cmd = ["zypper", "--non-interactive", "install", *packages]
+    elif package_manager == "apk":
+        cmd = ["apk", "add", *packages]
+    else:
+        print(color_text(f"Unsupported package manager '{package_manager}'. Please install tools manually.\n", COLOR_HIGHLIGHT))
+        return False
+
+    print(style(f"Installing missing tools via {package_manager}...", STYLE_BOLD))
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(color_text("Automatic installation failed. Please install the remaining tools manually.\n", COLOR_HIGHLIGHT))
+        return False
+
+    return True
+
+
+def prompt_yes_no(message: str, default_yes: bool = True) -> bool:
+    try:
+        response = input(style(message, STYLE_BOLD)).strip().lower()
+    except EOFError:
+        return default_yes
+
+    if not response:
+        return default_yes
+    return response in ("y", "yes")
+
+
+def report_dependencies() -> List[str]:
+    missing = []
+    print_banner()
+    print(style("Dependency check:", STYLE_BOLD))
+
+    for tool in REQUIRED_TOOLS:
+        if tool_exists(tool):
+            status = color_text("OK", COLOR_SUCCESS)
+        else:
+            status = color_text("missing", COLOR_ERROR)
+            missing.append(tool)
+        print(f"- {tool.ljust(12)} {status}")
+
+    print()
+    return missing
+
+
+def ensure_dependencies(is_root: bool) -> None:
+    missing = report_dependencies()
+    if not missing:
+        print(color_text("All required tools are available.\n", COLOR_SUCCESS))
+        return
+
+    if not is_root:
+        print(color_text("Run as root to allow automatic installation of missing tools.\n", COLOR_HIGHLIGHT))
+        return
+
+    if not prompt_yes_no("Install missing tools now? [Y/n]: "):
+        print(color_text("Proceeding without installation may lead to runtime failures.\n", COLOR_HIGHLIGHT))
+        return
+
+    installed = install_missing_tools(missing)
+    if installed:
+        report_dependencies()
+    else:
+        print(color_text("Could not install all tools automatically. Please handle manually.\n", COLOR_HIGHLIGHT))
 
 
 def script_path(filename: str) -> str:
@@ -128,7 +287,10 @@ def attacks_menu() -> None:
 
 
 def main() -> None:
-    if os.geteuid() != 0:
+    is_root = os.geteuid() == 0
+    ensure_dependencies(is_root)
+
+    if not is_root:
         print(color_text("This launcher must be run as root.", COLOR_HIGHLIGHT))
         sys.exit(1)
 
