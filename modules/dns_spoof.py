@@ -420,6 +420,53 @@ def run_nmtui() -> bool:
     return True
 
 
+def is_interface_up(interface: str) -> bool:
+    result = subprocess.run(
+        ["ip", "-o", "link", "show", "dev", interface],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    line = result.stdout.strip()
+    return "state UP" in line or "LOWER_UP" in line
+
+
+def is_wireless_connected(interface: str) -> Optional[bool]:
+    if not is_wireless_interface(interface):
+        return None
+    try:
+        result = subprocess.run(
+            ["iw", "dev", interface, "link"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    output = result.stdout.strip()
+    if "Not connected." in output:
+        return False
+    if "Connected to" in output:
+        return True
+    return None
+
+
+def get_connected_ipv4_cidr(interface: str) -> Optional[str]:
+    cidr = get_interface_ipv4_cidr(interface)
+    if not cidr:
+        return None
+    if not is_interface_up(interface):
+        return None
+    wireless_state = is_wireless_connected(interface)
+    if wireless_state is False:
+        return None
+    return cidr
+
+
 def is_scan_busy_error(stderr: str) -> bool:
     if not stderr:
         return False
@@ -836,7 +883,7 @@ def connect_to_wifi(interface: str, ssid: str, password: str, hidden: bool) -> b
 
 
 def ensure_interface_connected(interface: str) -> Optional[str]:
-    cidr = get_interface_ipv4_cidr(interface)
+    cidr = get_connected_ipv4_cidr(interface)
     if cidr:
         return cidr
 
@@ -852,7 +899,7 @@ def ensure_interface_connected(interface: str) -> Optional[str]:
         ).strip().lower()
         if choice in {"", "y", "yes"}:
             if run_nmtui():
-                cidr = get_interface_ipv4_cidr(interface)
+                cidr = get_connected_ipv4_cidr(interface)
                 if cidr:
                     return cidr
 
@@ -880,7 +927,7 @@ def ensure_interface_connected(interface: str) -> Optional[str]:
             hidden = True
         elif method in {"n", "nmtui"}:
             if run_nmtui():
-                cidr = get_interface_ipv4_cidr(interface)
+                cidr = get_connected_ipv4_cidr(interface)
                 if cidr:
                     return cidr
             logging.warning("No IPv4 address detected after nmtui.")
