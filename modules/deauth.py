@@ -285,121 +285,97 @@ def scan_wireless_networks(
             check=False,
         )
 
-    original_mode = get_interface_mode(interface)
-    restore_monitor = original_mode == "monitor"
-    if restore_monitor:
-        logging.info("Interface is in monitor mode; switching to managed for scan.")
-        if not set_interface_mode(interface, "managed"):
-            logging.warning("Failed to switch to managed mode; scan may be unreliable.")
-
     end_time = time.time() + max(1, duration_seconds)
     networks: Dict[str, Dict[str, Optional[str]]] = {}
     last_remaining = None
-    try:
-        while time.time() < end_time:
+    while time.time() < end_time:
+        if show_progress and COLOR_ENABLED:
+            remaining = max(0, int(end_time - time.time()))
+            if remaining != last_remaining:
+                last_remaining = remaining
+                message = (
+                    f"{style('Scanning', STYLE_BOLD)}... "
+                    f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
+                )
+                sys.stdout.write("\r" + message)
+                sys.stdout.flush()
+        try:
+            remaining_time = end_time - time.time()
+            if remaining_time <= 0:
+                break
+            timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
+            result = run_scan(timeout_seconds)
+        except FileNotFoundError:
+            logging.error("Required tool 'iw' not found!")
             if show_progress and COLOR_ENABLED:
-                remaining = max(0, int(end_time - time.time()))
-                if remaining != last_remaining:
-                    last_remaining = remaining
-                    message = (
-                        f"{style('Scanning', STYLE_BOLD)}... "
-                        f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
-                    )
-                    sys.stdout.write("\r" + message)
-                    sys.stdout.flush()
-            try:
-                remaining_time = end_time - time.time()
-                if remaining_time <= 0:
-                    break
-                timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
-                result = run_scan(timeout_seconds)
-            except FileNotFoundError:
-                logging.error("Required tool 'iw' not found!")
-                if show_progress and COLOR_ENABLED:
-                    sys.stdout.write("\n")
-                return []
-            except subprocess.TimeoutExpired:
-                time.sleep(0.2)
-                continue
-
-            if result.returncode != 0 and is_monitor_mode(interface):
-                if set_interface_type(interface, "managed"):
-                    remaining_time = end_time - time.time()
-                    if remaining_time <= 0:
-                        break
-                    timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
-                    result = run_scan(timeout_seconds)
-                    if not set_interface_type(interface, "monitor"):
-                        logging.error("Failed to restore monitor mode after scan.")
-                    else:
-                        time.sleep(0.5)
-
-            if result.returncode != 0:
-                err_text = result.stderr.strip()
-                if is_scan_busy_error(err_text):
-                    time.sleep(SCAN_BUSY_RETRY_DELAY)
-                    continue
-                logging.error("Wireless scan failed: %s", err_text or "unknown error")
-                if show_progress and COLOR_ENABLED:
-                    sys.stdout.write("\n")
-                return []
-
-            current: Dict[str, Optional[str]] = {}
-            for raw_line in result.stdout.splitlines():
-                line = raw_line.strip()
-                if line.startswith("BSS "):
-                    if current.get("bssid") and current.get("ssid"):
-                        existing = networks.get(current["bssid"])
-                        if existing is None or (
-                            current.get("signal") is not None
-                            and (existing.get("signal") is None or current["signal"] > existing["signal"])
-                        ):
-                            networks[current["bssid"]] = current
-                    current = {"bssid": line.split()[1].split("(")[0], "ssid": None, "signal": None, "channel": None}
-                    continue
-                if line.startswith("freq:"):
-                    parts = line.split()
-                    freq_val = parse_freq_value(parts[1]) if len(parts) > 1 else None
-                    current["channel"] = freq_to_channel(freq_val) if freq_val is not None else None
-                    continue
-                if line.startswith("DS Parameter set:"):
-                    parts = line.split()
-                    if len(parts) >= 4 and parts[-2] == "channel":
-                        channel_val = parse_channel_value(parts[-1])
-                        if channel_val is not None:
-                            current["channel"] = channel_val
-                    continue
-                if line.startswith("* primary channel:"):
-                    parts = line.split(":")
-                    if len(parts) == 2:
-                        channel_val = parse_channel_value(parts[1].strip())
-                        if channel_val is not None:
-                            current["channel"] = channel_val
-                    continue
-                if line.startswith("signal:"):
-                    parts = line.split()
-                    try:
-                        current["signal"] = float(parts[1])
-                    except (IndexError, ValueError):
-                        current["signal"] = None
-                    continue
-                if line.startswith("SSID:"):
-                    ssid_val = line.split(":", 1)[1].strip()
-                    current["ssid"] = ssid_val if ssid_val else "<hidden>"
-
-            if current.get("bssid") and current.get("ssid"):
-                existing = networks.get(current["bssid"])
-                if existing is None or (
-                    current.get("signal") is not None
-                    and (existing.get("signal") is None or current["signal"] > existing["signal"])
-                ):
-                    networks[current["bssid"]] = current
-
+                sys.stdout.write("\n")
+            return []
+        except subprocess.TimeoutExpired:
             time.sleep(0.2)
-    finally:
-        if restore_monitor:
-            if not set_interface_mode(interface, "monitor"):
-                logging.error("Failed to restore monitor mode after scan.")
+            continue
+
+        if result.returncode != 0:
+            err_text = result.stderr.strip()
+            if is_scan_busy_error(err_text):
+                time.sleep(SCAN_BUSY_RETRY_DELAY)
+                continue
+            logging.error("Wireless scan failed: %s", err_text or "unknown error")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+
+        current: Dict[str, Optional[str]] = {}
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("BSS "):
+                if current.get("bssid") and current.get("ssid"):
+                    existing = networks.get(current["bssid"])
+                    if existing is None or (
+                        current.get("signal") is not None
+                        and (existing.get("signal") is None or current["signal"] > existing["signal"])
+                    ):
+                        networks[current["bssid"]] = current
+                current = {"bssid": line.split()[1].split("(")[0], "ssid": None, "signal": None, "channel": None}
+                continue
+            if line.startswith("freq:"):
+                parts = line.split()
+                freq_val = parse_freq_value(parts[1]) if len(parts) > 1 else None
+                current["channel"] = freq_to_channel(freq_val) if freq_val is not None else None
+                continue
+            if line.startswith("DS Parameter set:"):
+                parts = line.split()
+                if len(parts) >= 4 and parts[-2] == "channel":
+                    channel_val = parse_channel_value(parts[-1])
+                    if channel_val is not None:
+                        current["channel"] = channel_val
+                continue
+            if line.startswith("* primary channel:"):
+                parts = line.split(":")
+                if len(parts) == 2:
+                    channel_val = parse_channel_value(parts[1].strip())
+                    if channel_val is not None:
+                        current["channel"] = channel_val
+                continue
+            if line.startswith("signal:"):
+                parts = line.split()
+                try:
+                    current["signal"] = float(parts[1])
+                except (IndexError, ValueError):
+                    current["signal"] = None
+                continue
+            if line.startswith("SSID:"):
+                ssid_val = line.split(":", 1)[1].strip()
+                current["ssid"] = ssid_val if ssid_val else "<hidden>"
+
+        if current.get("bssid") and current.get("ssid"):
+            existing = networks.get(current["bssid"])
+            if existing is None or (
+                current.get("signal") is not None
+                and (existing.get("signal") is None or current["signal"] > existing["signal"])
+            ):
+                networks[current["bssid"]] = current
+
+        time.sleep(0.2)
 
     if show_progress and COLOR_ENABLED:
         sys.stdout.write("\n")
@@ -910,10 +886,14 @@ def run_deauth_session() -> bool:
     SELECTED_INTERFACE = select_interface(interfaces)
 
     logging.info("")
-    input(f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode...")
-    if not set_interface_mode(SELECTED_INTERFACE, "monitor"):
-        return False
-    logging.info(color_text("✓ Monitor mode confirmed", COLOR_SUCCESS))
+    current_mode = get_interface_mode(SELECTED_INTERFACE)
+    if current_mode != "managed":
+        input(
+            f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to managed mode for scanning..."
+        )
+        if not set_interface_mode(SELECTED_INTERFACE, "managed"):
+            return False
+    logging.info(color_text("✓ Managed mode confirmed", COLOR_SUCCESS))
 
     logging.info("")
     scan_seconds = prompt_int(
@@ -933,10 +913,16 @@ def run_deauth_session() -> bool:
         style(str(target_network["channel"]), COLOR_HIGHLIGHT) if target_network["channel"] else "unknown"
     )
 
+    logging.info("")
+    input(
+        f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode for attack..."
+    )
+    if not set_interface_mode(SELECTED_INTERFACE, "monitor"):
+        return False
     if not is_monitor_mode(SELECTED_INTERFACE):
-        logging.warning("Interface left monitor mode; re-enabling.")
-        if not set_interface_mode(SELECTED_INTERFACE, "monitor"):
-            return False
+        logging.error("Monitor mode could not be confirmed on %s.", SELECTED_INTERFACE)
+        return False
+    logging.info(color_text("✓ Monitor mode confirmed", COLOR_SUCCESS))
 
     logging.info("")
     logging.info(style("="*60, STYLE_BOLD))
