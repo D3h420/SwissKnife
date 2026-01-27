@@ -8,6 +8,7 @@ import threading
 import subprocess
 import logging
 import ipaddress
+import getpass
 from dataclasses import dataclass, field
 from datetime import datetime
 from collections import Counter, defaultdict
@@ -26,7 +27,10 @@ COLOR_DIM = "\033[90m" if COLOR_ENABLED else ""
 STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 DEFAULT_SCAN_SECONDS = 10
+DEFAULT_WIFI_SCAN_SECONDS = 12
 SPOOF_INTERVAL = 2.0
+SCAN_BUSY_RETRY_DELAY = 0.8
+SCAN_COMMAND_TIMEOUT = 4.0
 
 FILTER_SUFFIXES = (
     "local",
@@ -243,6 +247,437 @@ def restore_ip_forwarding(original: Optional[str]) -> None:
         subprocess.run(["sysctl", "-w", f"net.ipv4.ip_forward={original}"], stderr=subprocess.DEVNULL)
 
 
+def is_tool_available(tool: str) -> bool:
+    return subprocess.run(["which", tool], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def is_scan_busy_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
+
+
+def is_wireless_interface(interface: str) -> bool:
+    if os.path.isdir(f"/sys/class/net/{interface}/wireless"):
+        return True
+    try:
+        result = subprocess.run(
+            ["iw", "dev", interface, "info"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def ensure_interface_ready_for_wifi(interface: str) -> None:
+    subprocess.run(["ip", "link", "set", interface, "up"], stderr=subprocess.DEVNULL)
+    try:
+        result = subprocess.run(
+            ["iw", "dev", interface, "info"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return
+    if result.returncode != 0:
+        return
+    if "type monitor" in result.stdout:
+        logging.info("Switching %s to managed mode for Wi-Fi connection.", interface)
+        subprocess.run(["ip", "link", "set", interface, "down"], stderr=subprocess.DEVNULL)
+        subprocess.run(["iw", "dev", interface, "set", "type", "managed"], stderr=subprocess.DEVNULL)
+        subprocess.run(["ip", "link", "set", interface, "up"], stderr=subprocess.DEVNULL)
+
+
+def wait_for_ipv4(interface: str, timeout: float = 20.0) -> Optional[str]:
+    start = time.time()
+    while time.time() - start < timeout:
+        cidr = get_interface_ipv4_cidr(interface)
+        if cidr:
+            return cidr
+        time.sleep(0.5)
+    return None
+
+
+def scan_wireless_networks_iw(
+    interface: str,
+    duration_seconds: int,
+    show_progress: bool = False,
+) -> List[Dict[str, Optional[float]]]:
+    end_time = time.time() + max(1, duration_seconds)
+    networks: Dict[str, Dict[str, Optional[float]]] = {}
+    last_remaining = None
+    while time.time() < end_time:
+        if show_progress and COLOR_ENABLED:
+            remaining = max(0, int(end_time - time.time()))
+            if remaining != last_remaining:
+                last_remaining = remaining
+                message = (
+                    f"{style('Scanning', STYLE_BOLD)}... "
+                    f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
+                )
+                sys.stdout.write("\r" + message)
+                sys.stdout.flush()
+        try:
+            remaining_time = end_time - time.time()
+            if remaining_time <= 0:
+                break
+            timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
+            result = subprocess.run(
+                ["iw", "dev", interface, "scan"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except FileNotFoundError:
+            logging.error("Required tool 'iw' not found!")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+        except subprocess.TimeoutExpired:
+            time.sleep(0.2)
+            continue
+
+        if result.returncode != 0:
+            err_text = result.stderr.strip()
+            if is_scan_busy_error(err_text):
+                time.sleep(SCAN_BUSY_RETRY_DELAY)
+                continue
+            logging.error("Wireless scan failed: %s", err_text or "unknown error")
+            if show_progress and COLOR_ENABLED:
+                sys.stdout.write("\n")
+            return []
+
+        current_signal: Optional[float] = None
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("BSS "):
+                current_signal = None
+                continue
+            if line.startswith("signal:"):
+                parts = line.split()
+                try:
+                    current_signal = float(parts[1])
+                except (IndexError, ValueError):
+                    current_signal = None
+                continue
+            if line.startswith("SSID:"):
+                ssid = line.split(":", 1)[1].strip()
+                if not ssid:
+                    ssid = "<hidden>"
+                existing = networks.get(ssid)
+                if existing is None or (
+                    current_signal is not None
+                    and (existing["signal"] is None or current_signal > existing["signal"])
+                ):
+                    networks[ssid] = {"ssid": ssid, "signal": current_signal}
+
+        time.sleep(0.2)
+
+    if show_progress and COLOR_ENABLED:
+        sys.stdout.write("\n")
+
+    return sorted(
+        networks.values(),
+        key=lambda item: item["signal"] if item["signal"] is not None else -1000,
+        reverse=True,
+    )
+
+
+def scan_wireless_networks_nmcli(
+    interface: str,
+    timeout_seconds: float = 6.0,
+) -> List[Dict[str, Optional[float]]]:
+    try:
+        subprocess.run(
+            ["nmcli", "dev", "wifi", "rescan", "ifname", interface],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi", "list", "ifname", interface],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except FileNotFoundError:
+        return []
+    except subprocess.TimeoutExpired:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    networks: Dict[str, Dict[str, Optional[float]]] = {}
+    for raw_line in result.stdout.splitlines():
+        if not raw_line.strip():
+            continue
+        parts = raw_line.split(":", 1)
+        if len(parts) != 2:
+            continue
+        ssid_raw, signal_raw = parts
+        ssid_clean = ssid_raw.replace("\\:", ":").strip()
+        ssid_val = ssid_clean if ssid_clean else "<hidden>"
+        try:
+            pct = float(signal_raw.strip())
+        except ValueError:
+            pct = None
+        signal_dbm = (pct / 2.0) - 100.0 if pct is not None else None
+        existing = networks.get(ssid_val)
+        if existing is None or (
+            signal_dbm is not None
+            and (existing["signal"] is None or signal_dbm > existing["signal"])
+        ):
+            networks[ssid_val] = {"ssid": ssid_val, "signal": signal_dbm}
+
+    return sorted(
+        networks.values(),
+        key=lambda item: item["signal"] if item["signal"] is not None else -1000,
+        reverse=True,
+    )
+
+
+def scan_wireless_networks(
+    interface: str,
+    duration_seconds: int,
+    show_progress: bool = False,
+) -> List[Dict[str, Optional[float]]]:
+    if is_tool_available("iw"):
+        networks = scan_wireless_networks_iw(interface, duration_seconds, show_progress)
+        if networks:
+            return networks
+    return scan_wireless_networks_nmcli(interface, timeout_seconds=min(6.0, max(2.0, duration_seconds)))
+
+
+def prompt_manual_ssid() -> str:
+    while True:
+        manual = input(f"{style('Enter SSID', STYLE_BOLD)}: ").strip()
+        if manual:
+            return manual
+        logging.warning("SSID cannot be empty.")
+
+
+def select_network_ssid(interface: str, duration_seconds: int) -> Optional[Tuple[str, bool]]:
+    while True:
+        networks = scan_wireless_networks(interface, duration_seconds, show_progress=True)
+        if not networks:
+            logging.warning("No networks found during scan.")
+            choice = input(
+                f"{style('Rescan', STYLE_BOLD)} (R), "
+                f"{style('Manual SSID', STYLE_BOLD)} (M), "
+                f"or {style('Exit', STYLE_BOLD)} (E): "
+            ).strip().lower()
+            if choice == "r":
+                continue
+            if choice == "m":
+                return prompt_manual_ssid(), True
+            return None
+
+        logging.info("")
+        logging.info(style("Available networks:", STYLE_BOLD))
+        for index, network in enumerate(networks, start=1):
+            signal = (
+                f"{network['signal']:.1f} dBm"
+                if network["signal"] is not None
+                else "signal unknown"
+            )
+            label = f"{index}) {network['ssid']} -"
+            logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), signal)
+
+        choice = input(
+            f"{style('Select network', STYLE_BOLD)} (number, R to rescan, M for manual): "
+        ).strip().lower()
+        if choice == "r":
+            continue
+        if choice == "m":
+            return prompt_manual_ssid(), True
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(networks):
+                ssid = networks[idx - 1]["ssid"]
+                if ssid in {"<hidden>", "<non-printable>"}:
+                    logging.info("Selected hidden SSID. Please enter it manually.")
+                    return prompt_manual_ssid(), True
+                return ssid, False
+        logging.warning("Invalid selection. Try again.")
+
+
+def prompt_wifi_password(ssid: str) -> str:
+    try:
+        return getpass.getpass(f"{style('Wi-Fi password', STYLE_BOLD)} for {ssid} (leave empty for open): ")
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def escape_wpa_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def run_dhcp(interface: str) -> None:
+    if is_tool_available("dhclient"):
+        subprocess.run(
+            ["dhclient", "-1", interface],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+        return
+    if is_tool_available("udhcpc"):
+        subprocess.run(
+            ["udhcpc", "-i", interface, "-n", "-q"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+        return
+    if is_tool_available("dhcpcd"):
+        subprocess.run(
+            ["dhcpcd", "-w", interface],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+
+
+def connect_wifi_nmcli(interface: str, ssid: str, password: str, hidden: bool) -> bool:
+    cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", interface]
+    if password:
+        cmd.extend(["password", password])
+    if hidden:
+        cmd.extend(["hidden", "yes"])
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    except FileNotFoundError:
+        return False
+    if result.returncode == 0:
+        return True
+    error_text = result.stderr.strip() or result.stdout.strip()
+    if error_text:
+        logging.error("nmcli connect failed: %s", error_text)
+    else:
+        logging.error("nmcli connect failed.")
+    return False
+
+
+def connect_wifi_wpa_supplicant(interface: str, ssid: str, password: str, hidden: bool) -> bool:
+    if not is_tool_available("wpa_supplicant"):
+        return False
+
+    escaped_ssid = escape_wpa_value(ssid)
+    lines = ["network={", f'    ssid="{escaped_ssid}"']
+    if hidden:
+        lines.append("    scan_ssid=1")
+    if password:
+        escaped_psk = escape_wpa_value(password)
+        lines.append(f'    psk="{escaped_psk}"')
+    else:
+        lines.append("    key_mgmt=NONE")
+    lines.append("}")
+    config_text = "\n".join(lines) + "\n"
+
+    conf_path = f"/tmp/wpa_supplicant_{interface}.conf"
+    try:
+        with open(conf_path, "w", encoding="utf-8") as handle:
+            handle.write(config_text)
+        os.chmod(conf_path, 0o600)
+    except OSError as exc:
+        logging.error("Failed to write wpa_supplicant config: %s", exc)
+        return False
+
+    try:
+        result = subprocess.run(
+            ["wpa_supplicant", "-B", "-i", interface, "-c", conf_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+
+    if result.returncode != 0:
+        error_text = result.stderr.strip() or result.stdout.strip()
+        if error_text:
+            logging.error("wpa_supplicant failed: %s", error_text)
+        else:
+            logging.error("wpa_supplicant failed to start.")
+        return False
+
+    run_dhcp(interface)
+    return True
+
+
+def connect_to_wifi(interface: str, ssid: str, password: str, hidden: bool) -> bool:
+    ensure_interface_ready_for_wifi(interface)
+    logging.info("Connecting to %s ...", style(ssid, COLOR_SUCCESS, STYLE_BOLD))
+    if connect_wifi_nmcli(interface, ssid, password, hidden):
+        return True
+    if connect_wifi_wpa_supplicant(interface, ssid, password, hidden):
+        return True
+    logging.error("No supported Wi-Fi manager found (nmcli or wpa_supplicant).")
+    return False
+
+
+def ensure_interface_connected(interface: str) -> Optional[str]:
+    cidr = get_interface_ipv4_cidr(interface)
+    if cidr:
+        return cidr
+
+    maybe_warn_not_connected(interface)
+    if not is_wireless_interface(interface):
+        return None
+    ensure_interface_ready_for_wifi(interface)
+
+    while True:
+        logging.info("")
+        method = input(
+            f"{style('Connect', STYLE_BOLD)} - "
+            f"{style('Scan', STYLE_BOLD)} (S) or {style('Manual', STYLE_BOLD)} (M): "
+        ).strip().lower()
+        hidden = False
+        if method in {"s", "scan", ""}:
+            scan_seconds = prompt_int(
+                f"{style('Scan duration', STYLE_BOLD)} in seconds "
+                f"({style('Enter', STYLE_BOLD)} for {style(str(DEFAULT_WIFI_SCAN_SECONDS), COLOR_SUCCESS, STYLE_BOLD)}): ",
+                default=DEFAULT_WIFI_SCAN_SECONDS,
+            )
+            input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {interface}...")
+            selected = select_network_ssid(interface, scan_seconds)
+            if not selected:
+                return None
+            ssid, hidden = selected
+        elif method in {"m", "manual"}:
+            ssid = prompt_manual_ssid()
+            hidden = True
+        else:
+            logging.warning("Please enter S or M.")
+            continue
+
+        password = prompt_wifi_password(ssid)
+        if connect_to_wifi(interface, ssid, password, hidden):
+            logging.info("Waiting for IPv4 address on %s ...", interface)
+            cidr = wait_for_ipv4(interface, timeout=20.0)
+            if cidr:
+                return cidr
+            logging.warning("No IPv4 address detected after connection.")
+        retry = input(f"{style('Retry connection', STYLE_BOLD)}? (Y/N): ").strip().lower()
+        if retry != "y":
+            return None
 
 
 def maybe_warn_not_connected(interface: str) -> None:
@@ -609,9 +1044,8 @@ def prompt_int(prompt: str, default: int, minimum: int = 1) -> int:
 def run_dns_spoof_session() -> None:
     interfaces = list_network_interfaces()
     interface = select_interface(interfaces)
-    maybe_warn_not_connected(interface)
 
-    cidr = get_interface_ipv4_cidr(interface)
+    cidr = ensure_interface_connected(interface)
     if not cidr:
         logging.error("No IPv4 address found on %s. Connect first and retry.", interface)
         sys.exit(1)
