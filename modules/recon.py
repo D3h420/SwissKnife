@@ -22,7 +22,7 @@ STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(MODULE_DIR)
-DNS_SNIFF_SCRIPT = os.path.join(MODULE_DIR, "dns_sniff.py")
+DNS_SPOOF_SCRIPT = os.path.join(MODULE_DIR, "dns_spoof.py")
 DEFAULT_VENDOR_DB = os.environ.get(
     "SWISSKNIFE_VENDOR_DB", os.path.join(MODULE_DIR, "oui.txt")
 )
@@ -1120,11 +1120,11 @@ def recon_menu(vendors: Dict[str, str]) -> None:
         if SCAPY_AVAILABLE:
             logging.info("  %s", color_text("[1] Scaner (scapy)", COLOR_HIGHLIGHT))
             logging.info("  %s", color_text("[2] Sniffer (scapy)", COLOR_HIGHLIGHT))
-            logging.info("  %s", color_text("[3] DNS Sniff (scapy)", COLOR_HIGHLIGHT))
+            logging.info("  %s", color_text("[3] DNS Spoof (scapy)", COLOR_HIGHLIGHT))
         else:
             logging.info("  %s", color_text("[1] Scaner (scapy) [missing]", COLOR_WARNING))
             logging.info("  %s", color_text("[2] Sniffer (scapy) [missing]", COLOR_WARNING))
-            logging.info("  %s", color_text("[3] DNS Sniff (scapy) [missing]", COLOR_WARNING))
+            logging.info("  %s", color_text("[3] DNS Spoof (scapy) [missing]", COLOR_WARNING))
         logging.info("  %s", color_text("[4] Back", COLOR_HIGHLIGHT))
 
         choice = input(style("Your choice (1-4): ", STYLE_BOLD)).strip()
@@ -1247,7 +1247,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             if not SCAPY_AVAILABLE:
                 logging.warning("Scapy is not installed. Install with: pip3 install scapy")
                 continue
-            run_external_script(DNS_SNIFF_SCRIPT)
+            run_external_script(DNS_SPOOF_SCRIPT)
             continue
 
         logging.warning("Invalid choice.")

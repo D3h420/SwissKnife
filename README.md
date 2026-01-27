@@ -13,7 +13,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Portal - phishing-style portal with logging
 - Evil Twin - rogue AP + portal workflow
 - ~~Handshaker - PCAP capture~~ (🚧 under construction 🚧)
-- ~~DNS Sniff - local DNS traffic monitor~~ (🚧 under construction 🚧)
+- ~~DNS Spoof - MITM DNS monitor~~ (🚧 under construction 🚧)
 - ~~Karma - rogue AP auto-responder~~ (🚧 under construction 🚧)
 
 ## Quick start ⚡
