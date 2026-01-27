@@ -52,6 +52,7 @@ DEFAULT_MONITOR_CHANNELS = (
 )
 DEFAULT_HOP_INTERVAL = 0.8
 DEFAULT_UPDATE_INTERVAL = 0.5
+MONITOR_SETTLE_SECONDS = 2.0
 
 try:
     from scapy.all import AsyncSniffer, Dot11, Dot11Beacon, Dot11Elt, Dot11ProbeResp  # type: ignore
@@ -175,6 +176,12 @@ def set_interface_type(interface: str, mode: str) -> bool:
     except Exception as exc:
         logging.error("Failed to set %s mode: %s", mode, exc)
         return False
+
+
+def wait_for_monitor_settle(interface: str) -> None:
+    if MONITOR_SETTLE_SECONDS <= 0:
+        return
+    time.sleep(MONITOR_SETTLE_SECONDS)
 
 
 def restore_managed_mode(interface: str) -> None:
@@ -517,6 +524,7 @@ def main() -> None:
         if not set_interface_type(interface, "monitor"):
             logging.error("Failed to enable monitor mode on %s.", interface)
             sys.exit(1)
+        wait_for_monitor_settle(interface)
 
     logging.info("")
     duration = prompt_int(

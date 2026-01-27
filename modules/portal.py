@@ -21,6 +21,7 @@ COLOR_RUNNING = "\033[31m" if COLOR_ENABLED else ""
 COLOR_STOP = "\033[33m" if COLOR_ENABLED else ""
 COLOR_SUCCESS = "\033[32m" if COLOR_ENABLED else ""
 STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
+SCAN_BUSY_RETRY_DELAY = 0.8
 
 
 def color_text(text, color):
@@ -30,6 +31,13 @@ def color_text(text, color):
 def style(text, *styles):
     prefix = "".join(s for s in styles if s)
     return f"{prefix}{text}{COLOR_RESET}" if prefix else text
+
+
+def is_scan_busy_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
 # Config
 AP_CHANNEL = "6"
 AP_IP = "192.168.100.1"
@@ -130,7 +138,11 @@ def scan_wireless_networks(interface, duration_seconds=15, show_progress=False):
             return []
 
         if result.returncode != 0:
-            logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+            err_text = result.stderr.strip()
+            if is_scan_busy_error(err_text):
+                time.sleep(SCAN_BUSY_RETRY_DELAY)
+                continue
+            logging.error("Wireless scan failed: %s", err_text or "unknown error")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
             return []

@@ -23,6 +23,8 @@ STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 # Global attack process variable
 ATTACK_PROCESS: Optional[subprocess.Popen] = None
 ATTACK_RUNNING = False
+MONITOR_SETTLE_SECONDS = 2.0
+SCAN_BUSY_RETRY_DELAY = 0.8
 
 
 def color_text(text: str, color: str) -> str:
@@ -144,6 +146,12 @@ def is_monitor_mode(interface: str) -> bool:
     return get_interface_mode(interface) == "monitor"
 
 
+def wait_for_monitor_settle(interface: str) -> None:
+    if MONITOR_SETTLE_SECONDS <= 0:
+        return
+    time.sleep(MONITOR_SETTLE_SECONDS)
+
+
 def set_interface_type(interface: str, mode: str) -> bool:
     try:
         subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
@@ -200,6 +208,13 @@ def parse_freq_value(text: str) -> Optional[float]:
     return value
 
 
+def is_scan_busy_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
+
+
 def scan_wireless_networks(
     interface: str,
     duration_seconds: int = 15,
@@ -241,9 +256,15 @@ def scan_wireless_networks(
                 result = run_scan()
                 if not set_interface_type(interface, "monitor"):
                     logging.error("Failed to restore monitor mode after scan.")
+                else:
+                    time.sleep(0.5)
 
         if result.returncode != 0:
-            logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+            err_text = result.stderr.strip()
+            if is_scan_busy_error(err_text):
+                time.sleep(SCAN_BUSY_RETRY_DELAY)
+                continue
+            logging.error("Wireless scan failed: %s", err_text or "unknown error")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
             return []
@@ -813,6 +834,7 @@ def run_deauth_session() -> bool:
     input(f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode...")
     if not set_interface_type(SELECTED_INTERFACE, "monitor"):
         return False
+    wait_for_monitor_settle(SELECTED_INTERFACE)
     logging.info(color_text("✓ Monitor mode confirmed", COLOR_SUCCESS))
 
     logging.info("")
@@ -837,6 +859,7 @@ def run_deauth_session() -> bool:
         logging.warning("Interface left monitor mode; re-enabling.")
         if not set_interface_type(SELECTED_INTERFACE, "monitor"):
             return False
+        wait_for_monitor_settle(SELECTED_INTERFACE)
 
     logging.info("")
     logging.info(style("="*60, STYLE_BOLD))
@@ -853,9 +876,7 @@ def run_deauth_session() -> bool:
     
     logging.info("")
     logging.info(style("ATTACK CONTROLS:", STYLE_BOLD))
-    logging.info("  [S] - Stop and select new interface")
-    logging.info("  [B] - Stop and return to main menu")
-    logging.info("  [R] - Stop and scan for new target")
+    logging.info("  [Enter] - Stop attack and exit")
     logging.info("  [Ctrl+C] - Emergency stop")
     logging.info("")
     logging.info(style("Note:", COLOR_WARNING))
@@ -864,40 +885,17 @@ def run_deauth_session() -> bool:
     
     try:
         while ATTACK_RUNNING:
-            try:
-                choice = input(
-                    f"{style('Enter option', STYLE_BOLD)} (S/B/R): "
-                ).strip().lower()
-                
-                if choice in {"s", "stop"}:
-                    stop_attack()
-                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
-                    logging.info("Returning to interface selection...")
-                    logging.info("")
-                    return True
-                elif choice in {"b", "back"}:
-                    stop_attack()
-                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
-                    return False
-                elif choice in {"r", "restart"}:
-                    stop_attack()
-                    logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
-                    logging.info("Restarting from network scan...")
-                    logging.info("")
-                    return True
-                else:
-                    logging.warning("Please enter S, B, or R.")
-            except KeyboardInterrupt:
-                logging.info("\n")
-                confirm = input(f"{style('Really stop attack?', STYLE_BOLD)} (Y/N): ").strip().lower()
-                if confirm in {"y", "yes"}:
-                    stop_attack()
-                    logging.info(color_text("✓ Attack stopped by user", COLOR_SUCCESS))
-                    logging.info("")
-                    break
-                else:
-                    logging.info("Continuing attack...")
-                    continue
+            input(style("Press Enter to stop attack and exit: ", STYLE_BOLD))
+            if ATTACK_RUNNING:
+                stop_attack()
+                logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
+                logging.info("")
+            break
+    except KeyboardInterrupt:
+        logging.info("\n")
+        stop_attack()
+        logging.info(color_text("✓ Attack stopped by user", COLOR_SUCCESS))
+        logging.info("")
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
         stop_attack()

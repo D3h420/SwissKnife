@@ -62,6 +62,8 @@ DNSMASQ_PROC: Optional[subprocess.Popen] = None
 DEAUTH_ACTIVE = True
 DEAUTH_FAILURES = 0
 SILENT_INITIAL_DEAUTH_FAILURES = 1
+MONITOR_SETTLE_SECONDS = 2.0
+SCAN_BUSY_RETRY_DELAY = 0.8
 
 
 def load_portal_html() -> str:
@@ -135,6 +137,12 @@ def is_monitor_mode(interface: str) -> bool:
     return get_interface_mode(interface) == "monitor"
 
 
+def wait_for_monitor_settle(interface: str) -> None:
+    if MONITOR_SETTLE_SECONDS <= 0:
+        return
+    time.sleep(MONITOR_SETTLE_SECONDS)
+
+
 def set_interface_type(interface: str, mode: str) -> bool:
     try:
         subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
@@ -182,6 +190,13 @@ def parse_freq_value(text: str) -> Optional[float]:
     return value
 
 
+def is_scan_busy_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
+
+
 def scan_wireless_networks(
     interface: str,
     duration_seconds: int = 15,
@@ -223,9 +238,15 @@ def scan_wireless_networks(
                 result = run_scan()
                 if not set_interface_type(interface, "monitor"):
                     logging.error("Failed to restore monitor mode after scan.")
+                else:
+                    time.sleep(0.5)
 
         if result.returncode != 0:
-            logging.error("Wireless scan failed: %s", result.stderr.strip() or "unknown error")
+            err_text = result.stderr.strip()
+            if is_scan_busy_error(err_text):
+                time.sleep(SCAN_BUSY_RETRY_DELAY)
+                continue
+            logging.error("Wireless scan failed: %s", err_text or "unknown error")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
             return []
@@ -356,6 +377,7 @@ def enable_monitor_mode(interface: str, channel: Optional[int]) -> bool:
             return False
         if channel:
             subprocess.run(["iw", "dev", interface, "set", "channel", str(channel)], stderr=subprocess.DEVNULL)
+        wait_for_monitor_settle(interface)
         if not is_monitor_mode(interface):
             current_mode = get_interface_mode(interface)
             logging.error(
