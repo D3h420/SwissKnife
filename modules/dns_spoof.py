@@ -181,14 +181,140 @@ def get_default_gateway(interface: str) -> Optional[str]:
     return None
 
 
-def prompt_gateway() -> str:
+def wait_for_gateway(interface: str, timeout: float = 6.0) -> Optional[str]:
+    start = time.time()
+    while time.time() - start < timeout:
+        gateway = get_default_gateway(interface)
+        if gateway:
+            return gateway
+        time.sleep(0.5)
+    return None
+
+
+def is_valid_gateway_ip(gateway: str, local_ip: Optional[str] = None) -> bool:
+    try:
+        ip_addr = ipaddress.ip_address(gateway)
+    except ValueError:
+        return False
+    if ip_addr.version != 4:
+        return False
+    if ip_addr.is_unspecified or ip_addr.is_loopback:
+        return False
+    if local_ip and gateway == local_ip:
+        return False
+    return True
+
+
+def collect_gateway_candidates(interface: str, cidr: Optional[str], local_ip: Optional[str]) -> List[str]:
+    candidates: List[str] = []
+    seen: set = set()
+
+    def add_candidate(ip_text: Optional[str]) -> None:
+        if not ip_text:
+            return
+        if not is_valid_gateway_ip(ip_text, local_ip):
+            return
+        if ip_text in seen:
+            return
+        seen.add(ip_text)
+        candidates.append(ip_text)
+
+    add_candidate(get_default_gateway(interface))
+
+    result = subprocess.run(
+        ["ip", "route", "show", "dev", interface],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if "via" in parts:
+            try:
+                add_candidate(parts[parts.index("via") + 1])
+            except (ValueError, IndexError):
+                continue
+
+    result = subprocess.run(
+        ["ip", "neigh", "show", "dev", interface],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if parts:
+            add_candidate(parts[0])
+
+    if cidr:
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            network = None
+        if isinstance(network, ipaddress.IPv4Network):
+            for offset in (1, 254):
+                candidate = network.network_address + offset
+                if candidate in network:
+                    add_candidate(str(candidate))
+
+    return candidates
+
+
+def prompt_gateway_manual(local_ip: Optional[str]) -> str:
     while True:
         gateway = input(f"{style('Enter gateway IP', STYLE_BOLD)}: ").strip()
-        try:
-            ipaddress.ip_address(gateway)
+        if not gateway:
+            logging.warning("Gateway cannot be empty.")
+            continue
+        if is_valid_gateway_ip(gateway, local_ip):
             return gateway
-        except ValueError:
-            logging.warning("Invalid IP address. Try again.")
+        logging.warning("Invalid gateway IP. Try again.")
+
+
+def prompt_gateway_with_help(interface: str, cidr: Optional[str], local_ip: Optional[str]) -> str:
+    while True:
+        candidates = collect_gateway_candidates(interface, cidr, local_ip)
+        annotated: List[Tuple[str, Optional[str]]] = []
+        for ip_text in candidates:
+            annotated.append((ip_text, resolve_mac(ip_text, interface)))
+
+        annotated.sort(key=lambda item: (item[1] is None, item[0]))
+
+        if annotated:
+            logging.info("")
+            logging.info(style("Gateway not detected. Candidates:", STYLE_BOLD))
+            for index, (ip_text, mac) in enumerate(annotated, start=1):
+                status = mac if mac else "no response"
+                label = f"{index}) {ip_text} -"
+                logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), status)
+
+            best_ip = annotated[0][0]
+            choice = input(
+                f"{style('Select gateway', STYLE_BOLD)} "
+                f"({style('Enter', STYLE_BOLD)} for {style(best_ip, COLOR_SUCCESS, STYLE_BOLD)}, "
+                "number, M manual, R retry): "
+            ).strip().lower()
+
+            if choice == "":
+                return best_ip
+            if choice == "m":
+                return prompt_gateway_manual(local_ip)
+            if choice == "r":
+                gateway = wait_for_gateway(interface, timeout=4.0)
+                if gateway:
+                    return gateway
+                continue
+            if choice.isdigit():
+                idx = int(choice)
+                if 1 <= idx <= len(annotated):
+                    return annotated[idx - 1][0]
+            logging.warning("Invalid selection. Try again.")
+            continue
+
+        logging.warning("Gateway not detected automatically.")
+        return prompt_gateway_manual(local_ip)
 
 
 def get_interface_mac(interface: str) -> Optional[str]:
@@ -527,46 +653,79 @@ def escape_wpa_value(value: str) -> str:
 
 def run_dhcp(interface: str) -> None:
     if is_tool_available("dhclient"):
-        subprocess.run(
-            ["dhclient", "-1", interface],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                ["dhclient", "-1", interface],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logging.warning("DHCP client timed out on %s (dhclient).", interface)
         return
     if is_tool_available("udhcpc"):
-        subprocess.run(
-            ["udhcpc", "-i", interface, "-n", "-q"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                ["udhcpc", "-i", interface, "-n", "-q"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logging.warning("DHCP client timed out on %s (udhcpc).", interface)
         return
     if is_tool_available("dhcpcd"):
-        subprocess.run(
-            ["dhcpcd", "-w", interface],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            check=False,
-        )
+        try:
+            subprocess.run(
+                ["dhcpcd", "-w", interface],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            logging.warning("DHCP client timed out on %s (dhcpcd).", interface)
 
 
 def connect_wifi_nmcli(interface: str, ssid: str, password: str, hidden: bool) -> bool:
-    cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", interface]
-    if password:
-        cmd.extend(["password", password])
+    def run_cmd(cmd: List[str]) -> Tuple[Optional[bool], str]:
+        try:
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+        except FileNotFoundError:
+            return None, "nmcli not found"
+        if result.returncode == 0:
+            return True, ""
+        return False, (result.stderr.strip() or result.stdout.strip())
+
+    base_cmd = ["nmcli", "dev", "wifi", "connect", ssid, "ifname", interface]
     if hidden:
-        cmd.extend(["hidden", "yes"])
-    try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-    except FileNotFoundError:
+        base_cmd.extend(["hidden", "yes"])
+
+    if password:
+        initial_cmd = base_cmd + ["password", password]
+    else:
+        initial_cmd = list(base_cmd)
+
+    ok, error_text = run_cmd(initial_cmd)
+    if ok is None:
         return False
-    if result.returncode == 0:
+    if ok:
         return True
-    error_text = result.stderr.strip() or result.stdout.strip()
+
+    if "key-mgmt" in error_text and "missing" in error_text:
+        if password:
+            retry_cmd = base_cmd + ["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password]
+        else:
+            retry_cmd = base_cmd + ["wifi-sec.key-mgmt", "none"]
+        ok, retry_error = run_cmd(retry_cmd)
+        if ok is None:
+            return False
+        if ok:
+            return True
+        error_text = retry_error or error_text
+
     if error_text:
         logging.error("nmcli connect failed: %s", error_text)
     else:
@@ -1051,10 +1210,10 @@ def run_dns_spoof_session() -> None:
         sys.exit(1)
 
     local_ip = str(ipaddress.ip_interface(cidr).ip)
-    gateway_ip = get_default_gateway(interface)
+    gateway_ip = wait_for_gateway(interface, timeout=6.0)
     if not gateway_ip:
         logging.warning("Default gateway not detected for %s.", interface)
-        gateway_ip = prompt_gateway()
+        gateway_ip = prompt_gateway_with_help(interface, cidr, local_ip)
 
     logging.info("")
     logging.info("Interface IP: %s", style(local_ip, COLOR_SUCCESS, STYLE_BOLD))
