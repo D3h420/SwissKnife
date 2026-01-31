@@ -56,11 +56,8 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
     "4": {"name": "Handshaker (under construction)", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "Karma (under construction)", "file": "", "disabled": True},
-    "mitm": {"name": "-MITM-", "separator": True},
-    "6": {"name": "HTTP Sniffer", "file": os.path.join("modules", "http_sniffer.py")},
-    "7": {"name": "ARP Spoof", "file": os.path.join("modules", "arp_spoof.py")},
     "spacer": {"name": "", "separator": True},
-    "8": {"name": "Back", "file": ""},
+    "6": {"name": "Back", "file": ""},
 }
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
@@ -273,13 +270,13 @@ def run_child(script_file: str) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (1-8): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-6): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "8":
+        if choice == "6":
             break
 
         if ATTACKS_MENU[choice].get("disabled"):
