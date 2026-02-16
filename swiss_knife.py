@@ -46,7 +46,8 @@ wireless swiss knife
 MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon"},
     "2": {"name": "Attacks", "action": "attacks"},
-    "3": {"name": "Exit", "action": "exit"},
+    "3": {"name": "Bluetooth", "action": "bluetooth"},
+    "4": {"name": "Exit", "action": "exit"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -56,14 +57,12 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
     "4": {"name": "Handshaker (under construction)", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "Karma (under construction)", "file": "", "disabled": True},
-    "bluetooth": {"name": "-BLUETOOTH-", "separator": True},
-    "6": {"name": "Scan BT devices", "file": os.path.join("modules", "bluetooth.py"), "args": ["scan"]},
-    "7": {"name": "BLE Spam", "file": os.path.join("modules", "bluetooth.py"), "args": ["spam"]},
     "spacer": {"name": "", "separator": True},
-    "8": {"name": "Back", "file": ""},
+    "6": {"name": "Back", "file": ""},
 }
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
+BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
 
 REQUIRED_TOOLS: List[str] = [
     "iw",
@@ -71,6 +70,7 @@ REQUIRED_TOOLS: List[str] = [
     "ethtool",
     "aireplay-ng",
     "airodump-ng",
+    "bluetoothctl",
     "hostapd",
     "dnsmasq",
     "iptables",
@@ -80,31 +80,37 @@ PACKAGE_MAPS = {
     "apt": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute2",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute2",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute",
     },
     "yum": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute",
     },
     "pacman": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute2",
     },
     "zypper": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "bluetoothctl": "bluez",
         "ip": "iproute2",
     },
 }
@@ -282,13 +288,13 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (1-8): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-6): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "8":
+        if choice == "6":
             break
 
         if ATTACKS_MENU[choice].get("disabled"):
@@ -312,13 +318,13 @@ def main() -> None:
 
     while True:
         print_header("Main menu:", MAIN_MENU)
-        choice = input(style("Your choice (1-3): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-4): ", STYLE_BOLD)).strip()
 
         if choice not in MAIN_MENU:
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "3":
+        if choice == "4":
             print(style("Exiting. See you!", COLOR_SUCCESS, STYLE_BOLD))
             break
 
@@ -328,6 +334,10 @@ def main() -> None:
 
         if choice == "2":
             attacks_menu()
+            continue
+
+        if choice == "3":
+            run_child(BLUETOOTH_SCRIPT)
             continue
 
 
