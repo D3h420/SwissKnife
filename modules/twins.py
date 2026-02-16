@@ -78,6 +78,39 @@ def load_portal_html() -> str:
         return portal_file.read()
 
 
+def list_portal_html_files() -> List[str]:
+    if not os.path.isdir(HTML_DIR):
+        return []
+    files = [
+        name
+        for name in os.listdir(HTML_DIR)
+        if os.path.isfile(os.path.join(HTML_DIR, name)) and name.lower().endswith(".html")
+    ]
+    files.sort(key=lambda name: (name.lower() != "portal.html", name.lower()))
+    return files
+
+
+def select_portal_html_file() -> str:
+    html_files = list_portal_html_files()
+    if not html_files:
+        logging.error("No .html files found in: %s", HTML_DIR)
+        sys.exit(1)
+
+    logging.info("")
+    logging.info(style("Available portal HTML files:", STYLE_BOLD))
+    for index, filename in enumerate(html_files, start=1):
+        label = f"{index})"
+        logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), filename)
+
+    while True:
+        choice = input(f"{style('Select portal HTML', STYLE_BOLD)} (number): ").strip()
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(html_files):
+                return os.path.join(HTML_DIR, html_files[idx - 1])
+        logging.warning("Invalid selection. Try again.")
+
+
 def get_interface_chipset(interface: str) -> str:
     try:
         result = subprocess.run(
@@ -898,6 +931,7 @@ def disclaimer_confirmed(ap_ssid: str, targets: List[Dict[str, Optional[str]]]) 
 
 def run_twins_session() -> bool:
     global ATTACK_INTERFACE, AP_INTERFACE, AP_SSID, CAPTURE_FILE_PATH, HTTP_SERVER
+    global PORTAL_HTML_PATH, PORTAL_HTML
     global HOSTAPD_PROC, DNSMASQ_PROC, DEAUTH_ACTIVE, DEAUTH_FAILURES
 
     SUBMISSION_EVENT.clear()
@@ -953,6 +987,10 @@ def run_twins_session() -> bool:
     if not disclaimer_confirmed(AP_SSID, target_networks):
         logging.info(color_text("Aborted by user.", COLOR_STOP))
         return False
+
+    PORTAL_HTML_PATH = select_portal_html_file()
+    PORTAL_HTML = None
+    logging.info("Selected portal file: %s", os.path.basename(PORTAL_HTML_PATH))
 
     primary_channel = target_networks[0].get("channel")
     if not is_monitor_mode(ATTACK_INTERFACE):

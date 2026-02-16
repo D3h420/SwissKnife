@@ -68,6 +68,39 @@ def load_portal_html():
         return portal_file.read()
 
 
+def list_portal_html_files():
+    if not os.path.isdir(HTML_DIR):
+        return []
+    files = [
+        name
+        for name in os.listdir(HTML_DIR)
+        if os.path.isfile(os.path.join(HTML_DIR, name)) and name.lower().endswith(".html")
+    ]
+    files.sort(key=lambda name: (name.lower() != "portal.html", name.lower()))
+    return files
+
+
+def select_portal_html_file():
+    html_files = list_portal_html_files()
+    if not html_files:
+        logging.error("No .html files found in: %s", HTML_DIR)
+        sys.exit(1)
+
+    logging.info("")
+    logging.info(style("Available portal HTML files:", STYLE_BOLD))
+    for index, filename in enumerate(html_files, start=1):
+        label = f"{index})"
+        logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), filename)
+
+    while True:
+        choice = input(f"{style('Select portal HTML', STYLE_BOLD)} (number): ").strip()
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(html_files):
+                return os.path.join(HTML_DIR, html_files[idx - 1])
+        logging.warning("Invalid selection. Try again.")
+
+
 def get_interface_chipset(interface):
     try:
         result = subprocess.run(
@@ -505,6 +538,10 @@ def run_portal_session():
             globals()["AP_SSID"] = prompt_manual_ssid()
             break
         logging.warning("Please enter S or M.")
+
+    globals()["PORTAL_HTML_PATH"] = select_portal_html_file()
+    globals()["PORTAL_HTML"] = None
+    logging.info("Selected portal file: %s", os.path.basename(PORTAL_HTML_PATH))
 
     logging.info("")
     input(
