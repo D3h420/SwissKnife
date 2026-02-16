@@ -12,6 +12,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Deauth - network deauthentication workflow
 - Portal - phishing-style portal with logging
 - Evil Twin - rogue AP + portal workflow
+- Bluetooth - BT scan + BLE spam workflow
 - ~~Handshaker - PCAP capture~~ (🚧 under construction 🚧)
 - ~~Karma - rogue AP auto-responder~~ (🚧 under construction 🚧)
 
@@ -54,6 +55,7 @@ Tools used by the modules:
 - `hostapd`
 - `dnsmasq`
 - `iptables`
+- `bluetoothctl` (BlueZ)
 
 Optional tools:
 - `mdk4`

@@ -11,7 +11,7 @@ import subprocess
 import sys
 import shutil
 import platform
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -56,8 +56,11 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
     "4": {"name": "Handshaker (under construction)", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "Karma (under construction)", "file": "", "disabled": True},
+    "bluetooth": {"name": "-BLUETOOTH-", "separator": True},
+    "6": {"name": "Scan BT devices", "file": os.path.join("modules", "bluetooth.py"), "args": ["scan"]},
+    "7": {"name": "BLE Spam", "file": os.path.join("modules", "bluetooth.py"), "args": ["spam"]},
     "spacer": {"name": "", "separator": True},
-    "6": {"name": "Back", "file": ""},
+    "8": {"name": "Back", "file": ""},
 }
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
@@ -252,13 +255,15 @@ def print_header(title: str, menu: Dict[str, Dict[str, str]]) -> None:
     print()
 
 
-def run_child(script_file: str) -> None:
+def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
     abs_path = script_path(script_file)
     if not os.path.isfile(abs_path):
         print(color_text(f"File not found: {abs_path}", COLOR_HIGHLIGHT))
         return
 
     cmd = [sys.executable or "python3", abs_path]
+    if args:
+        cmd.extend(args)
     print(style(f"Starting {script_file}...\n", STYLE_BOLD))
 
     # Let the child handle its own Ctrl+C; the parent just waits.
@@ -277,20 +282,24 @@ def run_child(script_file: str) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (1-6): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-8): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "6":
+        if choice == "8":
             break
 
         if ATTACKS_MENU[choice].get("disabled"):
             print(color_text("Coming soon.", COLOR_HIGHLIGHT))
             continue
 
-        run_child(ATTACKS_MENU[choice]["file"])
+        extra_args = ATTACKS_MENU[choice].get("args")
+        if isinstance(extra_args, list):
+            run_child(ATTACKS_MENU[choice]["file"], extra_args)
+        else:
+            run_child(ATTACKS_MENU[choice]["file"])
 
 
 def main() -> None:
