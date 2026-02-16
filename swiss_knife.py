@@ -43,10 +43,10 @@ wireless swiss knife
 """
 
 MAIN_MENU: Dict[str, Dict[str, str]] = {
-    "1": {"name": "Recon", "action": "recon"},
-    "2": {"name": "Attacks", "action": "attacks"},
-    "3": {"name": "Bluetooth", "action": "bluetooth"},
-    "4": {"name": "Exit", "action": "exit"},
+    "1": {"name": "Recon", "action": "recon", "icon": "🛰️"},
+    "2": {"name": "Attacks", "action": "attacks", "icon": "⚔️"},
+    "3": {"name": "Bluetooth", "action": "bluetooth", "icon": "📶"},
+    "4": {"name": "Exit", "action": "exit", "icon": "🚪"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -261,7 +261,9 @@ def print_header(title: str, menu: Dict[str, Dict[str, str]]) -> None:
             else:
                 print()
             continue
-        label = f"[{key}] {meta['name']}"
+        icon = meta.get("icon", "")
+        icon_part = f"{icon} " if icon else ""
+        label = f"[{key}] {icon_part}{meta['name']}"
         color = COLOR_DIM if meta.get("disabled") else meta.get("color", COLOR_HIGHLIGHT)
         print(f"  {color_text(label, color)}")
     print()
@@ -330,7 +332,10 @@ def main() -> None:
             continue
 
         if choice == "4":
-            print(style("Exiting. See you!", COLOR_SUCCESS, STYLE_BOLD))
+            print()
+            print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
+            print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
+            print()
             break
 
         if choice == "1":

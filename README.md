@@ -33,10 +33,9 @@ attack to run and guides you through the steps.
 Captive Portal and Evil Twin store captured submissions in `log/` (created on
 first run). Filenames are based on the selected SSID.
 
-## HTML customization 🎨
+## HTML portals 🎨
 
-The portal page is plain HTML and easy to edit in `html/portal.html`. Everything
-under `html/` is safe to modify for UI tweaks or branding.
+Portal files are stored in `html/`. You can add your own custom portals there.
 
 ## Requirements 🧩
 
