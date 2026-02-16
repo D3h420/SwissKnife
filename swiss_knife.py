@@ -6,7 +6,6 @@ Each choice runs a separate script and returns to the menu when it exits.
 """
 
 import os
-import signal
 import subprocess
 import sys
 import shutil
@@ -71,6 +70,7 @@ REQUIRED_TOOLS: List[str] = [
     "aireplay-ng",
     "airodump-ng",
     "bluetoothctl",
+    "btmgmt",
     "hostapd",
     "dnsmasq",
     "iptables",
@@ -81,36 +81,42 @@ PACKAGE_MAPS = {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute2",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute2",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute",
     },
     "yum": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute",
     },
     "pacman": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute2",
     },
     "zypper": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
         "ip": "iproute2",
     },
 }
@@ -272,12 +278,11 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
         cmd.extend(args)
     print(style(f"Starting {script_file}...\n", STYLE_BOLD))
 
-    # Let the child handle its own Ctrl+C; the parent just waits.
-    previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
     try:
         subprocess.run(cmd)
-    finally:
-        signal.signal(signal.SIGINT, previous_handler)
+    except KeyboardInterrupt:
+        # Child should receive Ctrl+C too; return cleanly to launcher.
+        pass
     print(style("\nDone. Press Enter to return to the menu.", STYLE_BOLD))
     try:
         input()

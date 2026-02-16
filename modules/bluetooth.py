@@ -4,6 +4,8 @@ import os
 import re
 import sys
 import time
+import signal
+import random
 import threading
 import subprocess
 import logging
@@ -34,13 +36,23 @@ BLE_SPAM_ALIASES = [
     "HackThePlanet",
     "ekomsSavior",
 ]
-DEFAULT_SPAM_INTERVAL_SECONDS = 1.0
+BLE_SPAM_DEVICE_COUNT = 30
+BLE_SPAM_DWELL_SECONDS = 0.04
+BLE_SPAM_STATUS_SECONDS = 2.0
+SCAN_REFRESH_SECONDS = 0.8
 
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
-DEVICE_EVENT_PATTERN = re.compile(r"^\[(NEW|CHG|DEL)\]\s+Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?$")
+BTCTL_EVENT_PATTERN = re.compile(r"^(?:\[[A-Z]+\]\s+)?Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?$")
 DEVICE_LIST_PATTERN = re.compile(r"^Device\s+([0-9A-Fa-f:]{17})\s+(.+)$")
-RSSI_PATTERN = re.compile(r"RSSI:\s*(-?\d+)")
+CONTROLLER_LIST_PATTERN = re.compile(r"^Controller\s+([0-9A-Fa-f:]{17})\s+(.+)$")
+MAC_PATTERN = re.compile(r"([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})")
+RSSI_PATTERN = re.compile(r"RSSI:\s*(-?\d+)|rssi\s*(-?\d+)")
 HCI_INTERFACE_PATTERN = re.compile(r"^(hci\d+):")
+BD_ADDRESS_PATTERN = re.compile(r"BD Address:\s*([0-9A-Fa-f:]{17})")
+MAC_ONLY_PATTERN = re.compile(r"^[0-9A-Fa-f:]{17}$")
+MAX_INSTANCES_PATTERN = re.compile(r"Max instances:\s*(\d+)")
+
+CONTROLLER_CACHE: Dict[str, str] = {}
 
 
 def color_text(text: str, color: str) -> str:
@@ -65,6 +77,7 @@ def run_command(
     args: List[str],
     capture_output: bool = False,
     timeout: Optional[float] = None,
+    input_text: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
     kwargs = {"text": True, "check": False}
     if capture_output:
@@ -75,15 +88,94 @@ def run_command(
         kwargs["stderr"] = subprocess.DEVNULL
     if timeout is not None:
         kwargs["timeout"] = timeout
-    return subprocess.run(args, **kwargs)
+    if input_text is not None:
+        kwargs["input"] = input_text
+
+    try:
+        return subprocess.run(args, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=exc.stderr or "",
+        )
 
 
-def run_bluetoothctl(args: List[str], capture_output: bool = False) -> subprocess.CompletedProcess:
-    return run_command(["bluetoothctl", *args], capture_output=capture_output)
+def run_bluetoothctl(
+    args: List[str],
+    capture_output: bool = False,
+    timeout: Optional[float] = None,
+    controller: Optional[str] = None,
+) -> subprocess.CompletedProcess:
+    selected = resolve_controller_address(controller)
+    if not selected:
+        return run_command(["bluetoothctl", *args], capture_output=capture_output, timeout=timeout)
+
+    script_lines = [
+        f"select {selected}",
+        " ".join(args),
+        "quit",
+    ]
+    script = "\n".join(script_lines) + "\n"
+    return run_command(
+        ["bluetoothctl"],
+        capture_output=capture_output,
+        timeout=timeout,
+        input_text=script,
+    )
 
 
 def strip_ansi(text: str) -> str:
     return ANSI_ESCAPE_PATTERN.sub("", text)
+
+
+def extract_rssi(text: str) -> Optional[int]:
+    match = RSSI_PATTERN.search(text)
+    if not match:
+        return None
+    raw = match.group(1) if match.group(1) is not None else match.group(2)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def normalize_mac(mac: str) -> str:
+    return mac.strip().upper()
+
+
+def looks_like_mac(value: str) -> bool:
+    return MAC_ONLY_PATTERN.fullmatch(value.strip()) is not None
+
+
+def resolve_controller_address(controller: Optional[str]) -> Optional[str]:
+    if not controller:
+        return None
+
+    token = controller.strip()
+    if not token:
+        return None
+
+    if looks_like_mac(token):
+        return normalize_mac(token)
+
+    cached = CONTROLLER_CACHE.get(token)
+    if cached:
+        return cached
+
+    if token.startswith("hci") and tool_exists("hciconfig"):
+        details = run_command(["hciconfig", token], capture_output=True, timeout=2.0)
+        if details.returncode == 0:
+            for raw_line in details.stdout.splitlines():
+                match = BD_ADDRESS_PATTERN.search(raw_line)
+                if match:
+                    address = normalize_mac(match.group(1))
+                    CONTROLLER_CACHE[token] = address
+                    return address
+    return None
 
 
 @dataclass
@@ -94,24 +186,36 @@ class BluetoothDevice:
     last_seen: float = 0.0
 
 
-class BluetoothctlSession:
-    def __init__(self, on_line: Optional[Callable[[str], None]] = None):
+@dataclass
+class SpamIdentity:
+    mac: str
+    name: str
+
+
+class StreamingProcess:
+    def __init__(self, cmd: List[str], on_line: Callable[[str], None]):
+        self.cmd = cmd
         self.on_line = on_line
         self.process: Optional[subprocess.Popen] = None
         self.stop_event = threading.Event()
         self.reader_thread: Optional[threading.Thread] = None
 
-    def start(self) -> None:
-        self.process = subprocess.Popen(
-            ["bluetoothctl"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
+    def start(self) -> bool:
+        try:
+            self.process = subprocess.Popen(
+                self.cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+            )
+        except (FileNotFoundError, OSError):
+            return False
+
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()
+        return True
 
     def _reader_loop(self) -> None:
         if not self.process or not self.process.stdout:
@@ -124,7 +228,71 @@ class BluetoothctlSession:
                 time.sleep(0.05)
                 continue
             cleaned = strip_ansi(line.strip())
-            if self.on_line:
+            if cleaned:
+                self.on_line(cleaned)
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.process and self.process.poll() is None:
+            try:
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except Exception:
+                self.process.terminate()
+            try:
+                self.process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except Exception:
+                    self.process.kill()
+                try:
+                    self.process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    pass
+        if self.reader_thread and self.reader_thread.is_alive():
+            self.reader_thread.join(timeout=1)
+
+
+class BluetoothctlSession:
+    def __init__(self, on_line: Callable[[str], None], controller: Optional[str] = None):
+        self.on_line = on_line
+        self.controller = controller
+        self.process: Optional[subprocess.Popen] = None
+        self.stop_event = threading.Event()
+        self.reader_thread: Optional[threading.Thread] = None
+
+    def start(self) -> bool:
+        try:
+            self.process = subprocess.Popen(
+                ["bluetoothctl"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except (FileNotFoundError, OSError):
+            return False
+
+        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self.reader_thread.start()
+        selected = resolve_controller_address(self.controller)
+        if selected:
+            self.send(f"select {selected}")
+        return True
+
+    def _reader_loop(self) -> None:
+        if not self.process or not self.process.stdout:
+            return
+        while not self.stop_event.is_set():
+            line = self.process.stdout.readline()
+            if line == "":
+                if self.process.poll() is not None:
+                    break
+                time.sleep(0.05)
+                continue
+            cleaned = strip_ansi(line.strip())
+            if cleaned:
                 self.on_line(cleaned)
 
     def send(self, command: str) -> None:
@@ -136,9 +304,9 @@ class BluetoothctlSession:
         except Exception:
             pass
 
-    def close(self) -> None:
+    def stop(self) -> None:
         self.stop_event.set()
-        if self.process:
+        if self.process and self.process.poll() is None:
             try:
                 self.send("scan off")
                 self.send("quit")
@@ -156,7 +324,16 @@ class BluetoothctlSession:
             self.reader_thread.join(timeout=1)
 
 
-def ensure_bluetooth_service() -> None:
+def ensure_interface_up(interface: str) -> None:
+    if not interface.startswith("hci"):
+        return
+    if not tool_exists("hciconfig"):
+        return
+    run_command(["hciconfig", interface, "up"])
+    run_command(["hciconfig", interface, "reset"])
+
+
+def ensure_bluetooth_service(interface: str) -> None:
     if tool_exists("rfkill"):
         run_command(["rfkill", "unblock", "bluetooth"])
 
@@ -165,198 +342,13 @@ def ensure_bluetooth_service() -> None:
         if active.stdout.strip() != "active":
             run_command(["systemctl", "start", "bluetooth"])
 
-    run_bluetoothctl(["power", "on"])
-
-
-def ensure_controller_available() -> bool:
-    result = run_bluetoothctl(["list"], capture_output=True)
-    for raw_line in result.stdout.splitlines():
-        if raw_line.strip().startswith("Controller "):
-            return True
-    return False
-
-
-def update_device_from_bt_line(devices: Dict[str, BluetoothDevice], line: str) -> None:
-    match = DEVICE_EVENT_PATTERN.match(line)
-    if not match:
-        return
-
-    action = match.group(1)
-    mac = match.group(2).upper()
-    payload = (match.group(3) or "").strip()
-
-    if action == "DEL":
-        if mac in devices:
-            devices[mac].last_seen = time.time()
-        return
-
-    now = time.time()
-    device = devices.get(mac)
-    if device is None:
-        device = BluetoothDevice(mac=mac, last_seen=now)
-        devices[mac] = device
-    else:
-        device.last_seen = now
-
-    if not payload:
-        return
-
-    rssi_match = RSSI_PATTERN.search(payload)
-    if rssi_match:
-        try:
-            device.rssi = int(rssi_match.group(1))
-        except ValueError:
-            pass
-        return
-
-    if payload.startswith(("Name:", "Alias:")):
-        _, name = payload.split(":", 1)
-        name = name.strip()
-        if name:
-            device.name = name
-        return
-
-    if payload.startswith(
-        (
-            "TxPower:",
-            "ManufacturerData",
-            "ServiceData",
-            "UUID",
-            "Class",
-            "Address Type",
-            "ServicesResolved",
-            "Paired:",
-            "Trusted:",
-            "Blocked:",
-            "Connected:",
-            "LegacyPairing:",
-            "RSSI:",
-        )
-    ):
-        return
-
-    if payload:
-        device.name = payload
-
-
-def merge_known_devices(devices: Dict[str, BluetoothDevice]) -> None:
-    result = run_bluetoothctl(["devices"], capture_output=True)
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        match = DEVICE_LIST_PATTERN.match(line)
-        if not match:
-            continue
-        mac = match.group(1).upper()
-        name = match.group(2).strip() or "<unknown>"
-        existing = devices.get(mac)
-        if existing is None:
-            devices[mac] = BluetoothDevice(mac=mac, name=name, last_seen=time.time())
-            continue
-        if existing.name in ("", "<unknown>"):
-            existing.name = name
-
-
-def sorted_devices(devices: Dict[str, BluetoothDevice]) -> List[BluetoothDevice]:
-    return sorted(
-        devices.values(),
-        key=lambda item: (
-            item.rssi is None,
-            -(item.rssi if item.rssi is not None else -1000),
-            item.name.lower(),
-            item.mac,
-        ),
-    )
-
-
-def render_scan_live(devices: Dict[str, BluetoothDevice], started_at: float) -> None:
-    elapsed = int(time.time() - started_at)
-    lines = [
-        style("BT Scan (live)", STYLE_BOLD),
-        f"Elapsed: {elapsed}s",
-        f"Devices: {len(devices)}",
-        "Press Enter or Ctrl+C to stop.",
-        "",
-    ]
-
-    ordered = sorted_devices(devices)
-    if not ordered:
-        lines.append(color_text("Scanning... no devices yet.", COLOR_WARNING))
-    else:
-        for index, device in enumerate(ordered, start=1):
-            rssi_text = f"rssi {device.rssi} dBm" if device.rssi is not None else "rssi ?"
-            label = f"{index}) {device.name} ({device.mac}) -"
-            lines.append(f"  {color_text(label, COLOR_HIGHLIGHT)} {rssi_text}")
-
-    output = "\n".join(lines)
-    if COLOR_ENABLED:
-        sys.stdout.write("\033[2J\033[H" + output + "\n")
-    else:
-        sys.stdout.write(output + "\n")
-    sys.stdout.flush()
-
-
-def scan_bt_devices_live() -> List[BluetoothDevice]:
-    ensure_bluetooth_service()
-    if not ensure_controller_available():
-        logging.error("No Bluetooth controller detected.")
-        return []
-
-    devices: Dict[str, BluetoothDevice] = {}
-    lock = threading.Lock()
-
-    def on_line(line: str) -> None:
-        if not line:
-            return
-        with lock:
-            update_device_from_bt_line(devices, line)
-
-    session = BluetoothctlSession(on_line=on_line)
-    stop_event = threading.Event()
-    started_at = time.time()
-
-    def wait_for_enter() -> None:
-        try:
-            input()
-        except EOFError:
-            pass
-        stop_event.set()
-
-    stopper = threading.Thread(target=wait_for_enter, daemon=True)
-    try:
-        session.start()
-        session.send("power on")
-        session.send("pairable on")
-        session.send("discoverable on")
-        session.send("scan on")
-        stopper.start()
-
-        last_merge = 0.0
-        while not stop_event.is_set():
-            now = time.time()
-            if now - last_merge > 3.0:
-                with lock:
-                    merge_known_devices(devices)
-                last_merge = now
-
-            with lock:
-                snapshot = {mac: BluetoothDevice(**vars(dev)) for mac, dev in devices.items()}
-            render_scan_live(snapshot, started_at)
-            time.sleep(0.8)
-    except KeyboardInterrupt:
-        stop_event.set()
-    finally:
-        session.close()
-        stop_event.set()
-        if stopper.is_alive():
-            stopper.join(timeout=0.2)
-
-    with lock:
-        return sorted_devices(devices)
+    ensure_interface_up(interface)
+    run_bluetoothctl(["power", "on"], controller=interface)
 
 
 def list_hci_interfaces() -> List[str]:
     if not tool_exists("hciconfig"):
-        return []
+        return list_btctl_controllers()
     result = run_command(["hciconfig"], capture_output=True)
     interfaces: List[str] = []
     for raw_line in result.stdout.splitlines():
@@ -364,7 +356,26 @@ def list_hci_interfaces() -> List[str]:
         match = HCI_INTERFACE_PATTERN.match(line)
         if match:
             interfaces.append(match.group(1))
-    return interfaces
+    if interfaces:
+        return interfaces
+    return list_btctl_controllers()
+
+
+def list_btctl_controllers() -> List[str]:
+    if not tool_exists("bluetoothctl"):
+        return []
+    listed = run_bluetoothctl(["list"], capture_output=True, timeout=2.5)
+    if listed.returncode != 0:
+        return []
+
+    controllers: List[str] = []
+    for raw_line in listed.stdout.splitlines():
+        line = raw_line.strip()
+        match = CONTROLLER_LIST_PATTERN.match(line)
+        if not match:
+            continue
+        controllers.append(match.group(1).upper())
+    return controllers
 
 
 def select_hci_interface(interfaces: List[str]) -> str:
@@ -388,66 +399,417 @@ def select_hci_interface(interfaces: List[str]) -> str:
         logging.warning("Invalid selection. Try again.")
 
 
+def update_device(
+    devices: Dict[str, BluetoothDevice],
+    mac: str,
+    name: Optional[str] = None,
+    rssi: Optional[int] = None,
+) -> None:
+    now = time.time()
+    key = normalize_mac(mac)
+    device = devices.get(key)
+    if device is None:
+        device = BluetoothDevice(mac=key, last_seen=now)
+        devices[key] = device
+    else:
+        device.last_seen = now
+
+    if name:
+        clean_name = name.strip()
+        if clean_name and clean_name not in (
+            "(random)",
+            "(public)",
+            "(not available)",
+            "RSSI:",
+        ):
+            device.name = clean_name
+    if rssi is not None:
+        device.rssi = rssi
+
+
+def parse_btctl_line(devices: Dict[str, BluetoothDevice], line: str) -> None:
+    if "Device" not in line:
+        return
+    line = line.replace("[bluetooth]#", "").strip()
+    match = BTCTL_EVENT_PATTERN.search(line)
+    if not match:
+        return
+
+    mac = match.group(1)
+    payload = (match.group(2) or "").strip()
+    rssi = extract_rssi(payload) if payload else None
+    if payload.startswith((
+        "TxPower:",
+        "ManufacturerData",
+        "ServiceData",
+        "UUID",
+        "Class",
+        "Address Type",
+        "ServicesResolved",
+        "Paired:",
+        "Trusted:",
+        "Blocked:",
+        "Connected:",
+        "LegacyPairing:",
+        "Name:",
+        "Alias:",
+        "RSSI:",
+    )):
+        if payload.startswith(("Name:", "Alias:")):
+            _, value = payload.split(":", 1)
+            update_device(devices, mac, value.strip(), rssi)
+        else:
+            update_device(devices, mac, None, rssi)
+        return
+
+    update_device(devices, mac, payload if payload else None, rssi)
+
+
+def parse_hcitool_line(devices: Dict[str, BluetoothDevice], line: str) -> None:
+    match = MAC_PATTERN.search(line)
+    if not match:
+        return
+    mac = match.group(1)
+    rest = line.replace(mac, "", 1).strip()
+    name = rest if rest else None
+    update_device(devices, mac, name, None)
+
+
+def run_periodic_hcitool_classic_scan(
+    interface: str,
+    stop_event: threading.Event,
+    devices: Dict[str, BluetoothDevice],
+    lock: threading.Lock,
+) -> None:
+    while not stop_event.is_set():
+        result = run_command(
+            ["hcitool", "-i", interface, "scan"],
+            capture_output=True,
+            timeout=12.0,
+        )
+        if result.returncode == 0:
+            for raw_line in result.stdout.splitlines():
+                line = raw_line.strip()
+                if not line or line.lower().startswith("scanning"):
+                    continue
+                with lock:
+                    parse_hcitool_line(devices, line)
+
+        # Sleep in short chunks so Ctrl+C stop is responsive.
+        for _ in range(20):
+            if stop_event.is_set():
+                break
+            time.sleep(0.25)
+
+
+def parse_btmgmt_line(devices: Dict[str, BluetoothDevice], line: str) -> None:
+    match = MAC_PATTERN.search(line)
+    if not match:
+        return
+    mac = match.group(1)
+    rssi = extract_rssi(line)
+
+    name = None
+    lower = line.lower()
+    if "name " in lower:
+        idx = lower.find("name ")
+        if idx >= 0:
+            name = line[idx + 5 :].strip()
+
+    update_device(devices, mac, name, rssi)
+
+
+def enrich_from_bluetoothctl(
+    devices: Dict[str, BluetoothDevice],
+    interface: str,
+    per_cycle_limit: int = 20,
+) -> None:
+    listed = run_bluetoothctl(["devices"], capture_output=True, timeout=2.5, controller=interface)
+    if listed.returncode != 0:
+        return
+
+    candidates: List[str] = []
+    for raw_line in listed.stdout.splitlines():
+        line = raw_line.strip()
+        match = DEVICE_LIST_PATTERN.match(line)
+        if not match:
+            continue
+        mac = normalize_mac(match.group(1))
+        name = match.group(2).strip()
+        update_device(devices, mac, name, None)
+        candidates.append(mac)
+
+    # Query detailed info for a limited number each cycle to populate RSSI reliably.
+    for mac in candidates[:per_cycle_limit]:
+        info = run_bluetoothctl(["info", mac], capture_output=True, timeout=2.0, controller=interface)
+        if info.returncode != 0:
+            continue
+
+        name: Optional[str] = None
+        rssi: Optional[int] = None
+        for raw_line in info.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith(("Name:", "Alias:")):
+                _, value = line.split(":", 1)
+                value = value.strip()
+                if value:
+                    name = value
+            if line.startswith("RSSI:"):
+                rssi = extract_rssi(line)
+        update_device(devices, mac, name, rssi)
+
+
+def sorted_devices(devices: Dict[str, BluetoothDevice]) -> List[BluetoothDevice]:
+    return sorted(
+        devices.values(),
+        key=lambda item: (
+            item.rssi is None,
+            -(item.rssi if item.rssi is not None else -1000),
+            item.name.lower(),
+            item.mac,
+        ),
+    )
+
+
+def render_scan_live(
+    devices: Dict[str, BluetoothDevice],
+    started_at: float,
+    backend_status: str,
+) -> None:
+    elapsed = int(time.time() - started_at)
+    lines = [
+        style("BT Scan (live)", STYLE_BOLD),
+        f"Elapsed: {elapsed}s",
+        f"Devices: {len(devices)}",
+        f"Backends: {backend_status}",
+        "Press Enter or Ctrl+C to stop.",
+        "",
+    ]
+
+    ordered = sorted_devices(devices)
+    if not ordered:
+        lines.append(color_text("Scanning... no devices yet.", COLOR_WARNING))
+    else:
+        for index, device in enumerate(ordered, start=1):
+            rssi = f"rssi {device.rssi} dBm" if device.rssi is not None else "rssi ?"
+            label = f"{index}) {device.name} ({device.mac}) -"
+            lines.append(f"  {color_text(label, COLOR_HIGHLIGHT)} {rssi}")
+
+    output = "\n".join(lines)
+    if COLOR_ENABLED:
+        sys.stdout.write("\033[2J\033[H" + output + "\n")
+    else:
+        sys.stdout.write(output + "\n")
+    sys.stdout.flush()
+
+
+def install_stop_on_sigint(stop_event: threading.Event):
+    previous = signal.getsignal(signal.SIGINT)
+
+    def handler(_signum, _frame):
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, handler)
+    return previous
+
+
+def restore_signal(previous_handler) -> None:
+    signal.signal(signal.SIGINT, previous_handler)
+
+
+def scan_bt_devices_live(interface: str) -> List[BluetoothDevice]:
+    ensure_bluetooth_service(interface)
+
+    devices: Dict[str, BluetoothDevice] = {}
+    lock = threading.Lock()
+    stop_event = threading.Event()
+    started_at = time.time()
+
+    btctl = BluetoothctlSession(
+        on_line=lambda line: _on_btctl_line(line, devices, lock),
+        controller=interface,
+    )
+
+    backends: List[StreamingProcess] = []
+    periodic_threads: List[threading.Thread] = []
+    active_backend_names: List[str] = []
+
+    previous_sigint = install_stop_on_sigint(stop_event)
+
+    def wait_for_enter() -> None:
+        try:
+            input()
+        except EOFError:
+            pass
+        stop_event.set()
+
+    stopper = threading.Thread(target=wait_for_enter, daemon=True)
+
+    try:
+        if btctl.start():
+            active_backend_names.append("bluetoothctl")
+            btctl.send("power on")
+            btctl.send("pairable on")
+            btctl.send("discoverable on")
+            btctl.send("scan on")
+        else:
+            logging.error("Failed to start bluetoothctl session.")
+            return []
+
+        if tool_exists("hcitool") and interface.startswith("hci"):
+            ensure_interface_up(interface)
+            lescan = StreamingProcess(
+                ["hcitool", "-i", interface, "lescan", "--duplicates"],
+                on_line=lambda line: _on_hcitool_line(line, devices, lock),
+            )
+            if lescan.start():
+                backends.append(lescan)
+                active_backend_names.append("hcitool")
+
+            classic_thread = threading.Thread(
+                target=run_periodic_hcitool_classic_scan,
+                args=(interface, stop_event, devices, lock),
+                daemon=True,
+            )
+            classic_thread.start()
+            periodic_threads.append(classic_thread)
+            active_backend_names.append("hcitool-classic")
+
+        if tool_exists("btmgmt") and interface.startswith("hci"):
+            btmgmt = StreamingProcess(
+                ["btmgmt", "-i", interface, "find"],
+                on_line=lambda line: _on_btmgmt_line(line, devices, lock),
+            )
+            if btmgmt.start():
+                backends.append(btmgmt)
+                active_backend_names.append("btmgmt")
+
+        stopper.start()
+        last_enrich = 0.0
+        while not stop_event.is_set():
+            now = time.time()
+            if now - last_enrich > 2.5:
+                with lock:
+                    enrich_from_bluetoothctl(devices, interface)
+                last_enrich = now
+
+            with lock:
+                snapshot = {k: BluetoothDevice(**vars(v)) for k, v in devices.items()}
+            render_scan_live(snapshot, started_at, ", ".join(active_backend_names) or "none")
+            time.sleep(SCAN_REFRESH_SECONDS)
+
+    finally:
+        stop_event.set()
+        btctl.stop()
+        for backend in backends:
+            backend.stop()
+        for thread in periodic_threads:
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        if stopper.is_alive():
+            stopper.join(timeout=0.2)
+        restore_signal(previous_sigint)
+
+    with lock:
+        return sorted_devices(devices)
+
+
+def _on_btctl_line(line: str, devices: Dict[str, BluetoothDevice], lock: threading.Lock) -> None:
+    if not line:
+        return
+    with lock:
+        parse_btctl_line(devices, line)
+
+
+def _on_hcitool_line(line: str, devices: Dict[str, BluetoothDevice], lock: threading.Lock) -> None:
+    if not line:
+        return
+    with lock:
+        parse_hcitool_line(devices, line)
+
+
+def _on_btmgmt_line(line: str, devices: Dict[str, BluetoothDevice], lock: threading.Lock) -> None:
+    if not line:
+        return
+    with lock:
+        parse_btmgmt_line(devices, line)
+
+
+def random_static_mac(seed: int) -> str:
+    rng = random.Random(seed)
+    octets = [rng.randint(0, 255) for _ in range(6)]
+    octets[0] = (octets[0] & 0x3F) | 0xC0
+    return ":".join(f"{octet:02X}" for octet in octets)
+
+
+def mac_to_le_bytes(mac: str) -> List[str]:
+    parts = [int(part, 16) for part in mac.split(":")]
+    return [f"{byte:02X}" for byte in reversed(parts)]
+
+
 def run_hcitool_cmd(interface: str, ogf: str, ocf: str, params: List[str]) -> bool:
     result = run_command(
         ["hcitool", "-i", interface, "cmd", ogf, ocf, *params],
         capture_output=True,
-        timeout=4.0,
+        timeout=2.5,
     )
     return result.returncode == 0
 
 
 def setup_hci_le_advertising(interface: str) -> bool:
+    if not interface.startswith("hci"):
+        return False
     if not (tool_exists("hciconfig") and tool_exists("hcitool")):
         return False
 
-    run_command(["hciconfig", interface, "up"])
+    ensure_interface_up(interface)
     run_command(["hciconfig", interface, "leadv", "3"])
-    # Disable advertising before reconfiguration.
+
+    # Disable first.
     run_hcitool_cmd(interface, "0x08", "0x000A", ["00"])
-    # Set LE advertising parameters (connectable, general channels).
+
+    # 20ms interval, connectable undirected, own addr = random.
     params = [
-        "A0",
-        "00",
-        "A0",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "00",
-        "07",
-        "00",
+        "20",  # min interval LSB
+        "00",  # min interval MSB
+        "20",  # max interval LSB
+        "00",  # max interval MSB
+        "00",  # adv type
+        "01",  # own addr type random
+        "00",  # peer addr type
+        "00", "00", "00", "00", "00", "00",  # peer addr
+        "07",  # channels
+        "00",  # filter
     ]
     return run_hcitool_cmd(interface, "0x08", "0x0006", params)
 
 
+def set_hci_random_address(interface: str, mac: str) -> bool:
+    return run_hcitool_cmd(interface, "0x08", "0x0005", mac_to_le_bytes(mac))
+
+
 def set_hci_advertisement_name(interface: str, name: str) -> bool:
-    encoded_name = name.encode("utf-8", errors="ignore")[:26]
-    payload = [0x02, 0x01, 0x06, len(encoded_name) + 1, 0x09, *encoded_name]
+    payload_name = name.encode("utf-8", errors="ignore")[:26]
+    payload = [0x02, 0x01, 0x06, len(payload_name) + 1, 0x09, *payload_name]
     while len(payload) < 31:
         payload.append(0x00)
 
-    adv_data = [f"{byte:02X}" for byte in payload]
-    ok_data = run_hcitool_cmd(interface, "0x08", "0x0008", ["1F", *adv_data])
+    hex_payload = [f"{byte:02X}" for byte in payload]
+    ok_data = run_hcitool_cmd(interface, "0x08", "0x0008", ["1F", *hex_payload])
     ok_enable = run_hcitool_cmd(interface, "0x08", "0x000A", ["01"])
     return ok_data and ok_enable
 
 
 def disable_hci_advertising(interface: str) -> None:
-    if not tool_exists("hcitool"):
+    if not interface.startswith("hci") or not tool_exists("hcitool"):
         return
     run_hcitool_cmd(interface, "0x08", "0x000A", ["00"])
     if tool_exists("hciconfig"):
         run_command(["hciconfig", interface, "noleadv"])
 
 
-def get_current_alias() -> Optional[str]:
-    result = run_bluetoothctl(["show"], capture_output=True)
+def get_current_alias(interface: str) -> Optional[str]:
+    result = run_bluetoothctl(["show"], capture_output=True, timeout=2.0, controller=interface)
     for raw_line in result.stdout.splitlines():
         line = raw_line.strip()
         if line.startswith("Alias:"):
@@ -455,61 +817,246 @@ def get_current_alias() -> Optional[str]:
     return None
 
 
-def run_ble_spam(interface: str, interval_seconds: float = DEFAULT_SPAM_INTERVAL_SECONDS) -> None:
-    ensure_bluetooth_service()
-    if not ensure_controller_available():
-        logging.error("No Bluetooth controller detected.")
-        return
+def build_spam_identities(count: int = BLE_SPAM_DEVICE_COUNT) -> List[SpamIdentity]:
+    identities: List[SpamIdentity] = []
+    for index in range(count):
+        base = BLE_SPAM_ALIASES[index % len(BLE_SPAM_ALIASES)]
+        suffix = f"_{index + 1:02d}" if count > len(BLE_SPAM_ALIASES) else ""
+        name = (base + suffix)[:26]
+        mac = random_static_mac(index + 1337)
+        identities.append(SpamIdentity(mac=mac, name=name))
+    return identities
 
-    run_bluetoothctl(["power", "on"])
-    run_bluetoothctl(["discoverable", "on"])
-    run_bluetoothctl(["pairable", "on"])
-    run_bluetoothctl(["agent", "NoInputNoOutput"])
-    if tool_exists("hciconfig"):
+
+def _adv_hex(data: bytes) -> str:
+    return "".join(f"{byte:02X}" for byte in data)
+
+
+def build_name_scan_rsp(name: str) -> str:
+    payload_name = name.encode("utf-8", errors="ignore")[:26]
+    length = len(payload_name) + 1
+    data = bytes([length, 0x09]) + payload_name
+    return _adv_hex(data)
+
+
+def run_btmgmt(interface: str, args: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+    return run_command(["btmgmt", "-i", interface, *args], capture_output=True, timeout=timeout)
+
+
+def get_btmgmt_max_instances(interface: str) -> Optional[int]:
+    result = run_btmgmt(interface, ["advinfo"], timeout=3.0)
+    if result.returncode != 0:
+        return None
+    for raw_line in result.stdout.splitlines():
+        match = MAX_INSTANCES_PATTERN.search(raw_line.strip())
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
+def btmgmt_add_adv_instance(interface: str, identity: SpamIdentity, instance_id: int) -> bool:
+    base_adv = "020106"
+    scan_rsp = build_name_scan_rsp(identity.name)
+
+    # Start with a connectable, discoverable instance; fallback to discoverable-only.
+    attempts = [
+        ["add-adv", "-d", base_adv, "-s", scan_rsp, "-c", "-g", str(instance_id)],
+        ["add-adv", "-d", base_adv, "-s", scan_rsp, "-g", str(instance_id)],
+    ]
+    for cmd in attempts:
+        result = run_btmgmt(interface, cmd, timeout=3.0)
+        if result.returncode == 0:
+            text = f"{result.stdout}\n{result.stderr}".lower()
+            if "failed" not in text and "invalid" not in text:
+                return True
+    return False
+
+
+def setup_btmgmt_multi_advertising(interface: str, identities: List[SpamIdentity]) -> int:
+    if not interface.startswith("hci") or not tool_exists("btmgmt"):
+        return 0
+
+    max_instances = get_btmgmt_max_instances(interface)
+    if max_instances is not None:
+        if max_instances <= 0:
+            return 0
+        identities = identities[:max_instances]
+
+    run_btmgmt(interface, ["power", "on"])
+    run_btmgmt(interface, ["le", "on"])
+    run_btmgmt(interface, ["connectable", "on"])
+    run_btmgmt(interface, ["discov", "on"])
+    run_btmgmt(interface, ["advertising", "off"])
+    run_btmgmt(interface, ["clr-adv"])
+
+    added = 0
+    for instance_id, identity in enumerate(identities, start=1):
+        if btmgmt_add_adv_instance(interface, identity, instance_id):
+            added += 1
+
+    if added == 0:
+        run_btmgmt(interface, ["clr-adv"])
+        return 0
+
+    result = run_btmgmt(interface, ["advertising", "on"])
+    if result.returncode != 0:
+        run_btmgmt(interface, ["clr-adv"])
+        return 0
+    return added
+
+
+def teardown_btmgmt_multi_advertising(interface: str) -> None:
+    if not interface.startswith("hci") or not tool_exists("btmgmt"):
+        return
+    run_btmgmt(interface, ["advertising", "off"])
+    run_btmgmt(interface, ["clr-adv"])
+
+
+def run_ble_spam_btmgmt(
+    interface: str,
+    identities: List[SpamIdentity],
+    stop_event: threading.Event,
+) -> bool:
+    added = setup_btmgmt_multi_advertising(interface, identities)
+    if added <= 0:
+        return False
+
+    logging.info(
+        "BLE advertiser backend: %s (%d active instances)",
+        color_text("btmgmt multi-instance", COLOR_SUCCESS),
+        added,
+    )
+
+    last_status = 0.0
+    while not stop_event.is_set():
+        now = time.time()
+        if now - last_status >= BLE_SPAM_STATUS_SECONDS:
+            logging.info(
+                "  %s %d virtual devices (stable advertising)",
+                style("Broadcasting", STYLE_BOLD),
+                added,
+            )
+            last_status = now
+        time.sleep(0.2)
+
+    teardown_btmgmt_multi_advertising(interface)
+    return True
+
+
+def run_ble_spam_hcitool(
+    interface: str,
+    identities: List[SpamIdentity],
+    stop_event: threading.Event,
+) -> bool:
+    if not interface.startswith("hci"):
+        return False
+    strong_backend = setup_hci_le_advertising(interface)
+    if not strong_backend:
+        return False
+
+    logging.info("BLE advertiser backend: %s", color_text("hcitool/hciconfig", COLOR_SUCCESS))
+    last_status = 0.0
+    cycle = 0
+
+    while not stop_event.is_set():
+        for identity in identities:
+            if stop_event.is_set():
+                break
+
+            run_hcitool_cmd(interface, "0x08", "0x000A", ["00"])
+            if set_hci_random_address(interface, identity.mac):
+                set_hci_advertisement_name(interface, identity.name)
+            cycle += 1
+            now = time.time()
+            if now - last_status >= BLE_SPAM_STATUS_SECONDS:
+                logging.info(
+                    "  %s rotating %d identities (cycle %d)",
+                    style("Broadcasting", STYLE_BOLD),
+                    len(identities),
+                    cycle,
+                )
+                last_status = now
+            time.sleep(BLE_SPAM_DWELL_SECONDS)
+
+    disable_hci_advertising(interface)
+    return True
+
+
+def run_ble_spam(interface: str) -> None:
+    ensure_bluetooth_service(interface)
+    run_bluetoothctl(["power", "on"], controller=interface)
+    run_bluetoothctl(["discoverable", "on"], controller=interface)
+    run_bluetoothctl(["pairable", "on"], controller=interface)
+    run_bluetoothctl(["agent", "NoInputNoOutput"], controller=interface)
+    if tool_exists("hciconfig") and interface.startswith("hci"):
         run_command(["hciconfig", interface, "piscan"])
 
-    original_alias = get_current_alias()
-    raw_adv_ready = setup_hci_le_advertising(interface)
-    if raw_adv_ready:
-        logging.info("BLE advertiser backend: %s", color_text("hcitool/hciconfig", COLOR_SUCCESS))
-    else:
-        logging.warning("BLE advertiser backend fallback: bluetoothctl alias only.")
-        logging.warning("Install bluez tools (hcitool/hciconfig) for stronger BLE visibility.")
+    original_alias = get_current_alias(interface)
+    identities = build_spam_identities(BLE_SPAM_DEVICE_COUNT)
+
+    stop_event = threading.Event()
+    previous_sigint = install_stop_on_sigint(stop_event)
 
     try:
-        while True:
-            for alias in BLE_SPAM_ALIASES:
-                run_bluetoothctl(["system-alias", alias])
-                if raw_adv_ready:
-                    set_hci_advertisement_name(interface, alias)
-                logging.info("  %s: %s", style("Broadcasting", STYLE_BOLD), color_text(alias, COLOR_HIGHLIGHT))
-                time.sleep(interval_seconds)
-    except KeyboardInterrupt:
-        logging.info("")
-        logging.info(color_text("BLE spam stopped by user.", COLOR_WARNING))
+        if run_ble_spam_btmgmt(interface, identities, stop_event):
+            return
+
+        if run_ble_spam_hcitool(interface, identities, stop_event):
+            return
+
+        logging.warning("BLE advertiser backend fallback: bluetoothctl alias rotation only.")
+        logging.warning("Install btmgmt or hcitool/hciconfig for stronger BLE spam.")
+        last_status = 0.0
+        while not stop_event.is_set():
+            for identity in identities:
+                if stop_event.is_set():
+                    break
+                run_bluetoothctl(["system-alias", identity.name], controller=interface)
+                now = time.time()
+                if now - last_status >= BLE_SPAM_STATUS_SECONDS:
+                    logging.info(
+                        "  %s alias: %s",
+                        style("Broadcasting", STYLE_BOLD),
+                        color_text(identity.name, COLOR_HIGHLIGHT),
+                    )
+                    last_status = now
+                time.sleep(0.2)
+
     finally:
-        if raw_adv_ready:
-            disable_hci_advertising(interface)
+        teardown_btmgmt_multi_advertising(interface)
+        disable_hci_advertising(interface)
         if original_alias:
-            run_bluetoothctl(["system-alias", original_alias])
+            run_bluetoothctl(["system-alias", original_alias], controller=interface)
+        restore_signal(previous_sigint)
+        logging.info("")
+        logging.info(color_text("BLE spam stopped.", COLOR_WARNING))
 
 
 def scan_flow() -> None:
+    interface = select_hci_interface(list_hci_interfaces())
+
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start live BT scan "
+        f"{style('Press Enter', STYLE_BOLD)} to start live BT scan on {interface} "
         f"({style('Enter/Ctrl+C', STYLE_BOLD)} to stop)..."
     )
-    devices = scan_bt_devices_live()
+
+    devices = scan_bt_devices_live(interface)
+
     logging.info("")
     if not devices:
         logging.warning("No Bluetooth devices found.")
+        logging.warning("If this is unexpected, verify: controller powered on, not rfkill-blocked, and BlueZ service active.")
     else:
         logging.info(style("Final discovered devices:", STYLE_BOLD))
         for index, device in enumerate(devices, start=1):
-            rssi_text = f"rssi {device.rssi} dBm" if device.rssi is not None else "rssi ?"
+            rssi = f"rssi {device.rssi} dBm" if device.rssi is not None else "rssi ?"
             label = f"{index}) {device.name} ({device.mac}) -"
-            logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), rssi_text)
+            logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), rssi)
+
     input(style("Press Enter to return.", STYLE_BOLD))
 
 
@@ -529,6 +1076,7 @@ def spam_flow() -> None:
         f"{style('Press Enter', STYLE_BOLD)} to start BLE spam on {interface} "
         f"({style('Ctrl+C', STYLE_BOLD)} to stop)..."
     )
+
     run_ble_spam(interface)
     input(style("Press Enter to return.", STYLE_BOLD))
 
@@ -564,14 +1112,6 @@ def main() -> None:
     if not tool_exists("bluetoothctl"):
         logging.error("Required tool 'bluetoothctl' not found!")
         sys.exit(1)
-
-    mode = sys.argv[1].strip().lower() if len(sys.argv) > 1 else ""
-    if mode == "scan":
-        scan_flow()
-        return
-    if mode == "spam":
-        spam_flow()
-        return
 
     menu_loop()
 
