@@ -3,8 +3,11 @@
 import os
 import sys
 import time
+import csv
+import signal
 import subprocess
 import threading
+import tempfile
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -59,22 +62,8 @@ DEFAULT_LIVE_UPDATE_INTERVAL = 0.5
 MONITOR_SETTLE_SECONDS = 2.0
 SCAN_BUSY_RETRY_DELAY = 0.8
 SCAN_COMMAND_TIMEOUT = 4.0
-
-try:
-    from scapy.all import (  # type: ignore
-        AsyncSniffer,
-        Dot11,
-        Dot11Beacon,
-        Dot11Elt,
-        Dot11ProbeReq,
-        Dot11ProbeResp,
-        sniff,
-    )
-    from scapy.error import Scapy_Exception  # type: ignore
-    SCAPY_AVAILABLE = True
-except Exception:
-    SCAPY_AVAILABLE = False
-    Scapy_Exception = Exception  # type: ignore
+AIRODUMP_WRITE_INTERVAL = 1
+AIRODUMP_START_DELAY = 0.8
 
 
 def color_text(text: str, color: str) -> str:
@@ -565,21 +554,6 @@ def parse_channels(text: str) -> List[int]:
     return sorted(set(channels))
 
 
-def get_rssi(packet) -> Optional[int]:
-    if hasattr(packet, "dBm_AntSignal"):
-        try:
-            return int(packet.dBm_AntSignal)
-        except Exception:
-            return None
-    raw = getattr(packet, "notdecoded", None)
-    if raw:
-        try:
-            return -(256 - max(raw[-4], raw[-2]))
-        except Exception:
-            return None
-    return None
-
-
 def rssi_to_quality(rssi: Optional[int]) -> Optional[int]:
     if rssi is None:
         return None
@@ -591,60 +565,6 @@ def rssi_to_quality(rssi: Optional[int]) -> Optional[int]:
     if value > 100:
         return 100
     return value
-
-
-def extract_ssid(packet) -> Tuple[str, bool]:
-    if not packet.haslayer(Dot11Elt):
-        return "<hidden>", True
-    elt = packet[Dot11Elt]
-    while isinstance(elt, Dot11Elt):
-        if elt.ID == 0:
-            ssid_bytes = elt.info or b""
-            if not ssid_bytes or b"\x00" in ssid_bytes:
-                return "<hidden>", True
-            try:
-                return ssid_bytes.decode("utf-8"), False
-            except UnicodeDecodeError:
-                return "<non-printable>", False
-        elt = elt.payload
-    return "<hidden>", True
-
-
-def extract_channel(packet) -> Optional[int]:
-    if not packet.haslayer(Dot11Elt):
-        return None
-    elt = packet[Dot11Elt]
-    while isinstance(elt, Dot11Elt):
-        if elt.ID in (3, 61) and elt.info:
-            try:
-                return int(elt.info[0])
-            except Exception:
-                return None
-        elt = elt.payload
-    return None
-
-
-def extract_encryption(packet) -> str:
-    privacy = False
-    wpa = False
-    wpa2 = False
-    wps = False
-    if packet.haslayer(Dot11Beacon):
-        cap_info = packet.sprintf("%Dot11Beacon.cap%")
-    else:
-        cap_info = packet.sprintf("%Dot11ProbeResp.cap%")
-    if "privacy" in cap_info:
-        privacy = True
-    elt = packet[Dot11Elt] if packet.haslayer(Dot11Elt) else None
-    while isinstance(elt, Dot11Elt):
-        if elt.ID == 48:
-            wpa2 = True
-        elif elt.ID == 221 and elt.info.startswith(b"\x00P\xf2\x01\x01\x00"):
-            wpa = True
-        if elt.ID == 221 and elt.info.startswith(b"\x00P\xf2\x04"):
-            wps = True
-        elt = elt.payload
-    return finalize_encryption(privacy, wpa, wpa2, wps)
 
 
 def normalize_mac(mac_address: Optional[str]) -> Optional[str]:
@@ -676,108 +596,44 @@ def is_valid_mac(mac_address: Optional[str]) -> bool:
     return True
 
 
-def observe_client_for_ap(aps: Dict[str, "AccessPoint"], dot11) -> None:
-    """Track associated clients (stations) per AP.
-
-    We count *associated* clients only from DATA frames (type=2). Management
-    frames (probe/auth/assoc) are not stable indicators of association and are
-    intentionally excluded from the main client count.
-
-    Robustness:
-    - Uses ToDS/FromDS when available.
-    - Falls back to matching known BSSIDs in addr1/addr2 when flags are unreliable.
-    """
-    if not dot11:
-        return
-
-    frame_type = getattr(dot11, "type", None)
-
-    addr1 = normalize_mac(getattr(dot11, "addr1", None))
-    addr2 = normalize_mac(getattr(dot11, "addr2", None))
-    addr3 = normalize_mac(getattr(dot11, "addr3", None))
-
-    # Management frames (probe/auth/assoc/etc.) can help with visibility, but we
-    # keep them separate from the "associated clients" count.
-    if frame_type == 0:
-        subtype = getattr(dot11, "subtype", None)
-        bssid = addr3
-
-        def add_station(target_bssid: Optional[str], station: Optional[str], *, probe: bool = False) -> None:
-            if not target_bssid or target_bssid not in aps:
-                return
-            if not station or station == target_bssid or not is_unicast(station):
-                return
-            if probe:
-                aps[target_bssid].probing_stations.add(station)
-            else:
-                aps[target_bssid].seen_stations.add(station)
-
-        # 802.11 management subtypes
-        # 0 assoc req, 1 assoc resp, 2 reassoc req, 3 reassoc resp, 4 probe req, 5 probe resp,
-        # 8 beacon, 10 disassoc, 11 auth, 12 deauth
-        if subtype in (0, 2, 10, 11, 12):
-            # STA -> AP (usually). addr2 is the STA, addr3 is the BSSID/AP.
-            add_station(bssid, addr2)
-            return
-        if subtype in (1, 3):
-            # AP -> STA (usually). addr1 is the STA, addr3 is the BSSID/AP.
-            add_station(bssid, addr1)
-            return
-        if subtype == 4:
-            # Probe request. addr2 is the STA. addr3 may be broadcast or a directed BSSID.
-            add_station(bssid, addr2, probe=True)
-            return
-        if subtype == 5:
-            # Probe response. addr1 is the STA, addr3 is the BSSID/AP.
-            add_station(bssid, addr1, probe=True)
-            return
-        return
-
-    if frame_type != 2:
-        return
-
+def parse_int_value(text: str) -> Optional[int]:
     try:
-        fcfield = int(getattr(dot11, "FCfield", 0))
-    except Exception:
-        fcfield = 0
+        return int(text.strip())
+    except (AttributeError, ValueError):
+        return None
 
-    to_ds = bool(fcfield & 0x1)
-    from_ds = bool(fcfield & 0x2)
 
-    bssid: Optional[str] = None
-    station: Optional[str] = None
-
-    if to_ds and not from_ds:
-        # STA -> AP
-        bssid = addr1
-        station = addr2
-    elif from_ds and not to_ds:
-        # AP -> STA
-        bssid = addr2
-        station = addr1
-    elif not to_ds and not from_ds:
-        # IBSS/ad-hoc (no DS). Treat addr3 as "network id" and addr2 as a station.
-        bssid = addr3
-        station = addr2
+def parse_airodump_encryption(privacy: str, cipher: str, auth: str) -> str:
+    combined = " ".join([privacy or "", cipher or "", auth or ""]).upper()
+    if "WPA3" in combined:
+        encryption = "WPA3"
+    elif "WPA2" in combined:
+        encryption = "WPA2"
+    elif "WPA" in combined:
+        encryption = "WPA"
+    elif "WEP" in combined:
+        encryption = "WEP"
+    elif "OPN" in combined or "OPEN" in combined:
+        encryption = "OPEN"
     else:
-        # WDS/mesh (4-address) frames: no single BSSID; ignore for association counting.
-        return
+        encryption = "UNKNOWN"
+    if encryption not in ("WEP", "UNKNOWN") and "WPS" in combined:
+        encryption = f"{encryption}/WPS"
+    return encryption
 
-    # Fallback: if flags are unreliable, try to match known BSSIDs in addr1/addr2.
-    if bssid not in aps:
-        if addr1 and addr1 in aps:
-            bssid = addr1
-            station = addr2
-        elif addr2 and addr2 in aps:
-            bssid = addr2
-            station = addr1
 
-    if not bssid or bssid not in aps:
-        return
-    if not station or station == bssid or not is_unicast(station):
-        return
-
-    aps[bssid].clients.add(station)
+def parse_probed_essids(text: str) -> Set[str]:
+    if not text:
+        return set()
+    parsed: Set[str] = set()
+    for raw_item in text.split(","):
+        item = raw_item.strip()
+        if not item:
+            continue
+        if item in ("<hidden>", "<non-printable>"):
+            continue
+        parsed.add(item)
+    return parsed
 
 
 @dataclass
@@ -790,8 +646,6 @@ class AccessPoint:
     rssi: Optional[int]
     signal: Optional[int]
     clients: Set[str] = field(default_factory=set)
-    seen_stations: Set[str] = field(default_factory=set)
-    probing_stations: Set[str] = field(default_factory=set)
 
     def update_signal(self, new_rssi: Optional[int]) -> None:
         new_signal = rssi_to_quality(new_rssi)
@@ -808,25 +662,209 @@ class SnifferState:
     probe_counts: Dict[str, int] = field(default_factory=dict)
     packet_count: int = 0
     probe_total: int = 0
+    seen_probe_pairs: Set[Tuple[str, str]] = field(default_factory=set)
 
 
-def channel_hopper(interface: str, channels: List[int], interval: float, stop_event: threading.Event) -> None:
-    if not channels:
+@dataclass
+class AirodumpSnapshot:
+    aps: Dict[str, AccessPoint] = field(default_factory=dict)
+    probes_by_station: Dict[str, Set[str]] = field(default_factory=dict)
+    packet_count: int = 0
+
+
+def clone_access_point(ap: AccessPoint) -> AccessPoint:
+    return AccessPoint(
+        ssid=ap.ssid,
+        bssid=ap.bssid,
+        channel=ap.channel,
+        frequency=ap.frequency,
+        encryption=ap.encryption,
+        rssi=ap.rssi,
+        signal=ap.signal,
+        clients=set(ap.clients),
+    )
+
+
+def clone_access_points(aps: Dict[str, AccessPoint]) -> Dict[str, AccessPoint]:
+    return {bssid: clone_access_point(ap) for bssid, ap in aps.items()}
+
+
+def merge_access_point(existing: AccessPoint, incoming: AccessPoint) -> None:
+    if existing.ssid == "<hidden>" and incoming.ssid != "<hidden>":
+        existing.ssid = incoming.ssid
+    if incoming.channel and not existing.channel:
+        existing.channel = incoming.channel
+    if incoming.frequency and not existing.frequency:
+        existing.frequency = incoming.frequency
+    if incoming.encryption and incoming.encryption != "UNKNOWN":
+        if existing.encryption == "UNKNOWN" or existing.encryption != incoming.encryption:
+            existing.encryption = incoming.encryption
+    existing.update_signal(incoming.rssi)
+    existing.clients.update(incoming.clients)
+
+
+def cleanup_capture_dir(capture_dir: str) -> None:
+    if not os.path.isdir(capture_dir):
         return
-    while not stop_event.is_set():
-        for channel in channels:
-            if stop_event.is_set():
-                break
-            subprocess.run(
-                ["iw", "dev", interface, "set", "channel", str(channel)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            time.sleep(interval)
+    for filename in os.listdir(capture_dir):
+        path = os.path.join(capture_dir, filename)
+        try:
+            if os.path.isfile(path):
+                os.remove(path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(capture_dir)
+    except OSError:
+        pass
 
 
-def scan_wireless_networks_scapy(
+def stop_airodump_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    except Exception:
+        process.terminate()
+    try:
+        process.wait(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except Exception:
+            process.kill()
+        try:
+            process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def start_airodump_capture(interface: str, output_prefix: str, channels: List[int]) -> subprocess.Popen:
+    command = [
+        "airodump-ng",
+        "--write-interval",
+        str(AIRODUMP_WRITE_INTERVAL),
+        "--output-format",
+        "csv",
+        "-w",
+        output_prefix,
+    ]
+    if channels:
+        command.extend(["--channel", ",".join(str(ch) for ch in channels)])
+    command.append(interface)
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        preexec_fn=os.setsid,
+    )
+    time.sleep(AIRODUMP_START_DELAY)
+    if process.poll() is not None:
+        error = (process.stderr.read() if process.stderr else "").strip()
+        raise RuntimeError(error or "airodump-ng exited immediately.")
+    return process
+
+
+def parse_airodump_csv(csv_path: str) -> AirodumpSnapshot:
+    snapshot = AirodumpSnapshot()
+    if not os.path.isfile(csv_path):
+        return snapshot
+
+    section = ""
+    try:
+        with open(csv_path, "r", encoding="utf-8", errors="ignore", newline="") as handle:
+            reader = csv.reader(handle)
+            for row in reader:
+                if not row or not any(cell.strip() for cell in row):
+                    continue
+
+                first = row[0].strip()
+                if first == "BSSID":
+                    section = "aps"
+                    continue
+                if first == "Station MAC":
+                    section = "stations"
+                    continue
+
+                if section == "aps":
+                    bssid = normalize_mac(row[0] if len(row) > 0 else None)
+                    if not is_valid_mac(bssid):
+                        continue
+
+                    channel = parse_channel_value(row[3].strip()) if len(row) > 3 else None
+                    privacy = row[5].strip() if len(row) > 5 else ""
+                    cipher = row[6].strip() if len(row) > 6 else ""
+                    auth = row[7].strip() if len(row) > 7 else ""
+                    encryption = parse_airodump_encryption(privacy, cipher, auth)
+
+                    rssi = parse_int_value(row[8]) if len(row) > 8 else None
+                    if rssi is not None:
+                        if rssi >= 0:
+                            rssi = -abs(rssi)
+                        if rssi == -1:
+                            rssi = None
+
+                    ssid = row[13].strip() if len(row) > 13 else ""
+                    if not ssid:
+                        ssid = "<hidden>"
+
+                    ap = AccessPoint(
+                        ssid=ssid,
+                        bssid=bssid or "",
+                        channel=channel,
+                        frequency=channel_to_freq_mhz(channel),
+                        encryption=encryption,
+                        rssi=rssi,
+                        signal=rssi_to_quality(rssi),
+                    )
+                    existing = snapshot.aps.get(ap.bssid)
+                    if existing is None:
+                        snapshot.aps[ap.bssid] = ap
+                    else:
+                        merge_access_point(existing, ap)
+
+                    beacons = parse_int_value(row[9]) if len(row) > 9 else 0
+                    data_packets = parse_int_value(row[10]) if len(row) > 10 else 0
+                    snapshot.packet_count += max(0, beacons or 0) + max(0, data_packets or 0)
+                    continue
+
+                if section != "stations":
+                    continue
+
+                station_mac = normalize_mac(row[0] if len(row) > 0 else None)
+                if not is_valid_mac(station_mac):
+                    continue
+
+                packets = parse_int_value(row[4]) if len(row) > 4 else 0
+                snapshot.packet_count += max(0, packets or 0)
+
+                bssid = normalize_mac(row[5] if len(row) > 5 else None)
+                if is_valid_mac(bssid):
+                    if bssid not in snapshot.aps:
+                        snapshot.aps[bssid] = AccessPoint(
+                            ssid="<hidden>",
+                            bssid=bssid,
+                            channel=None,
+                            frequency=None,
+                            encryption="UNKNOWN",
+                            rssi=None,
+                            signal=None,
+                        )
+                    if station_mac != bssid and is_unicast(station_mac):
+                        snapshot.aps[bssid].clients.add(station_mac)
+
+                probe_field = ",".join(part.strip() for part in row[6:]) if len(row) > 6 else ""
+                probes = parse_probed_essids(probe_field)
+                if probes and station_mac:
+                    snapshot.probes_by_station[station_mac] = probes
+    except OSError:
+        return AirodumpSnapshot()
+
+    return snapshot
+
+
+def scan_wireless_networks_aircrack(
     interface: str,
     duration_seconds: int,
     channels: List[int],
@@ -834,105 +872,45 @@ def scan_wireless_networks_scapy(
     update_interval: float = DEFAULT_LIVE_UPDATE_INTERVAL,
     on_update: Optional[Callable[[Dict[str, "AccessPoint"], int], None]] = None,
 ) -> Dict[str, AccessPoint]:
-    aps: Dict[str, AccessPoint] = {}
-    aps_lock = threading.Lock()
+    _ = hop_interval
+    capture_dir = tempfile.mkdtemp(prefix="swissknife_recon_scan_")
+    output_prefix = os.path.join(capture_dir, "capture")
+    csv_path = f"{output_prefix}-01.csv"
+    process: Optional[subprocess.Popen] = None
+    latest_snapshot = AirodumpSnapshot()
 
-    # Best-effort: ensure monitor capture includes other BSS traffic.
-    subprocess.run(
-        ["iw", "dev", interface, "set", "monitor", "otherbss"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
+    try:
+        process = start_airodump_capture(interface, output_prefix, channels)
+        end_time = time.time() + max(1, duration_seconds)
+        while time.time() < end_time:
+            if process.poll() is not None:
+                error = (process.stderr.read() if process.stderr else "").strip()
+                if error:
+                    logging.error("Scanner stopped: %s", error)
+                break
+            latest_snapshot = parse_airodump_csv(csv_path)
+            if on_update:
+                remaining = max(0, int(end_time - time.time()))
+                on_update(clone_access_points(latest_snapshot.aps), remaining)
+            time.sleep(max(0.2, update_interval))
 
-    def handle_packet(packet) -> None:
-        if not packet.haslayer(Dot11):
-            return
-
-        dot11 = packet[Dot11]
-        if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-            bssid = normalize_mac(dot11.addr3 or dot11.addr2)
-            if not bssid or not is_valid_mac(bssid):
-                return
-            ssid, _hidden = extract_ssid(packet)
-            channel = extract_channel(packet)
-            frequency = channel_to_freq_mhz(channel)
-            encryption = extract_encryption(packet)
-            rssi = get_rssi(packet)
-            signal = rssi_to_quality(rssi)
-
-            with aps_lock:
-                ap = aps.get(bssid)
-                if ap is None:
-                    aps[bssid] = AccessPoint(
-                        ssid=ssid,
-                        bssid=bssid,
-                        channel=channel,
-                        frequency=frequency,
-                        encryption=encryption,
-                        rssi=rssi,
-                        signal=signal,
-                    )
-                else:
-                    if ap.ssid == "<hidden>" and ssid != "<hidden>":
-                        ap.ssid = ssid
-                    if channel and not ap.channel:
-                        ap.channel = channel
-                    if frequency and not ap.frequency:
-                        ap.frequency = frequency
-                    if encryption and encryption != ap.encryption:
-                        ap.encryption = encryption
-                    ap.update_signal(rssi)
-
-        with aps_lock:
-            observe_client_for_ap(aps, dot11)
-
-    stop_event = threading.Event()
-    hopper_thread: Optional[threading.Thread] = None
-    if channels:
-        hopper_thread = threading.Thread(
-            target=channel_hopper, args=(interface, channels, hop_interval, stop_event), daemon=True
-        )
-        hopper_thread.start()
-
-    sniff_thread = threading.Thread(
-        target=sniff,
-        kwargs={"iface": interface, "prn": handle_packet, "store": False, "timeout": duration_seconds},
-        daemon=True,
-    )
-    sniff_thread.start()
-
-    end_time = time.time() + max(1, duration_seconds)
-    while time.time() < end_time:
-        if on_update:
-            with aps_lock:
-                snapshot = {
-                    bssid: AccessPoint(
-                        ssid=ap.ssid,
-                        bssid=ap.bssid,
-                        channel=ap.channel,
-                        frequency=ap.frequency,
-                        encryption=ap.encryption,
-                        rssi=ap.rssi,
-                        signal=ap.signal,
-                        clients=set(ap.clients),
-                    )
-                    for bssid, ap in aps.items()
-                }
-            remaining = max(0, int(end_time - time.time()))
-            on_update(snapshot, remaining)
-        time.sleep(max(0.2, update_interval))
-
-    sniff_thread.join(timeout=2)
-
-    stop_event.set()
-    if hopper_thread:
-        hopper_thread.join(timeout=2)
-
-    return aps
+        final_snapshot = parse_airodump_csv(csv_path)
+        if final_snapshot.aps:
+            latest_snapshot = final_snapshot
+        return latest_snapshot.aps
+    except FileNotFoundError:
+        logging.error("Required tool 'airodump-ng' not found!")
+        return {}
+    except RuntimeError as exc:
+        logging.error("Airodump scan failed: %s", exc)
+        return {}
+    finally:
+        if process is not None:
+            stop_airodump_process(process)
+        cleanup_capture_dir(capture_dir)
 
 
-def format_scapy_results_lines(aps: Dict[str, AccessPoint], vendors: Dict[str, str]) -> List[str]:
+def format_scan_results_lines(aps: Dict[str, AccessPoint], vendors: Dict[str, str]) -> List[str]:
     if not aps:
         return [color_text("No access points found.", COLOR_WARNING)]
 
@@ -957,14 +935,14 @@ def format_scapy_results_lines(aps: Dict[str, AccessPoint], vendors: Dict[str, s
     return lines
 
 
-def display_scapy_results(aps: Dict[str, AccessPoint], vendors: Dict[str, str]) -> None:
-    lines = format_scapy_results_lines(aps, vendors)
+def display_scan_results(aps: Dict[str, AccessPoint], vendors: Dict[str, str]) -> None:
+    lines = format_scan_results_lines(aps, vendors)
     logging.info("")
     for line in lines:
         logging.info("%s", line)
 
 
-def display_scapy_live_update(
+def display_scan_live_update(
     aps: Dict[str, AccessPoint],
     vendors: Dict[str, str],
     remaining: int,
@@ -976,7 +954,7 @@ def display_scapy_live_update(
         f"{style(str(remaining), COLOR_SUCCESS, STYLE_BOLD)}s remaining"
     )
     lines = [header, progress, ""]
-    lines.extend(format_scapy_results_lines(aps, vendors))
+    lines.extend(format_scan_results_lines(aps, vendors))
     output = "\n".join(lines)
     if COLOR_ENABLED:
         sys.stdout.write("\033[2J\033[H" + output + "\n")
@@ -1092,6 +1070,26 @@ def format_probe_lines(probe_counts: Dict[str, int], probe_total: int) -> List[s
     return lines
 
 
+def merge_snapshot_into_state(state: SnifferState, snapshot: AirodumpSnapshot, packet_offset: int) -> None:
+    for bssid, ap in snapshot.aps.items():
+        existing = state.aps.get(bssid)
+        if existing is None:
+            state.aps[bssid] = clone_access_point(ap)
+            continue
+        merge_access_point(existing, ap)
+
+    state.packet_count = max(state.packet_count, packet_offset + snapshot.packet_count)
+
+    for station, probes in snapshot.probes_by_station.items():
+        for ssid in probes:
+            key = (station, ssid)
+            if key in state.seen_probe_pairs:
+                continue
+            state.seen_probe_pairs.add(key)
+            state.probe_counts[ssid] = state.probe_counts.get(ssid, 0) + 1
+            state.probe_total += 1
+
+
 def run_sniffer(
     interface: str,
     stop_event: threading.Event,
@@ -1100,139 +1098,58 @@ def run_sniffer(
     hop_interval: float = DEFAULT_HOP_INTERVAL,
     update_interval: float = 1.0,
 ) -> None:
-    aps = state.aps
-    probe_counts = state.probe_counts
-    aps_lock = threading.Lock()
-
-    # Best-effort: ensure monitor capture includes other BSS traffic.
-    subprocess.run(
-        ["iw", "dev", interface, "set", "monitor", "otherbss"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-
-    def handle_packet(packet) -> None:
-        with aps_lock:
-            state.packet_count += 1
-
-        if not packet.haslayer(Dot11):
-            return
-
-        dot11 = packet[Dot11]
-        if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
-            bssid = normalize_mac(dot11.addr3 or dot11.addr2)
-            if not bssid or not is_valid_mac(bssid):
-                return
-            ssid, _hidden = extract_ssid(packet)
-            channel = extract_channel(packet)
-            frequency = channel_to_freq_mhz(channel)
-            encryption = extract_encryption(packet)
-            rssi = get_rssi(packet)
-            signal = rssi_to_quality(rssi)
-
-            with aps_lock:
-                ap = aps.get(bssid)
-                if ap is None:
-                    aps[bssid] = AccessPoint(
-                        ssid=ssid,
-                        bssid=bssid,
-                        channel=channel,
-                        frequency=frequency,
-                        encryption=encryption,
-                        rssi=rssi,
-                        signal=signal,
-                    )
-                else:
-                    if ap.ssid == "<hidden>" and ssid != "<hidden>":
-                        ap.ssid = ssid
-                    if channel and not ap.channel:
-                        ap.channel = channel
-                    if frequency and not ap.frequency:
-                        ap.frequency = frequency
-                    if encryption and encryption != ap.encryption:
-                        ap.encryption = encryption
-                    ap.update_signal(rssi)
-
-        if packet.haslayer(Dot11ProbeReq):
-            ssid, hidden = extract_ssid(packet)
-            if not hidden and ssid not in ("<hidden>", "<non-printable>"):
-                with aps_lock:
-                    probe_counts[ssid] = probe_counts.get(ssid, 0) + 1
-                    state.probe_total += 1
-
-        with aps_lock:
-            observe_client_for_ap(aps, dot11)
-
-    sniffer: Optional[AsyncSniffer] = None
+    _ = hop_interval
+    capture_dir = tempfile.mkdtemp(prefix="swissknife_recon_sniffer_")
+    output_prefix = os.path.join(capture_dir, "capture")
+    csv_path = f"{output_prefix}-01.csv"
+    process: Optional[subprocess.Popen] = None
     status = "starting"
-    last_restart = 0.0
-    last_error = ""
-    restart_delay = 1.0
-
-    def start_sniffer() -> None:
-        nonlocal sniffer, status, last_restart, last_error
-        now = time.time()
-        if now - last_restart < restart_delay:
-            status = "restarting"
-            return
-        last_restart = now
-        try:
-            sniffer = AsyncSniffer(iface=interface, prn=handle_packet, store=False)
-            sniffer.start()
-            status = "running"
-        except Exception as exc:
-            status = "error"
-            error_text = str(exc)
-            if error_text != last_error:
-                logging.error("Sniffer failed to start: %s", exc)
-                last_error = error_text
-            sniffer = None
-
-    start_sniffer()
-    hopper_thread: Optional[threading.Thread] = None
-    if channels:
-        hopper_thread = threading.Thread(
-            target=channel_hopper, args=(interface, channels, hop_interval, stop_event), daemon=True
-        )
-        hopper_thread.start()
-
-    while not stop_event.is_set():
-        if sniffer is None or not getattr(sniffer, "running", False):
-            start_sniffer()
-        with aps_lock:
-            current_count = state.packet_count
-            current_probe_total = state.probe_total
-            current_probe_unique = len(probe_counts)
-        display_sniffer_live(
-            current_count,
-            current_probe_total,
-            current_probe_unique,
-            interface,
-            status,
-        )
-        time.sleep(max(0.2, update_interval))
+    packet_offset = state.packet_count
 
     try:
-        if sniffer and getattr(sniffer, "running", False):
-            sniffer.stop()
-    except Scapy_Exception:
-        pass
+        process = start_airodump_capture(interface, output_prefix, channels or [])
+        status = "running"
+
+        while not stop_event.is_set():
+            if process.poll() is not None:
+                status = "error"
+                error = (process.stderr.read() if process.stderr else "").strip()
+                if error:
+                    logging.error("Sniffer stopped: %s", error)
+                break
+
+            snapshot = parse_airodump_csv(csv_path)
+            merge_snapshot_into_state(state, snapshot, packet_offset)
+            display_sniffer_live(
+                state.packet_count,
+                state.probe_total,
+                len(state.probe_counts),
+                interface,
+                status,
+            )
+            time.sleep(max(0.2, update_interval))
+
+    except FileNotFoundError:
+        status = "error"
+        logging.error("Required tool 'airodump-ng' not found!")
+    except RuntimeError as exc:
+        status = "error"
+        logging.error("Failed to start sniffer: %s", exc)
+    finally:
+        if process is not None:
+            stop_airodump_process(process)
+        final_snapshot = parse_airodump_csv(csv_path)
+        merge_snapshot_into_state(state, final_snapshot, packet_offset)
+        cleanup_capture_dir(capture_dir)
     stop_event.set()
-    if hopper_thread:
-        hopper_thread.join(timeout=2)
 
 
 def recon_menu(vendors: Dict[str, str]) -> None:
     while True:
         logging.info("")
         logging.info(style("Recon menu:", STYLE_BOLD))
-        if SCAPY_AVAILABLE:
-            logging.info("  %s", color_text("[1] Scaner (scapy)", COLOR_HIGHLIGHT))
-            logging.info("  %s", color_text("[2] Sniffer (scapy)", COLOR_HIGHLIGHT))
-        else:
-            logging.info("  %s", color_text("[1] Scaner (scapy) [missing]", COLOR_WARNING))
-            logging.info("  %s", color_text("[2] Sniffer (scapy) [missing]", COLOR_WARNING))
+        logging.info("  %s", color_text("[1] Scaner (aircrack-ng)", COLOR_HIGHLIGHT))
+        logging.info("  %s", color_text("[2] Sniffer (aircrack-ng)", COLOR_HIGHLIGHT))
         logging.info("  %s", color_text("[3] Back", COLOR_HIGHLIGHT))
 
         choice = input(style("Your choice (1-3): ", STYLE_BOLD)).strip()
@@ -1240,10 +1157,6 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             return
 
         if choice == "1":
-            if not SCAPY_AVAILABLE:
-                logging.warning("Scapy is not installed. Install with: pip3 install scapy")
-                continue
-
             interfaces = list_network_interfaces()
             interface = select_interface(interfaces)
 
@@ -1265,10 +1178,10 @@ def recon_menu(vendors: Dict[str, str]) -> None:
 
             logging.info("")
             input(f"{style('Press Enter', STYLE_BOLD)} to start scaner on {interface}...")
-            live_update = lambda snapshot, remaining: display_scapy_live_update(
+            live_update = lambda snapshot, remaining: display_scan_live_update(
                 snapshot, vendors, remaining, interface
             )
-            aps = scan_wireless_networks_scapy(
+            aps = scan_wireless_networks_aircrack(
                 interface,
                 duration,
                 DEFAULT_MONITOR_CHANNELS,
@@ -1276,7 +1189,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
                 update_interval=DEFAULT_LIVE_UPDATE_INTERVAL,
                 on_update=live_update,
             )
-            display_scapy_results(aps, vendors)
+            display_scan_results(aps, vendors)
 
             if original_mode and original_mode != "monitor":
                 restore_managed_mode(interface)
@@ -1284,10 +1197,6 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             continue
 
         if choice == "2":
-            if not SCAPY_AVAILABLE:
-                logging.warning("Scapy is not installed. Install with: pip3 install scapy")
-                continue
-
             interfaces = list_network_interfaces()
             interface = select_interface(interfaces)
 
@@ -1363,7 +1272,7 @@ def main() -> None:
         logging.error("This script must be run as root!")
         sys.exit(1)
 
-    required_tools = ["iw", "ip", "ethtool"]
+    required_tools = ["iw", "ip", "ethtool", "airodump-ng"]
     for tool in required_tools:
         if subprocess.run(["which", tool], stdout=subprocess.DEVNULL).returncode != 0:
             logging.error("Required tool '%s' not found!", tool)

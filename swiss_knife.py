@@ -67,6 +67,7 @@ REQUIRED_TOOLS: List[str] = [
     "ip",
     "ethtool",
     "aireplay-ng",
+    "airodump-ng",
     "hostapd",
     "dnsmasq",
     "iptables",
@@ -75,26 +76,32 @@ REQUIRED_TOOLS: List[str] = [
 PACKAGE_MAPS = {
     "apt": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute2",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute2",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute",
     },
     "yum": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute",
     },
     "pacman": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute2",
     },
     "zypper": {
         "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
         "ip": "iproute2",
     },
 }

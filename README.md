@@ -50,17 +50,17 @@ Tools used by the modules:
 - `ethtool`
 - `iwlist` (from `wireless-tools`)
 - `aireplay-ng` (Aircrack-ng suite)
+- `airodump-ng` (Aircrack-ng suite)
 - `hostapd`
 - `dnsmasq`
 - `iptables`
 
 Optional tools:
-- `airodump-ng` (Aircrack-ng suite)
 - `mdk4`
 - `bully`
 
-Optional for recon:
-- `scapy` (required for Handshaker, optional for recon)
+Optional for Handshaker:
+- `scapy`
 
 ## Recon vendor lookup (optional)
 
