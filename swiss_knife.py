@@ -72,6 +72,7 @@ WEBUI_REQUIREMENTS = os.path.join("webui", "requirements.txt")
 WEBUI_PORT = 8000
 WEBUI_HOST = "0.0.0.0"
 WEBUI_AP_INTERFACE = "builtin"
+WEBUI_AP_IP = "10.10.0.1"
 WEBUI_TOKEN_HEADER = "X-SwissKnife-Token"
 WEBUI_LOG_FILE = os.path.join("webui", "webui_server.log")
 WEBUI_REQUIRED_PY_MODULES: List[str] = [
@@ -394,7 +395,10 @@ def webui_hint_line(port: int = WEBUI_PORT) -> str:
     ip_addr = detect_primary_ipv4() or "<device-ip>"
     hostname = socket.gethostname().strip() or "swissknife"
     local_host = hostname if hostname.endswith(".local") else f"{hostname}.local"
-    return f"Web UI: http://{ip_addr}:{port}  |  http://{local_host}:{port}"
+    return (
+        f"Web UI AP: http://{WEBUI_AP_IP}:{port}  |  "
+        f"LAN: http://{ip_addr}:{port}  |  http://{local_host}:{port}"
+    )
 
 
 def read_file_tail(path: str, max_lines: int = 20) -> str:
@@ -451,6 +455,8 @@ def start_webui_background() -> Optional[WebUIProcess]:
         str(WEBUI_PORT),
         "--ap-interface",
         WEBUI_AP_INTERFACE,
+        "--ap-ip",
+        WEBUI_AP_IP,
         "--token",
         token,
     ]
@@ -592,6 +598,11 @@ def main() -> None:
 
     try:
         while True:
+            if webui_service and webui_service.process.poll() is not None:
+                print(color_text("Web UI stopped unexpectedly. Restarting background service...", COLOR_HIGHLIGHT))
+                stop_webui_background(webui_service)
+                webui_service = start_webui_background()
+
             print_header(
                 "Main menu:",
                 MAIN_MENU,

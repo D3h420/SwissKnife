@@ -30,6 +30,7 @@ attack to run and guides you through the steps.
 
 `swiss_knife.py` now auto-starts Web UI in background on launch (port `8000`).
 The CLI header shows panel URLs and the current auth token.
+When connecting through the SwissKnife AP, use `http://10.10.0.1:8000`.
 
 ## Web UI control panel 🌐
 

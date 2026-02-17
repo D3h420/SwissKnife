@@ -27,6 +27,7 @@ sudo python3 -m webui.server --host 0.0.0.0 --port 8000
 
 The server prints an auth token in terminal output.
 Open `http://<device-ip>:8000`, paste the token, then start modules.
+If you join AP mode SSID (`SwissKnife-Control`), open `http://10.10.0.1:8000`.
 
 Default AP behavior:
 - AP mode is enabled by default.

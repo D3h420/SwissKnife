@@ -226,22 +226,30 @@ def create_app(
         if ap_manager:
             ap_manager.start()
             cfg = ap_manager.config
+            active_channel = getattr(ap_manager, "active_channel", cfg.channel)
             if ap_manager.dhcp_enabled and ap_manager.dns_enabled:
-                LOG.info("AP mode started on %s (%s) with DHCP+DNS", cfg.interface, cfg.ap_ip)
+                LOG.info(
+                    "AP mode started on %s (%s) channel %s with DHCP+DNS",
+                    cfg.interface,
+                    cfg.ap_ip,
+                    active_channel,
+                )
             elif ap_manager.dhcp_enabled:
                 LOG.warning(
-                    "AP mode started on %s (%s) in DHCP-only mode (DNS port 53 busy). "
+                    "AP mode started on %s (%s) channel %s in DHCP-only mode (DNS port 53 busy). "
                     "Open panel by IP: http://%s",
                     cfg.interface,
                     cfg.ap_ip,
+                    active_channel,
                     cfg.ap_ip,
                 )
             else:
                 LOG.warning(
-                    "AP mode started on %s (%s) in AP-only mode (no DHCP/DNS due socket conflicts). "
+                    "AP mode started on %s (%s) channel %s in AP-only mode (no DHCP/DNS due socket conflicts). "
                     "Set client static IP in %s/%s and open http://%s",
                     cfg.interface,
                     cfg.ap_ip,
+                    active_channel,
                     cfg.ap_ip,
                     cfg.cidr_prefix,
                     cfg.ap_ip,
