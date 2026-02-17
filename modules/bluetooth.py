@@ -22,23 +22,8 @@ COLOR_SUCCESS = "\033[32m" if COLOR_ENABLED else ""
 COLOR_WARNING = "\033[33m" if COLOR_ENABLED else ""
 STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
-BLE_SPAM_ALIASES = [
-    "SpamJam_XOXO",
-    "HAXX",
-    "BLE_Boop",
-    "x0x0x",
-    "Free_Wifi_LOL",
-    "Not_A_Trap",
-    "BT_Bomb",
-    "UFO-SIGNAL",
-    "CandyBLE",
-    "NSA_Van",
-    "HackThePlanet",
-    "ekomsSavior",
-]
-BLE_SPAM_DEVICE_COUNT = 30
-BLE_SPAM_DWELL_SECONDS = 0.04
-BLE_SPAM_STATUS_SECONDS = 2.0
+BLE_POET_NAME = "Litwo, ojczyzno moja"
+BLE_POET_STATUS_SECONDS = 2.0
 SCAN_REFRESH_SECONDS = 0.8
 
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
@@ -187,7 +172,7 @@ class BluetoothDevice:
 
 
 @dataclass
-class SpamIdentity:
+class BleIdentity:
     mac: str
     name: str
 
@@ -378,25 +363,59 @@ def list_btctl_controllers() -> List[str]:
     return controllers
 
 
+def hci_index(interface: str) -> int:
+    if interface.startswith("hci") and interface[3:].isdigit():
+        return int(interface[3:])
+    return 9999
+
+
+def hci_device_path(interface: str) -> Optional[str]:
+    path = os.path.join("/sys/class/bluetooth", interface, "device")
+    if not os.path.exists(path):
+        return None
+    try:
+        return os.path.realpath(path)
+    except OSError:
+        return None
+
+
+def is_usb_controller(interface: str) -> bool:
+    path = hci_device_path(interface)
+    return bool(path and "/usb" in path.lower())
+
+
+def controller_label(interface: str) -> str:
+    if is_usb_controller(interface):
+        return "USB adapter"
+    if hci_device_path(interface):
+        return "internal controller"
+    return "controller"
+
+
+def interface_display_name(interface: str) -> str:
+    return f"{controller_label(interface)} ({interface})"
+
+
 def select_hci_interface(interfaces: List[str]) -> str:
     if not interfaces:
         return "hci0"
-    if len(interfaces) == 1:
-        return interfaces[0]
 
-    logging.info("")
-    logging.info(style("Available Bluetooth interfaces:", STYLE_BOLD))
-    for index, name in enumerate(interfaces, start=1):
-        label = f"{index})"
-        logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), name)
+    ranked = sorted(
+        interfaces,
+        key=lambda iface: (is_usb_controller(iface), hci_index(iface), iface),
+    )
+    selected = ranked[0]
 
-    while True:
-        choice = input(f"{style('Select Bluetooth interface', STYLE_BOLD)} (number): ").strip()
-        if choice.isdigit():
-            idx = int(choice)
-            if 1 <= idx <= len(interfaces):
-                return interfaces[idx - 1]
-        logging.warning("Invalid selection. Try again.")
+    if len(ranked) > 1:
+        logging.info("")
+        logging.info(style("Bluetooth interface auto-selection:", STYLE_BOLD))
+        for iface in ranked:
+            selected_mark = " [selected]" if iface == selected else ""
+            logging.info("  - %s (%s)%s", iface, controller_label(iface), selected_mark)
+        if is_usb_controller(selected):
+            logging.warning("No internal controller detected. Falling back to %s.", selected)
+
+    return selected
 
 
 def update_device(
@@ -817,15 +836,8 @@ def get_current_alias(interface: str) -> Optional[str]:
     return None
 
 
-def build_spam_identities(count: int = BLE_SPAM_DEVICE_COUNT) -> List[SpamIdentity]:
-    identities: List[SpamIdentity] = []
-    for index in range(count):
-        base = BLE_SPAM_ALIASES[index % len(BLE_SPAM_ALIASES)]
-        suffix = f"_{index + 1:02d}" if count > len(BLE_SPAM_ALIASES) else ""
-        name = (base + suffix)[:26]
-        mac = random_static_mac(index + 1337)
-        identities.append(SpamIdentity(mac=mac, name=name))
-    return identities
+def build_poet_identity() -> BleIdentity:
+    return BleIdentity(mac=random_static_mac(1337), name=BLE_POET_NAME[:26])
 
 
 def _adv_hex(data: bytes) -> str:
@@ -857,7 +869,7 @@ def get_btmgmt_max_instances(interface: str) -> Optional[int]:
     return None
 
 
-def btmgmt_add_adv_instance(interface: str, identity: SpamIdentity, instance_id: int) -> bool:
+def btmgmt_add_adv_instance(interface: str, identity: BleIdentity, instance_id: int) -> bool:
     base_adv = "020106"
     scan_rsp = build_name_scan_rsp(identity.name)
 
@@ -875,7 +887,7 @@ def btmgmt_add_adv_instance(interface: str, identity: SpamIdentity, instance_id:
     return False
 
 
-def setup_btmgmt_multi_advertising(interface: str, identities: List[SpamIdentity]) -> int:
+def setup_btmgmt_multi_advertising(interface: str, identities: List[BleIdentity]) -> int:
     if not interface.startswith("hci") or not tool_exists("btmgmt"):
         return 0
 
@@ -915,29 +927,28 @@ def teardown_btmgmt_multi_advertising(interface: str) -> None:
     run_btmgmt(interface, ["clr-adv"])
 
 
-def run_ble_spam_btmgmt(
+def run_ble_poet_btmgmt(
     interface: str,
-    identities: List[SpamIdentity],
+    identity: BleIdentity,
     stop_event: threading.Event,
 ) -> bool:
-    added = setup_btmgmt_multi_advertising(interface, identities)
+    added = setup_btmgmt_multi_advertising(interface, [identity])
     if added <= 0:
         return False
 
     logging.info(
-        "BLE advertiser backend: %s (%d active instances)",
-        color_text("btmgmt multi-instance", COLOR_SUCCESS),
-        added,
+        "BLE advertiser backend: %s",
+        color_text("btmgmt", COLOR_SUCCESS),
     )
 
     last_status = 0.0
     while not stop_event.is_set():
         now = time.time()
-        if now - last_status >= BLE_SPAM_STATUS_SECONDS:
+        if now - last_status >= BLE_POET_STATUS_SECONDS:
             logging.info(
-                "  %s %d virtual devices (stable advertising)",
+                "  %s one device: %s",
                 style("Broadcasting", STYLE_BOLD),
-                added,
+                color_text(identity.name, COLOR_HIGHLIGHT),
             )
             last_status = now
         time.sleep(0.2)
@@ -946,9 +957,9 @@ def run_ble_spam_btmgmt(
     return True
 
 
-def run_ble_spam_hcitool(
+def run_ble_poet_hcitool(
     interface: str,
-    identities: List[SpamIdentity],
+    identity: BleIdentity,
     stop_event: threading.Event,
 ) -> bool:
     if not interface.startswith("hci"):
@@ -958,34 +969,32 @@ def run_ble_spam_hcitool(
         return False
 
     logging.info("BLE advertiser backend: %s", color_text("hcitool/hciconfig", COLOR_SUCCESS))
+    run_hcitool_cmd(interface, "0x08", "0x000A", ["00"])
+    if not set_hci_random_address(interface, identity.mac):
+        disable_hci_advertising(interface)
+        return False
+    if not set_hci_advertisement_name(interface, identity.name):
+        disable_hci_advertising(interface)
+        return False
+
     last_status = 0.0
-    cycle = 0
 
     while not stop_event.is_set():
-        for identity in identities:
-            if stop_event.is_set():
-                break
-
-            run_hcitool_cmd(interface, "0x08", "0x000A", ["00"])
-            if set_hci_random_address(interface, identity.mac):
-                set_hci_advertisement_name(interface, identity.name)
-            cycle += 1
-            now = time.time()
-            if now - last_status >= BLE_SPAM_STATUS_SECONDS:
-                logging.info(
-                    "  %s rotating %d identities (cycle %d)",
-                    style("Broadcasting", STYLE_BOLD),
-                    len(identities),
-                    cycle,
-                )
-                last_status = now
-            time.sleep(BLE_SPAM_DWELL_SECONDS)
+        now = time.time()
+        if now - last_status >= BLE_POET_STATUS_SECONDS:
+            logging.info(
+                "  %s one device: %s",
+                style("Broadcasting", STYLE_BOLD),
+                color_text(identity.name, COLOR_HIGHLIGHT),
+            )
+            last_status = now
+        time.sleep(0.2)
 
     disable_hci_advertising(interface)
     return True
 
 
-def run_ble_spam(interface: str) -> None:
+def run_ble_poet(interface: str) -> None:
     ensure_bluetooth_service(interface)
     run_bluetoothctl(["power", "on"], controller=interface)
     run_bluetoothctl(["discoverable", "on"], controller=interface)
@@ -995,35 +1004,32 @@ def run_ble_spam(interface: str) -> None:
         run_command(["hciconfig", interface, "piscan"])
 
     original_alias = get_current_alias(interface)
-    identities = build_spam_identities(BLE_SPAM_DEVICE_COUNT)
+    identity = build_poet_identity()
 
     stop_event = threading.Event()
     previous_sigint = install_stop_on_sigint(stop_event)
 
     try:
-        if run_ble_spam_btmgmt(interface, identities, stop_event):
+        if run_ble_poet_btmgmt(interface, identity, stop_event):
             return
 
-        if run_ble_spam_hcitool(interface, identities, stop_event):
+        if run_ble_poet_hcitool(interface, identity, stop_event):
             return
 
-        logging.warning("BLE advertiser backend fallback: bluetoothctl alias rotation only.")
-        logging.warning("Install btmgmt or hcitool/hciconfig for stronger BLE spam.")
+        logging.warning("BLE advertiser backend fallback: bluetoothctl alias only.")
+        logging.warning("Install btmgmt or hcitool/hciconfig for stronger BLE advertising.")
+        run_bluetoothctl(["system-alias", identity.name], controller=interface)
         last_status = 0.0
         while not stop_event.is_set():
-            for identity in identities:
-                if stop_event.is_set():
-                    break
-                run_bluetoothctl(["system-alias", identity.name], controller=interface)
-                now = time.time()
-                if now - last_status >= BLE_SPAM_STATUS_SECONDS:
-                    logging.info(
-                        "  %s alias: %s",
-                        style("Broadcasting", STYLE_BOLD),
-                        color_text(identity.name, COLOR_HIGHLIGHT),
-                    )
-                    last_status = now
-                time.sleep(0.2)
+            now = time.time()
+            if now - last_status >= BLE_POET_STATUS_SECONDS:
+                logging.info(
+                    "  %s one device alias: %s",
+                    style("Broadcasting", STYLE_BOLD),
+                    color_text(identity.name, COLOR_HIGHLIGHT),
+                )
+                last_status = now
+            time.sleep(0.2)
 
     finally:
         teardown_btmgmt_multi_advertising(interface)
@@ -1032,15 +1038,16 @@ def run_ble_spam(interface: str) -> None:
             run_bluetoothctl(["system-alias", original_alias], controller=interface)
         restore_signal(previous_sigint)
         logging.info("")
-        logging.info(color_text("BLE spam stopped.", COLOR_WARNING))
+        logging.info(color_text("BLE Poet stopped.", COLOR_WARNING))
 
 
 def scan_flow() -> None:
     interface = select_hci_interface(list_hci_interfaces())
+    interface_label = interface_display_name(interface)
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start live BT scan on {interface} "
+        f"{style('Press Enter', STYLE_BOLD)} to start live BT scan on {interface_label} "
         f"({style('Enter/Ctrl+C', STYLE_BOLD)} to stop)..."
     )
 
@@ -1060,24 +1067,25 @@ def scan_flow() -> None:
     input(style("Press Enter to return.", STYLE_BOLD))
 
 
-def spam_flow() -> None:
+def poet_flow() -> None:
     logging.info("")
     logging.info(style("Disclaimer:", STYLE_BOLD))
-    logging.info("Use BLE Spam only for authorized testing on your own devices.")
+    logging.info("Use BLE Poet only for authorized testing on your own devices.")
     choice = input(f"{style('Proceed', STYLE_BOLD)}? (Y/N): ").strip().lower()
     if choice != "y":
         logging.info(color_text("Aborted by user.", COLOR_WARNING))
         return
 
     interface = select_hci_interface(list_hci_interfaces())
+    interface_label = interface_display_name(interface)
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start BLE spam on {interface} "
+        f"{style('Press Enter', STYLE_BOLD)} to start BLE Poet on {interface_label} "
         f"({style('Ctrl+C', STYLE_BOLD)} to stop)..."
     )
 
-    run_ble_spam(interface)
+    run_ble_poet(interface)
     input(style("Press Enter to return.", STYLE_BOLD))
 
 
@@ -1086,14 +1094,14 @@ def menu_loop() -> None:
         logging.info("")
         logging.info(style("Bluetooth menu:", STYLE_BOLD))
         logging.info("  %s", color_text("[1] Scan BT devices", COLOR_HIGHLIGHT))
-        logging.info("  %s", color_text("[2] BLE Spam", COLOR_HIGHLIGHT))
+        logging.info("  %s", color_text("[2] BLE Poet", COLOR_HIGHLIGHT))
         logging.info("  %s", color_text("[3] Back", COLOR_HIGHLIGHT))
         choice = input(style("Your choice (1-3): ", STYLE_BOLD)).strip()
         if choice == "1":
             scan_flow()
             continue
         if choice == "2":
-            spam_flow()
+            poet_flow()
             continue
         if choice == "3":
             return
@@ -1102,7 +1110,7 @@ def menu_loop() -> None:
 
 def main() -> None:
     logging.info(color_text("Bluetooth Toolkit", COLOR_HEADER))
-    logging.info("Bluetooth discovery and BLE spam")
+    logging.info("Bluetooth discovery and BLE Poet")
     logging.info("")
 
     if os.geteuid() != 0:
