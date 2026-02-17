@@ -11,6 +11,7 @@ import sys
 import shutil
 import platform
 import socket
+import importlib.util
 from typing import Dict, List, Optional
 
 COLOR_ENABLED = sys.stdout.isatty()
@@ -65,7 +66,13 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
 WEBUI_SCRIPT = os.path.join("webui", "server.py")
+WEBUI_REQUIREMENTS = os.path.join("webui", "requirements.txt")
 WEBUI_PORT = 8000
+WEBUI_REQUIRED_PY_MODULES: List[str] = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+]
 
 REQUIRED_TOOLS: List[str] = [
     "iw",
@@ -209,6 +216,92 @@ def prompt_yes_no(message: str, default_yes: bool = True) -> bool:
     if not response:
         return default_yes
     return response in ("y", "yes")
+
+
+def missing_python_modules(modules: List[str]) -> List[str]:
+    missing: List[str] = []
+    for module_name in modules:
+        if importlib.util.find_spec(module_name) is None:
+            missing.append(module_name)
+    return missing
+
+
+def pip_available() -> bool:
+    result = subprocess.run(
+        [sys.executable or "python3", "-m", "pip", "--version"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def install_webui_python_dependencies(requirements_path: str) -> bool:
+    base = [sys.executable or "python3", "-m", "pip", "install"]
+    attempts = [
+        [*base, "-r", requirements_path],
+        [*base, "--break-system-packages", "-r", requirements_path],
+    ]
+
+    for index, command in enumerate(attempts):
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+
+        output = result.stdout or ""
+        lower_output = output.lower()
+        if index == 0 and "externally-managed-environment" in lower_output:
+            print(color_text("Detected externally managed Python environment; retrying with --break-system-packages.", COLOR_HIGHLIGHT))
+            continue
+
+        if output.strip():
+            tail = "\n".join(output.strip().splitlines()[-10:])
+            print(color_text("pip output (last lines):", COLOR_HIGHLIGHT))
+            print(tail)
+        break
+    return False
+
+
+def ensure_webui_python_dependencies() -> bool:
+    missing = missing_python_modules(WEBUI_REQUIRED_PY_MODULES)
+    if not missing:
+        return True
+
+    print(color_text(f"Missing Python modules for Web UI: {', '.join(missing)}", COLOR_HIGHLIGHT))
+    requirements_path = script_path(WEBUI_REQUIREMENTS)
+    if not os.path.isfile(requirements_path):
+        print(color_text(f"Requirements file not found: {requirements_path}", COLOR_HIGHLIGHT))
+        return False
+
+    if not pip_available():
+        print(color_text("pip is not available for this Python interpreter.", COLOR_HIGHLIGHT))
+        print(style(f"Install manually: {sys.executable or 'python3'} -m ensurepip --upgrade", STYLE_BOLD))
+        return False
+
+    if not prompt_yes_no("Install Web UI Python dependencies now? [Y/n]: "):
+        print(style(f"Install manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
+        print(style(f"If needed on Debian/Ubuntu: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
+        return False
+
+    if not install_webui_python_dependencies(requirements_path):
+        print(color_text("Automatic Python dependency installation failed.", COLOR_HIGHLIGHT))
+        print(style(f"Try manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
+        print(style(f"Or: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
+        return False
+
+    still_missing = missing_python_modules(WEBUI_REQUIRED_PY_MODULES)
+    if still_missing:
+        print(color_text(f"Web UI modules still missing after install: {', '.join(still_missing)}", COLOR_HIGHLIGHT))
+        return False
+
+    print(color_text("Web UI Python dependencies are ready.\n", COLOR_SUCCESS))
+    return True
 
 
 def report_dependencies() -> List[str]:
@@ -395,6 +488,9 @@ def main() -> None:
             continue
 
         if choice == "4":
+            if not ensure_webui_python_dependencies():
+                print(color_text("Web UI cannot start without required Python packages.\n", COLOR_HIGHLIGHT))
+                continue
             run_child(WEBUI_SCRIPT, ["--host", "0.0.0.0", "--port", str(WEBUI_PORT), "--ap-interface", "builtin"])
             continue
 

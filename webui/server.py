@@ -8,14 +8,24 @@ import logging
 import os
 import secrets
 import shlex
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+try:
+    from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+    from pydantic import BaseModel, Field
+except ModuleNotFoundError as exc:
+    requirements_path = Path(__file__).resolve().parent / "requirements.txt"
+    module_name = exc.name or "unknown"
+    raise SystemExit(
+        f"Missing Python package '{module_name}'.\n"
+        f"Install Web UI dependencies with:\n"
+        f"{sys.executable or 'python3'} -m pip install -r {requirements_path}"
+    ) from exc
 
 from webui.ap_mode import AccessPointManager, ApModeConfig, detect_builtin_wireless_interface
 from webui.process_manager import ProcessManager, TaskError
