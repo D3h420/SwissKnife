@@ -1,0 +1,2 @@
+"""SwissKnife Web UI package."""
+

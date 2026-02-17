@@ -28,6 +28,31 @@ python3 swiss_knife.py
 Run as root (required for wireless operations). The menu lets you choose which
 attack to run and guides you through the steps.
 
+## Web UI control panel 🌐
+
+If you want remote control through a browser UI (desktop/mobile), use the new
+`webui/` backend:
+
+```bash
+pip install -r webui/requirements.txt
+sudo python3 -m webui.server --host 0.0.0.0 --port 8000
+```
+
+Open `http://<device-ip>:8000`, paste the token printed in terminal output, and
+start/stop modules from the panel. Existing module logic is unchanged.
+
+Optional AP mode (panel served over your own AP):
+
+```bash
+sudo python3 -m webui.server \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --ap-interface wlan1 \
+  --ap-ssid SwissKnife-Control
+```
+
+Full options are documented in `webui/README.md`.
+
 ## Logs and captures 🧾
 
 Captive Portal and Evil Twin store captured submissions in `log/` (created on

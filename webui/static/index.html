@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SwissKnife Web Console</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div class="hero-title">
+        <h1>SwissKnife Web Console</h1>
+        <p>Remote control panel for existing Python modules.</p>
+      </div>
+      <div class="hero-auth">
+        <label for="tokenInput">Auth token</label>
+        <div class="token-row">
+          <input id="tokenInput" type="password" placeholder="Paste token from server output">
+          <button id="saveTokenBtn" type="button">Save token</button>
+        </div>
+        <p id="authHint" class="hint"></p>
+      </div>
+    </header>
+
+    <section class="layout">
+      <article class="panel panel-modules">
+        <div class="panel-head">
+          <h2>Modules</h2>
+          <div class="panel-actions">
+            <input id="globalArgsInput" type="text" placeholder="Optional args for next start">
+            <button id="refreshModulesBtn" type="button">Reload</button>
+          </div>
+        </div>
+        <div id="modulesGrid" class="modules-grid"></div>
+      </article>
+
+      <article class="panel panel-tasks">
+        <div class="panel-head">
+          <h2>Tasks</h2>
+          <button id="refreshTasksBtn" type="button">Refresh</button>
+        </div>
+        <ul id="tasksList" class="tasks-list"></ul>
+      </article>
+
+      <article class="panel panel-console">
+        <div class="panel-head">
+          <h2>Console</h2>
+          <div class="panel-actions">
+            <button id="clearConsoleBtn" type="button">Clear</button>
+            <button id="stopTaskBtn" type="button" class="danger">Stop task</button>
+          </div>
+        </div>
+        <pre id="consoleOutput" class="console-output"></pre>
+        <form id="taskInputForm" class="console-input">
+          <input id="taskInputField" type="text" placeholder="Send input to selected task and press Enter">
+          <button type="submit">Send</button>
+        </form>
+      </article>
+    </section>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
+

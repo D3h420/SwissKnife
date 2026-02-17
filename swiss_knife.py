@@ -46,7 +46,8 @@ MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon", "icon": "🛰️"},
     "2": {"name": "Attacks", "action": "attacks", "icon": "⚔️"},
     "3": {"name": "Bluetooth", "action": "bluetooth", "icon": "📶"},
-    "4": {"name": "Exit", "action": "exit", "icon": "🚪"},
+    "4": {"name": "Web UI", "action": "webui", "icon": "🌐"},
+    "5": {"name": "Exit", "action": "exit", "icon": "🚪"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -62,6 +63,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
+WEBUI_SCRIPT = os.path.join("webui", "server.py")
 
 REQUIRED_TOOLS: List[str] = [
     "iw",
@@ -325,13 +327,13 @@ def main() -> None:
 
     while True:
         print_header("Main menu:", MAIN_MENU)
-        choice = input(style("Your choice (1-4): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-5): ", STYLE_BOLD)).strip()
 
         if choice not in MAIN_MENU:
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "4":
+        if choice == "5":
             print()
             print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
             print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
@@ -348,6 +350,10 @@ def main() -> None:
 
         if choice == "3":
             run_child(BLUETOOTH_SCRIPT)
+            continue
+
+        if choice == "4":
+            run_child(WEBUI_SCRIPT, ["--host", "0.0.0.0", "--port", "8000"])
             continue
 
 
