@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import ipaddress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, TextIO
@@ -120,13 +121,7 @@ class AccessPointManager:
                 text=True,
                 start_new_session=True,
             )
-            self.dnsmasq_process = subprocess.Popen(
-                ["dnsmasq", "--conf-file", str(dnsmasq_conf)],
-                stdout=self._dnsmasq_log_handle,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-            )
+            self.dnsmasq_process = self._start_dnsmasq(dnsmasq_conf)
 
             time.sleep(0.8)
 
@@ -217,18 +212,70 @@ class AccessPointManager:
         )
 
     def _dnsmasq_config(self) -> str:
+        netmask = self._cidr_to_netmask(self.config.cidr_prefix)
         return "\n".join(
             [
                 f"interface={self.config.interface}",
-                "bind-interfaces",
-                f"dhcp-range={self.config.dhcp_start},{self.config.dhcp_end},{self.config.dhcp_lease}",
+                f"dhcp-range={self.config.dhcp_start},{self.config.dhcp_end},{netmask},{self.config.dhcp_lease}",
                 f"dhcp-option=3,{self.config.ap_ip}",
                 f"dhcp-option=6,{self.config.ap_ip}",
                 f"address=/#/{self.config.ap_ip}",
+                "server=8.8.8.8",
+                "log-queries",
                 "log-dhcp",
                 "",
             ]
         )
+
+    def _start_dnsmasq(self, conf_path: Path) -> subprocess.Popen:
+        if self._dnsmasq_log_handle is None:
+            raise RuntimeError("dnsmasq log handle is not initialized.")
+
+        commands = [
+            ["dnsmasq", "-C", str(conf_path), "--no-daemon"],
+            ["dnsmasq", "-C", str(conf_path), "-k"],
+            ["dnsmasq", f"--conf-file={conf_path}", "--no-daemon"],
+            ["dnsmasq", f"--conf-file={conf_path}", "-k"],
+        ]
+
+        last_output = ""
+        last_cmd = ""
+
+        for cmd in commands:
+            process = subprocess.Popen(
+                cmd,
+                stdout=self._dnsmasq_log_handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+            time.sleep(0.6)
+            if process.poll() is None:
+                return process
+
+            last_cmd = " ".join(cmd)
+            last_output = self._read_log_tail(self.dnsmasq_log_path)
+            self._stop_process(process)
+
+            lower = last_output.lower()
+            if "junk found in command line" in lower or "unknown option" in lower:
+                continue
+            if "bad command line options" in lower:
+                continue
+
+        raise RuntimeError(
+            "dnsmasq failed to start with available command variants.\n"
+            f"last command: {last_cmd}\n"
+            f"{last_output}"
+        )
+
+    @staticmethod
+    def _cidr_to_netmask(prefix: int) -> str:
+        try:
+            network = ipaddress.IPv4Network(f"0.0.0.0/{prefix}", strict=False)
+            return str(network.netmask)
+        except Exception:
+            return "255.255.255.0"
 
     @staticmethod
     def _read_log_tail(path: Optional[Path], max_lines: int = 30) -> str:
