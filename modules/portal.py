@@ -387,9 +387,7 @@ def setup_ap():
     logging.info("Setting up Access Point...")
     
     try:
-        # Stop NetworkManager if it's active.
-        subprocess.run(['systemctl', 'stop', 'NetworkManager'], stderr=subprocess.DEVNULL)
-        subprocess.run(['systemctl', 'stop', 'wpa_supplicant'], stderr=subprocess.DEVNULL)
+        # Allow interface state to settle before reconfiguration.
         time.sleep(2)
         
         # Bring up interface.

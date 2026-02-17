@@ -743,8 +743,6 @@ def setup_ap() -> bool:
     logging.info("Setting up Access Point...")
 
     try:
-        subprocess.run(["systemctl", "stop", "NetworkManager"], stderr=subprocess.DEVNULL)
-        subprocess.run(["systemctl", "stop", "wpa_supplicant"], stderr=subprocess.DEVNULL)
         time.sleep(2)
 
         subprocess.run(["ip", "link", "set", AP_INTERFACE, "down"])
