@@ -72,6 +72,7 @@ class AccessPointManager:
     def __init__(self, config: ApModeConfig) -> None:
         self.config = config
         self.dns_enabled = True
+        self.dhcp_enabled = True
         self.runtime_dir: Optional[Path] = None
         self.hostapd_process: Optional[subprocess.Popen] = None
         self.dnsmasq_process: Optional[subprocess.Popen] = None
@@ -129,7 +130,7 @@ class AccessPointManager:
             if self.hostapd_process.poll() is not None:
                 output = self._read_log_tail(self.hostapd_log_path)
                 raise RuntimeError(f"hostapd failed to start.\n{output}")
-            if self.dnsmasq_process.poll() is not None:
+            if self.dnsmasq_process and self.dnsmasq_process.poll() is not None:
                 output = self._read_log_tail(self.dnsmasq_log_path)
                 raise RuntimeError(f"dnsmasq failed to start.\n{output}")
         except Exception:
@@ -238,25 +239,40 @@ class AccessPointManager:
         lines.extend(["log-dhcp", ""])
         return "\n".join(lines)
 
-    def _start_dnsmasq(self, conf_path: Path) -> subprocess.Popen:
+    def _start_dnsmasq(self, conf_path: Path) -> Optional[subprocess.Popen]:
         try:
             process = self._start_dnsmasq_with_variants(conf_path)
             self.dns_enabled = True
+            self.dhcp_enabled = True
             return process
         except RuntimeError as exc:
-            if not self._is_dns_port_conflict(str(exc)):
+            if not self._is_bind_conflict(str(exc)):
                 raise
 
             # Fallback: run DHCP only when DNS port 53 is already in use by another service.
             conf_path.write_text(self._dnsmasq_config(enable_dns=False), encoding="utf-8")
-            process = self._start_dnsmasq_with_variants(conf_path)
-            self.dns_enabled = False
-            if self._dnsmasq_log_handle:
-                self._dnsmasq_log_handle.write(
-                    "[webui] dnsmasq started in DHCP-only mode (DNS disabled: port 53 busy).\n"
-                )
-                self._dnsmasq_log_handle.flush()
-            return process
+            try:
+                process = self._start_dnsmasq_with_variants(conf_path)
+                self.dns_enabled = False
+                self.dhcp_enabled = True
+                if self._dnsmasq_log_handle:
+                    self._dnsmasq_log_handle.write(
+                        "[webui] dnsmasq started in DHCP-only mode (DNS disabled due bind conflict).\n"
+                    )
+                    self._dnsmasq_log_handle.flush()
+                return process
+            except RuntimeError as second_exc:
+                if not self._is_bind_conflict(str(second_exc)):
+                    raise
+                # Last resort: keep AP alive without dnsmasq (manual IP config needed on client).
+                self.dns_enabled = False
+                self.dhcp_enabled = False
+                if self._dnsmasq_log_handle:
+                    self._dnsmasq_log_handle.write(
+                        "[webui] dnsmasq disabled due bind conflicts; AP runs without DHCP/DNS.\n"
+                    )
+                    self._dnsmasq_log_handle.flush()
+                return None
 
     def _start_dnsmasq_with_variants(self, conf_path: Path) -> subprocess.Popen:
         if self._dnsmasq_log_handle is None:
@@ -301,11 +317,10 @@ class AccessPointManager:
         )
 
     @staticmethod
-    def _is_dns_port_conflict(text: str) -> bool:
+    def _is_bind_conflict(text: str) -> bool:
         lower = text.lower()
-        return "port 53" in lower and (
+        return "failed to create listening socket" in lower and (
             "address already in use" in lower
-            or "failed to create listening socket" in lower
         )
 
     @staticmethod
