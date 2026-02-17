@@ -5,7 +5,6 @@ import re
 import sys
 import time
 import signal
-import random
 import threading
 import subprocess
 import logging
@@ -754,9 +753,8 @@ def _on_btmgmt_line(line: str, devices: Dict[str, BluetoothDevice], lock: thread
         parse_btmgmt_line(devices, line)
 
 
-def random_static_mac(seed: int) -> str:
-    rng = random.Random(seed)
-    octets = [rng.randint(0, 255) for _ in range(6)]
+def random_private_static_mac() -> str:
+    octets = list(os.urandom(6))
     octets[0] = (octets[0] & 0x3F) | 0xC0
     return ":".join(f"{octet:02X}" for octet in octets)
 
@@ -837,7 +835,7 @@ def get_current_alias(interface: str) -> Optional[str]:
 
 
 def build_poet_identity() -> BleIdentity:
-    return BleIdentity(mac=random_static_mac(1337), name=BLE_POET_NAME[:26])
+    return BleIdentity(mac=random_private_static_mac(), name=BLE_POET_NAME[:26])
 
 
 def _adv_hex(data: bytes) -> str:
@@ -853,6 +851,22 @@ def build_name_scan_rsp(name: str) -> str:
 
 def run_btmgmt(interface: str, args: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
     return run_command(["btmgmt", "-i", interface, *args], capture_output=True, timeout=timeout)
+
+
+def force_clear_btmgmt_advertising(interface: str) -> None:
+    if not interface.startswith("hci") or not tool_exists("btmgmt"):
+        return
+
+    run_btmgmt(interface, ["advertising", "off"])
+    run_btmgmt(interface, ["clr-adv"])
+
+    # Some BlueZ stacks keep stale extended advertising instances.
+    for remove_cmd in ("rm-adv", "remove-adv"):
+        for instance_id in range(1, 65):
+            run_btmgmt(interface, [remove_cmd, str(instance_id)], timeout=1.0)
+
+    run_btmgmt(interface, ["clr-adv"])
+    run_btmgmt(interface, ["advertising", "off"])
 
 
 def get_btmgmt_max_instances(interface: str) -> Optional[int]:
@@ -901,8 +915,7 @@ def setup_btmgmt_multi_advertising(interface: str, identities: List[BleIdentity]
     run_btmgmt(interface, ["le", "on"])
     run_btmgmt(interface, ["connectable", "on"])
     run_btmgmt(interface, ["discov", "on"])
-    run_btmgmt(interface, ["advertising", "off"])
-    run_btmgmt(interface, ["clr-adv"])
+    force_clear_btmgmt_advertising(interface)
 
     added = 0
     for instance_id, identity in enumerate(identities, start=1):
@@ -910,21 +923,18 @@ def setup_btmgmt_multi_advertising(interface: str, identities: List[BleIdentity]
             added += 1
 
     if added == 0:
-        run_btmgmt(interface, ["clr-adv"])
+        force_clear_btmgmt_advertising(interface)
         return 0
 
     result = run_btmgmt(interface, ["advertising", "on"])
     if result.returncode != 0:
-        run_btmgmt(interface, ["clr-adv"])
+        force_clear_btmgmt_advertising(interface)
         return 0
     return added
 
 
 def teardown_btmgmt_multi_advertising(interface: str) -> None:
-    if not interface.startswith("hci") or not tool_exists("btmgmt"):
-        return
-    run_btmgmt(interface, ["advertising", "off"])
-    run_btmgmt(interface, ["clr-adv"])
+    force_clear_btmgmt_advertising(interface)
 
 
 def run_ble_poet_btmgmt(
@@ -996,6 +1006,9 @@ def run_ble_poet_hcitool(
 
 def run_ble_poet(interface: str) -> None:
     ensure_bluetooth_service(interface)
+    teardown_btmgmt_multi_advertising(interface)
+    disable_hci_advertising(interface)
+
     run_bluetoothctl(["power", "on"], controller=interface)
     run_bluetoothctl(["discoverable", "on"], controller=interface)
     run_bluetoothctl(["pairable", "on"], controller=interface)
