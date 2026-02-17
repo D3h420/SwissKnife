@@ -31,16 +31,16 @@ class ModuleSpec:
 
 DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
     ModuleSpec(
-        module_id="launcher",
-        name="Launcher",
-        script="swiss_knife.py",
-        description="Legacy menu launcher (full CLI flow).",
+        module_id="recon_scan",
+        name="Recon Scanner",
+        script="webui/actions/recon_scan.py",
+        description="Passive AP/client scan without interactive prompts.",
     ),
     ModuleSpec(
-        module_id="recon",
-        name="Recon",
-        script="modules/recon.py",
-        description="Passive Wi-Fi recon workflow.",
+        module_id="recon_sniff",
+        name="Recon Sniffer",
+        script="webui/actions/recon_sniff.py",
+        description="Continuous sniffing session with timed stop support.",
     ),
     ModuleSpec(
         module_id="deauth",

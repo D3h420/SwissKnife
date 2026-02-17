@@ -4,6 +4,12 @@ Web control panel that launches existing SwissKnife scripts without rewriting
 module logic. It manages processes and forwards interactive input (`input()`)
 through the browser console.
 
+Recon has dedicated non-interactive Web UI actions:
+- `recon_scan` (`webui/actions/recon_scan.py`)
+- `recon_sniff` (`webui/actions/recon_sniff.py`)
+
+These are designed for click-through control (no numeric menu prompts).
+
 ## Install
 
 ```bash
@@ -26,6 +32,9 @@ Default AP behavior:
 - AP mode is enabled by default.
 - Interface is auto-selected as built-in Wi-Fi (`--ap-interface builtin`).
 - This leaves external adapters (for example `wlan1`, `wlan2`) free for modules.
+
+Interface API:
+- `GET /api/interfaces` returns built-in AP interface and tool-capable adapters.
 
 ## API auth
 

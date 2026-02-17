@@ -11,8 +11,12 @@ import sys
 import shutil
 import platform
 import socket
+import time
+import signal
+import secrets
 import importlib.util
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional, TextIO
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -48,8 +52,7 @@ MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon", "icon": "🛰️"},
     "2": {"name": "Attacks", "action": "attacks", "icon": "⚔️"},
     "3": {"name": "Bluetooth", "action": "bluetooth", "icon": "📶"},
-    "4": {"name": "Web UI", "action": "webui", "icon": "🌐"},
-    "5": {"name": "Exit", "action": "exit", "icon": "🚪"},
+    "4": {"name": "Exit", "action": "exit", "icon": "🚪"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -65,9 +68,12 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
-WEBUI_SCRIPT = os.path.join("webui", "server.py")
 WEBUI_REQUIREMENTS = os.path.join("webui", "requirements.txt")
 WEBUI_PORT = 8000
+WEBUI_HOST = "0.0.0.0"
+WEBUI_AP_INTERFACE = "builtin"
+WEBUI_TOKEN_HEADER = "X-SwissKnife-Token"
+WEBUI_LOG_FILE = os.path.join("webui", "webui_server.log")
 WEBUI_REQUIRED_PY_MODULES: List[str] = [
     "fastapi",
     "uvicorn",
@@ -131,6 +137,14 @@ PACKAGE_MAPS = {
         "ip": "iproute2",
     },
 }
+
+
+@dataclass
+class WebUIProcess:
+    process: subprocess.Popen
+    token: str
+    log_handle: TextIO
+    log_path: str
 
 
 def base_dir() -> str:
@@ -383,10 +397,120 @@ def webui_hint_line(port: int = WEBUI_PORT) -> str:
     return f"Web UI: http://{ip_addr}:{port}  |  http://{local_host}:{port}"
 
 
-def print_header(title: str, menu: Dict[str, Dict[str, str]], show_webui_hint: bool = False) -> None:
+def read_file_tail(path: str, max_lines: int = 20) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return "(log unavailable)"
+    if not lines:
+        return "(no log output)"
+    return "".join(lines[-max_lines:]).strip() or "(no log output)"
+
+
+def stop_background_process(process: Optional[subprocess.Popen]) -> None:
+    if not process or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except Exception:
+        try:
+            process.terminate()
+        except Exception:
+            return
+    try:
+        process.wait(timeout=2.5)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            return
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def start_webui_background() -> Optional[WebUIProcess]:
+    token = secrets.token_urlsafe(20)
+    log_path = script_path(WEBUI_LOG_FILE)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    log_handle = open(log_path, "w", encoding="utf-8")
+    cmd = [
+        sys.executable or "python3",
+        "-m",
+        "webui.server",
+        "--host",
+        WEBUI_HOST,
+        "--port",
+        str(WEBUI_PORT),
+        "--ap-interface",
+        WEBUI_AP_INTERFACE,
+        "--token",
+        token,
+    ]
+    process: Optional[subprocess.Popen] = None
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=base_dir(),
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        time.sleep(1.4)
+        if process.poll() is not None:
+            log_tail = read_file_tail(log_path)
+            print(color_text("Web UI failed to start in background.", COLOR_HIGHLIGHT))
+            print(color_text(f"Log file: {log_path}", COLOR_DIM))
+            if log_tail:
+                print(color_text(log_tail, COLOR_DIM))
+            log_handle.close()
+            return None
+        return WebUIProcess(process=process, token=token, log_handle=log_handle, log_path=log_path)
+    except OSError as exc:
+        if process and process.poll() is None:
+            stop_background_process(process)
+        log_handle.close()
+        print(color_text(f"Failed to launch Web UI background process: {exc}", COLOR_HIGHLIGHT))
+        return None
+
+
+def stop_webui_background(service: Optional[WebUIProcess]) -> None:
+    if not service:
+        return
+    stop_background_process(service.process)
+    try:
+        service.log_handle.close()
+    except Exception:
+        pass
+
+
+def webui_status_line(service: Optional[WebUIProcess]) -> str:
+    if not service:
+        return f"Web UI autostart unavailable (check {script_path(WEBUI_LOG_FILE)})"
+    if service.process.poll() is not None:
+        return f"Web UI stopped (check {service.log_path})"
+    return f"Web UI token ({WEBUI_TOKEN_HEADER}): {service.token}"
+
+
+def print_header(
+    title: str,
+    menu: Dict[str, Dict[str, str]],
+    show_webui_hint: bool = False,
+    webui_status: str = "",
+) -> None:
     print(color_text(ASCII_HEADER, COLOR_HEADER))
     if show_webui_hint:
         print(color_text(webui_hint_line(), COLOR_DIM))
+        if webui_status:
+            print(color_text(webui_status, COLOR_DIM))
         print()
     print(style(title, STYLE_BOLD))
     print()
@@ -429,24 +553,6 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
         pass
 
 
-def run_child_module(module_name: str, args: Optional[List[str]] = None) -> None:
-    cmd = [sys.executable or "python3", "-m", module_name]
-    if args:
-        cmd.extend(args)
-    print(style(f"Starting module {module_name}...\n", STYLE_BOLD))
-
-    try:
-        subprocess.run(cmd, cwd=base_dir())
-    except KeyboardInterrupt:
-        # Child should receive Ctrl+C too; return cleanly to launcher.
-        pass
-    print(style("\nDone. Press Enter to return to the menu.", STYLE_BOLD))
-    try:
-        input()
-    except EOFError:
-        pass
-
-
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
@@ -478,39 +584,46 @@ def main() -> None:
         print(color_text("This launcher must be run as root.", COLOR_HIGHLIGHT))
         sys.exit(1)
 
-    while True:
-        print_header("Main menu:", MAIN_MENU, show_webui_hint=True)
-        choice = input(style("Your choice (1-5): ", STYLE_BOLD)).strip()
+    webui_service: Optional[WebUIProcess] = None
+    if ensure_webui_python_dependencies():
+        webui_service = start_webui_background()
+    else:
+        print(color_text("Web UI autostart skipped (missing Python dependencies).", COLOR_HIGHLIGHT))
 
-        if choice not in MAIN_MENU:
-            print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
-            continue
+    try:
+        while True:
+            print_header(
+                "Main menu:",
+                MAIN_MENU,
+                show_webui_hint=True,
+                webui_status=webui_status_line(webui_service),
+            )
+            choice = input(style("Your choice (1-4): ", STYLE_BOLD)).strip()
 
-        if choice == "5":
-            print()
-            print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
-            print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
-            print()
-            break
-
-        if choice == "1":
-            run_child(RECON_SCRIPT)
-            continue
-
-        if choice == "2":
-            attacks_menu()
-            continue
-
-        if choice == "3":
-            run_child(BLUETOOTH_SCRIPT)
-            continue
-
-        if choice == "4":
-            if not ensure_webui_python_dependencies():
-                print(color_text("Web UI cannot start without required Python packages.\n", COLOR_HIGHLIGHT))
+            if choice not in MAIN_MENU:
+                print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
                 continue
-            run_child_module("webui.server", ["--host", "0.0.0.0", "--port", str(WEBUI_PORT), "--ap-interface", "builtin"])
-            continue
+
+            if choice == "4":
+                print()
+                print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
+                print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
+                print()
+                break
+
+            if choice == "1":
+                run_child(RECON_SCRIPT)
+                continue
+
+            if choice == "2":
+                attacks_menu()
+                continue
+
+            if choice == "3":
+                run_child(BLUETOOTH_SCRIPT)
+                continue
+    finally:
+        stop_webui_background(webui_service)
 
 
 if __name__ == "__main__":

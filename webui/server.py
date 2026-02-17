@@ -32,7 +32,12 @@ except ModuleNotFoundError as exc:
         f"{sys.executable or 'python3'} -m pip install -r {requirements_path}"
     ) from exc
 
-from webui.ap_mode import AccessPointManager, ApModeConfig, detect_builtin_wireless_interface
+from webui.ap_mode import (
+    AccessPointManager,
+    ApModeConfig,
+    detect_builtin_wireless_interface,
+    list_wireless_interfaces,
+)
 from webui.process_manager import ProcessManager, TaskError
 
 
@@ -46,9 +51,79 @@ MENU_SCHEMA = {
             "id": "recon",
             "label": "Recon",
             "icon": "RCN",
-            "type": "module",
-            "module_id": "recon",
+            "type": "group",
             "description": "Passive discovery of APs and clients.",
+            "items": [
+                {
+                    "id": "recon_scan",
+                    "label": "Scanner",
+                    "type": "module",
+                    "module_id": "recon_scan",
+                    "description": "Timed scan of nearby APs and stations.",
+                    "controls": [
+                        {
+                            "id": "interface",
+                            "label": "Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "arg": "--interface",
+                            "required": True,
+                            "default": "auto",
+                        },
+                        {
+                            "id": "duration",
+                            "label": "Timeout",
+                            "kind": "range",
+                            "arg": "--duration",
+                            "min": 8,
+                            "max": 120,
+                            "step": 2,
+                            "default": 24,
+                            "suffix": "s",
+                        },
+                    ],
+                },
+                {
+                    "id": "recon_sniff",
+                    "label": "Sniffer",
+                    "type": "module",
+                    "module_id": "recon_sniff",
+                    "description": "Channel-hopping sniffer with timed stop.",
+                    "controls": [
+                        {
+                            "id": "interface",
+                            "label": "Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "arg": "--interface",
+                            "required": True,
+                            "default": "auto",
+                        },
+                        {
+                            "id": "duration",
+                            "label": "Timeout",
+                            "kind": "range",
+                            "arg": "--duration",
+                            "min": 15,
+                            "max": 300,
+                            "step": 5,
+                            "default": 90,
+                            "suffix": "s",
+                        },
+                        {
+                            "id": "update_interval",
+                            "label": "Refresh",
+                            "kind": "range",
+                            "arg": "--update-interval",
+                            "min": 0.2,
+                            "max": 2.0,
+                            "step": 0.1,
+                            "default": 0.8,
+                            "suffix": "s",
+                        },
+                    ],
+                },
+            ],
         },
         {
             "id": "attacks",
@@ -105,22 +180,6 @@ MENU_SCHEMA = {
             "description": "Bluetooth and BLE workflows.",
         },
         {
-            "id": "webui",
-            "label": "Web UI",
-            "icon": "UI",
-            "type": "group",
-            "description": "Web control section.",
-            "items": [
-                {
-                    "id": "launcher",
-                    "label": "Legacy Launcher",
-                    "type": "module",
-                    "module_id": "launcher",
-                    "description": "Start the original CLI menu.",
-                }
-            ],
-        },
-        {
             "id": "exit",
             "label": "Exit",
             "icon": "EXT",
@@ -129,6 +188,22 @@ MENU_SCHEMA = {
         },
     ]
 }
+
+
+def collect_interface_payload() -> dict:
+    try:
+        builtin_iface = detect_builtin_wireless_interface()
+    except RuntimeError:
+        builtin_iface = ""
+
+    all_wireless = list_wireless_interfaces()
+    tool_wireless = [iface for iface in all_wireless if iface != builtin_iface]
+
+    return {
+        "builtin_interface": builtin_iface,
+        "all_wireless": all_wireless,
+        "tool_interfaces": tool_wireless,
+    }
 
 
 class StartTaskRequest(BaseModel):
@@ -211,6 +286,10 @@ def create_app(
     @app.get("/api/modules", dependencies=[Depends(_require_auth)])
     async def api_modules():
         return {"modules": manager.list_modules()}
+
+    @app.get("/api/interfaces", dependencies=[Depends(_require_auth)])
+    async def api_interfaces():
+        return collect_interface_payload()
 
     @app.get("/api/tasks", dependencies=[Depends(_require_auth)])
     async def api_tasks():

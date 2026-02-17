@@ -28,10 +28,13 @@ python3 swiss_knife.py
 Run as root (required for wireless operations). The menu lets you choose which
 attack to run and guides you through the steps.
 
+`swiss_knife.py` now auto-starts Web UI in background on launch (port `8000`).
+The CLI header shows panel URLs and the current auth token.
+
 ## Web UI control panel 🌐
 
-If you want remote control through a browser UI (desktop/mobile), use the new
-`webui/` backend:
+Web UI starts automatically with `swiss_knife.py`, but you can also run it
+standalone:
 
 ```bash
 pip install -r webui/requirements.txt
@@ -40,6 +43,11 @@ sudo python3 -m webui.server --host 0.0.0.0 --port 8000
 
 Open `http://<device-ip>:8000`, paste the token printed in terminal output, and
 start/stop modules from the panel. Existing module logic is unchanged.
+
+Recon in Web UI is now click-first:
+- `Scanner` action: interface selector + timeout slider
+- `Sniffer` action: interface selector + timeout/refresh sliders
+- no numeric `input()` menu selection required for these recon actions
 
 By default, Web UI AP mode starts on the built-in Wi-Fi interface (`--ap-interface builtin`).
 This keeps external adapters (for example `wlan1`, `wlan2`) free for modules.

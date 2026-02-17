@@ -4,9 +4,79 @@ const FALLBACK_MENU = {
       id: "recon",
       label: "Recon",
       icon: "RCN",
-      type: "module",
-      module_id: "recon",
+      type: "group",
       description: "Passive discovery of APs and clients.",
+      items: [
+        {
+          id: "recon_scan",
+          label: "Scanner",
+          type: "module",
+          module_id: "recon_scan",
+          description: "Timed scan of nearby APs and stations.",
+          controls: [
+            {
+              id: "interface",
+              label: "Interface",
+              kind: "select",
+              source: "tool_interfaces",
+              arg: "--interface",
+              required: true,
+              default: "auto",
+            },
+            {
+              id: "duration",
+              label: "Timeout",
+              kind: "range",
+              arg: "--duration",
+              min: 8,
+              max: 120,
+              step: 2,
+              default: 24,
+              suffix: "s",
+            },
+          ],
+        },
+        {
+          id: "recon_sniff",
+          label: "Sniffer",
+          type: "module",
+          module_id: "recon_sniff",
+          description: "Channel-hopping sniffer with timed stop.",
+          controls: [
+            {
+              id: "interface",
+              label: "Interface",
+              kind: "select",
+              source: "tool_interfaces",
+              arg: "--interface",
+              required: true,
+              default: "auto",
+            },
+            {
+              id: "duration",
+              label: "Timeout",
+              kind: "range",
+              arg: "--duration",
+              min: 15,
+              max: 300,
+              step: 5,
+              default: 90,
+              suffix: "s",
+            },
+            {
+              id: "update_interval",
+              label: "Refresh",
+              kind: "range",
+              arg: "--update-interval",
+              min: 0.2,
+              max: 2,
+              step: 0.1,
+              default: 0.8,
+              suffix: "s",
+            },
+          ],
+        },
+      ],
     },
     {
       id: "attacks",
@@ -38,14 +108,6 @@ const FALLBACK_MENU = {
       description: "Bluetooth and BLE workflows.",
     },
     {
-      id: "webui",
-      label: "Web UI",
-      icon: "UI",
-      type: "group",
-      description: "Web control section.",
-      items: [{ id: "launcher", label: "Legacy Launcher", type: "module", module_id: "launcher", description: "Start original CLI menu." }],
-    },
-    {
       id: "exit",
       label: "Exit",
       icon: "EXT",
@@ -61,6 +123,11 @@ const state = {
   menu: FALLBACK_MENU.main,
   selectedSectionId: null,
   moduleById: {},
+  interfaces: {
+    builtin_interface: "",
+    all_wireless: [],
+    tool_interfaces: [],
+  },
   tasks: [],
   activeTaskId: null,
   ws: null,
@@ -157,6 +224,143 @@ function resolveModuleInfo(moduleId) {
   return state.moduleById[moduleId] || null;
 }
 
+function formatControlValue(control, value) {
+  if (value === null || value === undefined || value === "") {
+    return "-";
+  }
+  if (control.suffix) {
+    return `${value}${control.suffix}`;
+  }
+  return String(value);
+}
+
+function resolveControlOptions(control) {
+  if (Array.isArray(control.options) && control.options.length) {
+    return control.options.map((entry) => {
+      if (typeof entry === "string") {
+        return { value: entry, label: entry };
+      }
+      return {
+        value: String(entry.value),
+        label: entry.label || String(entry.value),
+      };
+    });
+  }
+
+  if (control.source === "tool_interfaces") {
+    const items = Array.isArray(state.interfaces.tool_interfaces) ? state.interfaces.tool_interfaces : [];
+    const options = [];
+    if (control.default === "auto") {
+      options.push({ value: "auto", label: "auto (external adapter)" });
+    }
+    items.forEach((iface) => {
+      options.push({ value: iface, label: iface });
+    });
+    return options;
+  }
+
+  return [];
+}
+
+function createControlField(control) {
+  const wrap = document.createElement("label");
+  wrap.className = "control-field";
+
+  const caption = document.createElement("span");
+  caption.className = "control-label";
+  caption.textContent = control.label || control.id;
+  wrap.appendChild(caption);
+
+  if (control.kind === "select") {
+    const select = document.createElement("select");
+    select.dataset.controlId = control.id;
+    const options = resolveControlOptions(control);
+    if (!options.length) {
+      const empty = document.createElement("option");
+      empty.value = "";
+      empty.textContent = "No interfaces";
+      select.appendChild(empty);
+      select.disabled = true;
+    } else {
+      options.forEach((entry) => {
+        const option = document.createElement("option");
+        option.value = entry.value;
+        option.textContent = entry.label;
+        select.appendChild(option);
+      });
+      const defaultValue = control.default !== undefined ? String(control.default) : "";
+      if (defaultValue && options.some((entry) => entry.value === defaultValue)) {
+        select.value = defaultValue;
+      }
+    }
+    wrap.appendChild(select);
+    return wrap;
+  }
+
+  if (control.kind === "range") {
+    const row = document.createElement("div");
+    row.className = "range-row";
+
+    const input = document.createElement("input");
+    input.type = "range";
+    input.dataset.controlId = control.id;
+    input.min = String(control.min ?? 0);
+    input.max = String(control.max ?? 100);
+    input.step = String(control.step ?? 1);
+    input.value = String(control.default ?? control.min ?? 0);
+
+    const badge = document.createElement("strong");
+    badge.className = "range-value";
+    badge.textContent = formatControlValue(control, input.value);
+
+    input.addEventListener("input", () => {
+      badge.textContent = formatControlValue(control, input.value);
+    });
+
+    row.appendChild(input);
+    row.appendChild(badge);
+    wrap.appendChild(row);
+    return wrap;
+  }
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.dataset.controlId = control.id;
+  input.value = control.default !== undefined ? String(control.default) : "";
+  wrap.appendChild(input);
+  return wrap;
+}
+
+function collectModuleArgs(item, card) {
+  const controls = Array.isArray(item.controls) ? item.controls : [];
+  const args = [];
+
+  for (const control of controls) {
+    const field = card.querySelector(`[data-control-id="${control.id}"]`);
+    if (!field) {
+      continue;
+    }
+
+    let value = field.value;
+    if (typeof value === "string") {
+      value = value.trim();
+    }
+
+    if (!value) {
+      if (control.required) {
+        throw new Error(`Missing value for ${control.label || control.id}.`);
+      }
+      continue;
+    }
+
+    if (control.arg) {
+      args.push(control.arg, String(value));
+    }
+  }
+
+  return args;
+}
+
 function createActionCard(item) {
   const card = document.createElement("article");
   card.className = "action-card";
@@ -168,6 +372,15 @@ function createActionCard(item) {
   const description = document.createElement("p");
   description.textContent = item.description || "";
   card.appendChild(description);
+
+  if (Array.isArray(item.controls) && item.controls.length) {
+    const controlsWrap = document.createElement("div");
+    controlsWrap.className = "control-grid";
+    item.controls.forEach((control) => {
+      controlsWrap.appendChild(createControlField(control));
+    });
+    card.appendChild(controlsWrap);
+  }
 
   const meta = document.createElement("div");
   meta.className = "action-meta";
@@ -199,7 +412,24 @@ function createActionCard(item) {
       status.className = "status-chip bad";
       status.textContent = "MISSING SCRIPT";
     }
-    button.addEventListener("click", () => startModule(item.module_id));
+    const needsToolInterface = Array.isArray(item.controls) && item.controls.some((control) => control.source === "tool_interfaces");
+    if (needsToolInterface && (!Array.isArray(state.interfaces.tool_interfaces) || state.interfaces.tool_interfaces.length === 0)) {
+      button.disabled = true;
+      status.className = "status-chip bad";
+      status.textContent = "NO TOOL IFACE";
+    }
+
+    button.addEventListener("click", async () => {
+      if (button.disabled) {
+        return;
+      }
+      try {
+        const args = collectModuleArgs(item, card);
+        await startModule(item.module_id, args);
+      } catch (error) {
+        setHint(`Start failed: ${error.message}`, "error");
+      }
+    });
   } else {
     button.disabled = true;
   }
@@ -218,6 +448,13 @@ function renderSection() {
   dom.sectionTitle.textContent = section.label;
   dom.sectionDescription.textContent = section.description || "";
   dom.sectionBody.innerHTML = "";
+
+  if (section.id === "recon" && state.interfaces.builtin_interface) {
+    const notice = document.createElement("div");
+    notice.className = "muted-block";
+    notice.textContent = `AP/WebUI uses ${state.interfaces.builtin_interface}. Recon controls target external adapters.`;
+    dom.sectionBody.appendChild(notice);
+  }
 
   if (section.type === "module") {
     const grid = document.createElement("div");
@@ -378,6 +615,24 @@ async function loadModules() {
   }
 }
 
+async function loadInterfaces() {
+  try {
+    const data = await apiFetch("/api/interfaces");
+    state.interfaces = {
+      builtin_interface: data.builtin_interface || "",
+      all_wireless: Array.isArray(data.all_wireless) ? data.all_wireless : [],
+      tool_interfaces: Array.isArray(data.tool_interfaces) ? data.tool_interfaces : [],
+    };
+    renderSection();
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      setHint("Unauthorized. Provide valid token.", "error");
+      return;
+    }
+    setHint(`Failed to load interfaces: ${error.message}`, "error");
+  }
+}
+
 async function loadTasks() {
   try {
     const data = await apiFetch("/api/tasks");
@@ -392,12 +647,13 @@ async function loadTasks() {
   }
 }
 
-async function startModule(moduleId) {
+async function startModule(moduleId, args = []) {
   try {
     const data = await apiFetch("/api/tasks/start", {
       method: "POST",
       body: {
         module_id: moduleId,
+        args,
         raw_args: dom.globalArgsInput.value.trim(),
       },
     });
@@ -533,12 +789,13 @@ function installHandlers() {
     if (state.activeTaskId) {
       connectLogsSocket(state.activeTaskId);
     }
-    await Promise.all([loadMenu(), loadModules(), loadTasks()]);
+    await Promise.all([loadMenu(), loadModules(), loadInterfaces(), loadTasks()]);
   });
 
   dom.refreshMenuBtn.addEventListener("click", async () => {
     await loadMenu();
     await loadModules();
+    await loadInterfaces();
   });
   dom.refreshTasksBtn.addEventListener("click", loadTasks);
   dom.clearConsoleBtn.addEventListener("click", () => setConsoleText([]));
@@ -561,6 +818,7 @@ async function bootstrap() {
   await loadMeta();
   await loadMenu();
   await loadModules();
+  await loadInterfaces();
   await loadTasks();
 
   if (state.pollHandle) {
