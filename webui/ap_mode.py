@@ -71,6 +71,7 @@ def detect_builtin_wireless_interface() -> str:
 class AccessPointManager:
     def __init__(self, config: ApModeConfig) -> None:
         self.config = config
+        self.dns_enabled = True
         self.runtime_dir: Optional[Path] = None
         self.hostapd_process: Optional[subprocess.Popen] = None
         self.dnsmasq_process: Optional[subprocess.Popen] = None
@@ -95,7 +96,7 @@ class AccessPointManager:
             self.dnsmasq_log_path = self.runtime_dir / "dnsmasq.log"
 
             hostapd_conf.write_text(self._hostapd_config(), encoding="utf-8")
-            dnsmasq_conf.write_text(self._dnsmasq_config(), encoding="utf-8")
+            dnsmasq_conf.write_text(self._dnsmasq_config(enable_dns=True), encoding="utf-8")
 
             self._run_checked(["ip", "link", "set", self.config.interface, "down"])
             self._run_checked(["ip", "addr", "flush", "dev", self.config.interface])
@@ -211,23 +212,53 @@ class AccessPointManager:
             ]
         )
 
-    def _dnsmasq_config(self) -> str:
+    def _dnsmasq_config(self, enable_dns: bool = True) -> str:
         netmask = self._cidr_to_netmask(self.config.cidr_prefix)
-        return "\n".join(
-            [
-                f"interface={self.config.interface}",
-                f"dhcp-range={self.config.dhcp_start},{self.config.dhcp_end},{netmask},{self.config.dhcp_lease}",
-                f"dhcp-option=3,{self.config.ap_ip}",
-                f"dhcp-option=6,{self.config.ap_ip}",
-                f"address=/#/{self.config.ap_ip}",
-                "server=8.8.8.8",
-                "log-queries",
-                "log-dhcp",
-                "",
-            ]
-        )
+        lines = [
+            f"interface={self.config.interface}",
+            "bind-interfaces",
+            f"listen-address={self.config.ap_ip}",
+            "except-interface=lo",
+            f"dhcp-range={self.config.dhcp_start},{self.config.dhcp_end},{netmask},{self.config.dhcp_lease}",
+            f"dhcp-option=3,{self.config.ap_ip}",
+        ]
+        if enable_dns:
+            lines.extend(
+                [
+                    f"dhcp-option=6,{self.config.ap_ip}",
+                    f"address=/#/{self.config.ap_ip}",
+                    "server=8.8.8.8",
+                    "log-queries",
+                ]
+            )
+        else:
+            # Keep DHCP while disabling DNS listener when local port 53 is occupied.
+            lines.append("port=0")
+
+        lines.extend(["log-dhcp", ""])
+        return "\n".join(lines)
 
     def _start_dnsmasq(self, conf_path: Path) -> subprocess.Popen:
+        try:
+            process = self._start_dnsmasq_with_variants(conf_path)
+            self.dns_enabled = True
+            return process
+        except RuntimeError as exc:
+            if not self._is_dns_port_conflict(str(exc)):
+                raise
+
+            # Fallback: run DHCP only when DNS port 53 is already in use by another service.
+            conf_path.write_text(self._dnsmasq_config(enable_dns=False), encoding="utf-8")
+            process = self._start_dnsmasq_with_variants(conf_path)
+            self.dns_enabled = False
+            if self._dnsmasq_log_handle:
+                self._dnsmasq_log_handle.write(
+                    "[webui] dnsmasq started in DHCP-only mode (DNS disabled: port 53 busy).\n"
+                )
+                self._dnsmasq_log_handle.flush()
+            return process
+
+    def _start_dnsmasq_with_variants(self, conf_path: Path) -> subprocess.Popen:
         if self._dnsmasq_log_handle is None:
             raise RuntimeError("dnsmasq log handle is not initialized.")
 
@@ -267,6 +298,14 @@ class AccessPointManager:
             "dnsmasq failed to start with available command variants.\n"
             f"last command: {last_cmd}\n"
             f"{last_output}"
+        )
+
+    @staticmethod
+    def _is_dns_port_conflict(text: str) -> bool:
+        lower = text.lower()
+        return "port 53" in lower and (
+            "address already in use" in lower
+            or "failed to create listening socket" in lower
         )
 
     @staticmethod

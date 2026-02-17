@@ -151,7 +151,16 @@ def create_app(
         if ap_manager:
             ap_manager.start()
             cfg = ap_manager.config
-            LOG.info("AP mode started on %s (%s)", cfg.interface, cfg.ap_ip)
+            if ap_manager.dns_enabled:
+                LOG.info("AP mode started on %s (%s) with DHCP+DNS", cfg.interface, cfg.ap_ip)
+            else:
+                LOG.warning(
+                    "AP mode started on %s (%s) in DHCP-only mode (DNS port 53 busy). "
+                    "Open panel by IP: http://%s",
+                    cfg.interface,
+                    cfg.ap_ip,
+                    cfg.ap_ip,
+                )
         try:
             yield
         finally:
@@ -411,12 +420,14 @@ def main() -> None:
         print(f"[webui] token required in header {TOKEN_HEADER}: {auth_token}")
     else:
         print("[webui] auth disabled")
-    print(f"[webui] panel url: http://{args.host}:{args.port}")
+    display_host = args.host if args.host not in ("0.0.0.0", "::") else "<device-ip>"
+    print(f"[webui] panel url: http://{display_host}:{args.port}")
     if ap_manager:
         print(
             f"[webui] AP mode requested: ssid={ap_manager.config.ssid} ip={ap_manager.config.ap_ip} "
             f"iface={ap_manager.config.interface}"
         )
+        print(f"[webui] AP panel url: http://{ap_manager.config.ap_ip}:{args.port}")
 
     import uvicorn
 
