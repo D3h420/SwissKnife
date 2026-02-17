@@ -130,8 +130,7 @@ const state = {
   },
   tasks: [],
   activeTaskId: null,
-  ws: null,
-  cursorByTask: {},
+  resultByTask: {},
   pollHandle: null,
 };
 
@@ -148,11 +147,8 @@ const dom = {
   refreshTasksBtn: document.getElementById("refreshTasksBtn"),
   tasksList: document.getElementById("tasksList"),
   activeTaskChip: document.getElementById("activeTaskChip"),
-  clearConsoleBtn: document.getElementById("clearConsoleBtn"),
   stopTaskBtn: document.getElementById("stopTaskBtn"),
-  consoleOutput: document.getElementById("consoleOutput"),
-  taskInputForm: document.getElementById("taskInputForm"),
-  taskInputField: document.getElementById("taskInputField"),
+  resultsView: document.getElementById("resultsView"),
 };
 
 function setHint(message, level = "") {
@@ -203,21 +199,8 @@ function getSectionById(sectionId) {
   return state.menu.find((item) => item.id === sectionId) || null;
 }
 
-function setConsoleText(lines) {
-  dom.consoleOutput.textContent = lines.join("\n");
-  dom.consoleOutput.scrollTop = dom.consoleOutput.scrollHeight;
-}
-
-function appendConsole(lines) {
-  if (!lines.length) {
-    return;
-  }
-  const text = lines.join("\n");
-  dom.consoleOutput.textContent += (dom.consoleOutput.textContent ? "\n" : "") + text;
-  if (dom.consoleOutput.textContent.length > 220000) {
-    dom.consoleOutput.textContent = dom.consoleOutput.textContent.slice(-220000);
-  }
-  dom.consoleOutput.scrollTop = dom.consoleOutput.scrollHeight;
+function getTaskById(taskId) {
+  return state.tasks.find((task) => task.task_id === taskId) || null;
 }
 
 function resolveModuleInfo(moduleId) {
@@ -561,6 +544,139 @@ function renderTasks() {
   }
 }
 
+function clientText(clients) {
+  if (!Array.isArray(clients) || clients.length === 0) {
+    return "-";
+  }
+  if (clients.length <= 4) {
+    return clients.join(", ");
+  }
+  return `${clients.slice(0, 4).join(", ")} +${clients.length - 4}`;
+}
+
+function createSummaryPill(label, value) {
+  const pill = document.createElement("span");
+  pill.className = "pill";
+  pill.textContent = `${label}: ${value}`;
+  return pill;
+}
+
+function buildNetworkTable(networks) {
+  const table = document.createElement("table");
+  table.className = "result-table";
+
+  const head = document.createElement("thead");
+  head.innerHTML = "<tr><th>SSID</th><th>BSSID</th><th>Ch</th><th>Enc</th><th>RSSI</th><th>Clients</th></tr>";
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  const rows = Array.isArray(networks) ? networks : [];
+  if (!rows.length) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="6" class="cell-muted">No networks found.</td>';
+    body.appendChild(empty);
+    table.appendChild(body);
+    return table;
+  }
+
+  rows.forEach((network) => {
+    const tr = document.createElement("tr");
+    const ssid = network.ssid || "<hidden>";
+    const bssid = network.bssid || "-";
+    const channel = network.channel ?? "?";
+    const encryption = network.encryption || "UNKNOWN";
+    const rssi = network.rssi !== null && network.rssi !== undefined ? `${network.rssi} dBm` : "?";
+    const clients = clientText(network.clients);
+    [ssid, bssid, String(channel), encryption, rssi, clients].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+
+  table.appendChild(body);
+  return table;
+}
+
+function renderReconScanResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "Scanner"));
+  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Networks", result.network_count ?? 0));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+  dom.resultsView.appendChild(buildNetworkTable(result.networks));
+}
+
+function renderReconSniffResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "Sniffer"));
+  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Packets", result.packet_count ?? 0));
+  summary.appendChild(createSummaryPill("Probes", result.probe_total ?? 0));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+  dom.resultsView.appendChild(buildNetworkTable(result.networks));
+
+  const probes = document.createElement("div");
+  probes.className = "probe-list";
+  const entries = Array.isArray(result.probes) ? result.probes : [];
+  if (!entries.length) {
+    probes.textContent = "No probe requests observed.";
+  } else {
+    const top = entries.slice(0, 20);
+    probes.textContent = top
+      .map((entry) => `${entry.ssid || "<hidden>"} (${entry.count || 0})`)
+      .join(" • ");
+  }
+  dom.resultsView.appendChild(probes);
+}
+
+function renderResultView() {
+  dom.resultsView.innerHTML = "";
+
+  const task = getTaskById(state.activeTaskId);
+  if (!task) {
+    const empty = document.createElement("div");
+    empty.className = "muted-block";
+    empty.textContent = "Select task to see parsed scan results.";
+    dom.resultsView.appendChild(empty);
+    return;
+  }
+
+  const result = state.resultByTask[task.task_id] || null;
+  if (!result) {
+    const waiting = document.createElement("div");
+    waiting.className = "muted-block";
+    waiting.textContent = task.running
+      ? "Task is running. Results will appear after completion."
+      : "No structured results available for this task.";
+    dom.resultsView.appendChild(waiting);
+    return;
+  }
+
+  if (result.kind === "recon_scan") {
+    renderReconScanResult(result, task);
+    return;
+  }
+  if (result.kind === "recon_sniff") {
+    renderReconSniffResult(result, task);
+    return;
+  }
+
+  const unsupported = document.createElement("div");
+  unsupported.className = "muted-block";
+  unsupported.textContent = "This module does not expose structured UI results yet.";
+  dom.resultsView.appendChild(unsupported);
+}
+
 async function loadMeta() {
   try {
     const data = await fetch("/api/meta").then((response) => response.json());
@@ -633,11 +749,47 @@ async function loadInterfaces() {
   }
 }
 
+async function loadTaskResult(taskId, silent = false) {
+  if (!taskId) {
+    renderResultView();
+    return;
+  }
+
+  try {
+    const data = await apiFetch(`/api/tasks/${taskId}/result`);
+    state.resultByTask[taskId] = data.result || null;
+    renderResultView();
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      if (!silent) {
+        setHint("Unauthorized. Provide valid token.", "error");
+      }
+      return;
+    }
+    if (!silent) {
+      setHint(`Failed to load results: ${error.message}`, "error");
+    }
+  }
+}
+
 async function loadTasks() {
   try {
     const data = await apiFetch("/api/tasks");
     state.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+
+    if (!state.tasks.length) {
+      state.activeTaskId = null;
+      renderTasks();
+      renderResultView();
+      return;
+    }
+
+    if (!state.activeTaskId || !getTaskById(state.activeTaskId)) {
+      state.activeTaskId = state.tasks[0].task_id;
+    }
+
     renderTasks();
+    await loadTaskResult(state.activeTaskId, true);
   } catch (error) {
     if (isUnauthorizedError(error)) {
       setHint("Unauthorized. Provide valid token.", "error");
@@ -660,7 +812,9 @@ async function startModule(moduleId, args = []) {
     const task = data.task;
     await loadTasks();
     if (task?.task_id) {
-      selectTask(task.task_id);
+      state.activeTaskId = task.task_id;
+      renderTasks();
+      await loadTaskResult(task.task_id, true);
       setHint(`Started ${moduleId} as task ${task.task_id}.`, "success");
     }
   } catch (error) {
@@ -691,92 +845,10 @@ async function stopActiveTask() {
   }
 }
 
-async function sendInput(text) {
-  if (!state.activeTaskId) {
-    setHint("Select task first.", "error");
-    return;
-  }
-  try {
-    await apiFetch(`/api/tasks/${state.activeTaskId}/input`, {
-      method: "POST",
-      body: { text },
-    });
-  } catch (error) {
-    if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
-      return;
-    }
-    setHint(`Input failed: ${error.message}`, "error");
-  }
-}
-
-function closeLogsSocket() {
-  if (!state.ws) {
-    return;
-  }
-  state.ws.onclose = null;
-  state.ws.close();
-  state.ws = null;
-}
-
 function selectTask(taskId) {
   state.activeTaskId = taskId;
-  state.cursorByTask[taskId] = state.cursorByTask[taskId] || 0;
   renderTasks();
-  setConsoleText([]);
-  connectLogsSocket(taskId);
-}
-
-function connectLogsSocket(taskId) {
-  closeLogsSocket();
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const params = new URLSearchParams();
-  params.set("since", String(state.cursorByTask[taskId] || 0));
-  if (state.token) {
-    params.set("token", state.token);
-  }
-  const wsUrl = `${protocol}://${window.location.host}/ws/tasks/${encodeURIComponent(taskId)}?${params.toString()}`;
-  const ws = new WebSocket(wsUrl);
-  state.ws = ws;
-
-  ws.onmessage = (event) => {
-    let payload = null;
-    try {
-      payload = JSON.parse(event.data);
-    } catch (_error) {
-      return;
-    }
-    if (payload.type === "logs") {
-      const entries = Array.isArray(payload.entries) ? payload.entries : [];
-      appendConsole(entries.map((entry) => entry.line));
-      if (typeof payload.cursor === "number") {
-        state.cursorByTask[taskId] = payload.cursor;
-      }
-      return;
-    }
-    if (payload.type === "task") {
-      loadTasks();
-      return;
-    }
-    if (payload.type === "error") {
-      setHint(`Socket error: ${payload.message}`, "error");
-    }
-  };
-
-  ws.onclose = (event) => {
-    if (event.code === 1008) {
-      setHint("Socket auth failed. Verify token.", "error");
-      return;
-    }
-    if (state.activeTaskId !== taskId) {
-      return;
-    }
-    setTimeout(() => {
-      if (state.activeTaskId === taskId) {
-        connectLogsSocket(taskId);
-      }
-    }, 1500);
-  };
+  loadTaskResult(taskId, true);
 }
 
 function installHandlers() {
@@ -785,10 +857,6 @@ function installHandlers() {
   dom.saveTokenBtn.addEventListener("click", async () => {
     state.token = dom.tokenInput.value.trim();
     localStorage.setItem("swissknife.webui.token", state.token);
-    closeLogsSocket();
-    if (state.activeTaskId) {
-      connectLogsSocket(state.activeTaskId);
-    }
     await Promise.all([loadMenu(), loadModules(), loadInterfaces(), loadTasks()]);
   });
 
@@ -797,20 +865,9 @@ function installHandlers() {
     await loadModules();
     await loadInterfaces();
   });
-  dom.refreshTasksBtn.addEventListener("click", loadTasks);
-  dom.clearConsoleBtn.addEventListener("click", () => setConsoleText([]));
-  dom.stopTaskBtn.addEventListener("click", stopActiveTask);
 
-  dom.taskInputForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const value = dom.taskInputField.value;
-    if (!value.trim()) {
-      return;
-    }
-    await sendInput(value);
-    dom.taskInputField.value = "";
-    dom.taskInputField.focus();
-  });
+  dom.refreshTasksBtn.addEventListener("click", loadTasks);
+  dom.stopTaskBtn.addEventListener("click", stopActiveTask);
 }
 
 async function bootstrap() {

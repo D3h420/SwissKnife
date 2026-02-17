@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -106,3 +106,31 @@ def restore_interface_mode(
         return
     if changed and original_mode and original_mode != "monitor":
         recon.restore_managed_mode(interface)
+
+
+def serialize_access_points(
+    aps: Dict[str, recon.AccessPoint],
+    vendors: Dict[str, str],
+) -> List[Dict[str, object]]:
+    ordered = sorted(
+        aps.values(),
+        key=lambda ap: ap.signal if ap.signal is not None else -1,
+        reverse=True,
+    )
+    payload: List[Dict[str, object]] = []
+    for ap in ordered:
+        vendor = recon.lookup_vendor(ap.bssid, vendors)
+        payload.append(
+            {
+                "ssid": ap.ssid,
+                "bssid": ap.bssid,
+                "channel": ap.channel,
+                "encryption": ap.encryption,
+                "rssi": ap.rssi,
+                "signal": ap.signal,
+                "client_count": len(ap.clients),
+                "clients": sorted(ap.clients),
+                "vendor": vendor,
+            }
+        )
+    return payload

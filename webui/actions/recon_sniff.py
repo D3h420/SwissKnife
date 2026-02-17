@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 
 
@@ -21,6 +23,7 @@ from webui.actions.recon_common import (  # noqa: E402
     parse_channels,
     resolve_tool_interface,
     restore_interface_mode,
+    serialize_access_points,
 )
 
 
@@ -118,6 +121,27 @@ def main() -> None:
         for line in recon.format_probe_lines(state.probe_counts, state.probe_total):
             logging.info("%s", line)
         logging.info("")
+        probes = [
+            {"ssid": ssid, "count": count}
+            for ssid, count in sorted(
+                state.probe_counts.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+        ]
+        result_payload = {
+            "kind": "recon_sniff",
+            "interface": interface,
+            "duration": args.duration,
+            "timestamp": int(time.time()),
+            "packet_count": state.packet_count,
+            "probe_total": state.probe_total,
+            "probe_unique": len(state.probe_counts),
+            "probes": probes,
+            "network_count": len(state.aps),
+            "networks": serialize_access_points(state.aps, vendors),
+        }
+        print(f"[webui-result] {json.dumps(result_payload, ensure_ascii=False)}")
         logging.info("[webui] Recon sniffer finished.")
     finally:
         signal.signal(signal.SIGINT, previous_sigint)

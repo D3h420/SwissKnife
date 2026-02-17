@@ -61,27 +61,18 @@
 
         <div class="panel-head second-head">
           <h2>Tasks</h2>
-          <button id="refreshTasksBtn" type="button">Refresh</button>
-        </div>
-        <ul id="tasksList" class="tasks-list"></ul>
-      </section>
-
-      <section class="panel console-panel">
-        <div class="panel-head">
-          <h2>Live Console</h2>
           <div class="panel-actions">
             <span id="activeTaskChip" class="pill">No task selected</span>
-            <button id="clearConsoleBtn" type="button">Clear</button>
             <button id="stopTaskBtn" type="button" class="danger">Stop</button>
+            <button id="refreshTasksBtn" type="button">Refresh</button>
           </div>
         </div>
+        <ul id="tasksList" class="tasks-list"></ul>
 
-        <pre id="consoleOutput" class="console-output"></pre>
-
-        <form id="taskInputForm" class="console-input">
-          <input id="taskInputField" type="text" placeholder="Optional: send raw input to selected task">
-          <button type="submit">Send</button>
-        </form>
+        <div class="panel-head second-head">
+          <h2>Recon Results</h2>
+        </div>
+        <div id="resultsView" class="results-view"></div>
       </section>
     </section>
   </main>

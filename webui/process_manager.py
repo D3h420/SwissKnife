@@ -6,6 +6,7 @@ import os
 import fcntl
 import selectors
 import signal
+import json
 import subprocess
 import sys
 import threading
@@ -18,6 +19,7 @@ from typing import Deque, Dict, List, Optional, Tuple
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RESULT_PREFIX = "[webui-result] "
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,7 @@ class ManagedTask:
     _logs: Deque[Tuple[int, str]] = field(default_factory=deque)
     _condition: threading.Condition = field(default_factory=threading.Condition)
     _reader_thread: Optional[threading.Thread] = None
+    _result: Optional[Dict[str, object]] = None
 
     def __post_init__(self) -> None:
         self._logs = deque(maxlen=self.max_log_lines)
@@ -121,15 +124,23 @@ class ManagedTask:
             "returncode": self.returncode,
             "started_at": self.started_at,
             "ended_at": self.ended_at,
+            "has_result": self._result is not None,
         }
 
     def append_log(self, message: str) -> None:
         clean = message.rstrip("\r\n")
+        self._extract_result_from_line(clean)
         with self._condition:
             seq = self._next_seq
             self._next_seq += 1
             self._logs.append((seq, clean))
             self._condition.notify_all()
+
+    def get_result(self) -> Optional[Dict[str, object]]:
+        with self._condition:
+            if self._result is None:
+                self._result = self._extract_result_from_logs_locked()
+            return self._result
 
     def send_input(self, text: str) -> None:
         if not self.is_running:
@@ -284,6 +295,34 @@ class ManagedTask:
             self._condition.notify_all()
         self.append_log(f"[webui] task exited with code {returncode}")
 
+    def _extract_result_from_line(self, line: str) -> None:
+        if not line.startswith(RESULT_PREFIX):
+            return
+        payload_raw = line[len(RESULT_PREFIX) :].strip()
+        if not payload_raw:
+            return
+        try:
+            parsed = json.loads(payload_raw)
+        except json.JSONDecodeError:
+            return
+        if isinstance(parsed, dict):
+            self._result = parsed
+
+    def _extract_result_from_logs_locked(self) -> Optional[Dict[str, object]]:
+        for _seq, line in reversed(self._logs):
+            if not line.startswith(RESULT_PREFIX):
+                continue
+            payload_raw = line[len(RESULT_PREFIX) :].strip()
+            if not payload_raw:
+                continue
+            try:
+                parsed = json.loads(payload_raw)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+        return None
+
 
 class ProcessManager:
     def __init__(
@@ -397,6 +436,10 @@ class ProcessManager:
     def get_task_snapshot(self, task_id: str) -> Dict[str, object]:
         task = self._get_task(task_id)
         return task.snapshot()
+
+    def get_task_result(self, task_id: str) -> Optional[Dict[str, object]]:
+        task = self._get_task(task_id)
+        return task.get_result()
 
     def wait_for_logs(
         self,

@@ -49,6 +49,7 @@ Recon in Web UI is now click-first:
 - `Scanner` action: interface selector + timeout slider
 - `Sniffer` action: interface selector + timeout/refresh sliders
 - no numeric `input()` menu selection required for these recon actions
+- results are rendered in a fixed Recon Results panel (without infinite live-log growth)
 
 By default, Web UI AP mode starts on the built-in Wi-Fi interface (`--ap-interface builtin`).
 This keeps external adapters (for example `wlan1`, `wlan2`) free for modules.

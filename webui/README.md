@@ -9,6 +9,7 @@ Recon has dedicated non-interactive Web UI actions:
 - `recon_sniff` (`webui/actions/recon_sniff.py`)
 
 These are designed for click-through control (no numeric menu prompts).
+Recon results are exposed as structured payloads and displayed in a fixed UI panel.
 
 ## Install
 

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 
@@ -19,6 +21,7 @@ from webui.actions.recon_common import (  # noqa: E402
     parse_channels,
     resolve_tool_interface,
     restore_interface_mode,
+    serialize_access_points,
 )
 
 
@@ -82,6 +85,15 @@ def main() -> None:
             on_update=update_cb,
         )
         recon.display_scan_results(aps, vendors)
+        result_payload = {
+            "kind": "recon_scan",
+            "interface": interface,
+            "duration": args.duration,
+            "timestamp": int(time.time()),
+            "network_count": len(aps),
+            "networks": serialize_access_points(aps, vendors),
+        }
+        print(f"[webui-result] {json.dumps(result_payload, ensure_ascii=False)}")
         logging.info("[webui] Recon scan finished.")
     except KeyboardInterrupt:
         logging.warning("[webui] Recon scan interrupted by operator.")

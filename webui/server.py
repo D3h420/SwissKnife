@@ -313,6 +313,13 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.get("/api/tasks/{task_id}/result", dependencies=[Depends(_require_auth)])
+    async def api_task_result(task_id: str):
+        try:
+            return {"result": manager.get_task_result(task_id)}
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/tasks/start", dependencies=[Depends(_require_auth)])
     async def api_start_task(payload: StartTaskRequest):
         args = list(payload.args)

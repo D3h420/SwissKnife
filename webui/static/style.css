@@ -146,13 +146,12 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 332px 1fr 1.15fr;
+  grid-template-columns: 332px 1fr;
   gap: 16px;
 }
 
 .menu-panel,
-.center-panel,
-.console-panel {
+.center-panel {
   min-height: 78vh;
   display: flex;
   flex-direction: column;
@@ -260,6 +259,8 @@ body {
   padding: 12px;
   display: grid;
   gap: 10px;
+  max-height: 36vh;
+  overflow: auto;
 }
 
 .action-grid {
@@ -393,6 +394,7 @@ input[type="range"]::-moz-range-thumb {
   padding: 12px;
   display: grid;
   gap: 8px;
+  max-height: 26vh;
   overflow: auto;
 }
 
@@ -441,28 +443,63 @@ input[type="range"]::-moz-range-thumb {
   font-size: 0.83rem;
 }
 
-.console-output {
-  margin: 0;
+.results-view {
   flex: 1;
+  min-height: 24vh;
+  max-height: 38vh;
   overflow: auto;
-  padding: 14px;
-  border-top: 1px solid var(--stroke);
-  border-bottom: 1px solid var(--stroke);
-  background: rgba(2, 7, 13, 0.9);
-  font-family: "JetBrains Mono", monospace;
-  font-size: 0.84rem;
-  line-height: 1.36;
-  color: #b4f9ef;
-}
-
-.console-input {
-  display: flex;
+  padding: 12px;
+  display: grid;
   gap: 10px;
-  padding: 10px;
 }
 
-.console-input input {
-  flex: 1;
+.result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(6, 12, 20, 0.85);
+}
+
+.result-table th,
+.result-table td {
+  border-bottom: 1px solid rgba(88, 126, 160, 0.28);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 0.84rem;
+}
+
+.result-table th {
+  background: rgba(13, 26, 41, 0.88);
+  color: #9ec8e3;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.74rem;
+}
+
+.result-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.cell-muted {
+  color: var(--text-muted);
+}
+
+.probe-list {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 10px;
+  color: #a6d9f4;
+  background: rgba(8, 16, 26, 0.88);
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .hint {
@@ -551,11 +588,6 @@ button.danger {
   .layout {
     grid-template-columns: 300px 1fr;
   }
-
-  .console-panel {
-    grid-column: span 2;
-    min-height: 50vh;
-  }
 }
 
 @media (max-width: 920px) {
@@ -568,12 +600,7 @@ button.danger {
   }
 
   .menu-panel,
-  .center-panel,
-  .console-panel {
+  .center-panel {
     min-height: auto;
-  }
-
-  .console-panel {
-    min-height: 45vh;
   }
 }
