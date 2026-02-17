@@ -3,52 +3,71 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SwissKnife Web Console</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <title>SwissKnife Control Matrix</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Audiowide&family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css" onerror="this.onerror=null;this.href='style.css';">
 </head>
 <body>
-  <main class="shell">
-    <header class="hero">
-      <div class="hero-title">
-        <h1>SwissKnife Web Console</h1>
-        <p>Remote control panel for existing Python modules.</p>
+  <div class="background-grid" aria-hidden="true"></div>
+  <main class="app-shell">
+    <header class="topbar panel">
+      <div class="brand-wrap">
+        <div class="brand-badge">SK</div>
+        <div>
+          <h1>SwissKnife Control Matrix</h1>
+          <p>Remote operator UI aligned with CLI sections.</p>
+        </div>
       </div>
-      <div class="hero-auth">
+      <div class="topbar-controls">
         <label for="tokenInput">Auth token</label>
         <div class="token-row">
-          <input id="tokenInput" type="password" placeholder="Paste token from server output">
-          <button id="saveTokenBtn" type="button">Save token</button>
+          <input id="tokenInput" type="password" placeholder="Token from server output">
+          <button id="saveTokenBtn" type="button">Apply</button>
         </div>
         <p id="authHint" class="hint"></p>
       </div>
     </header>
 
     <section class="layout">
-      <article class="panel panel-modules">
+      <aside class="panel menu-panel">
         <div class="panel-head">
-          <h2>Modules</h2>
+          <h2>Main Menu</h2>
+          <button id="refreshMenuBtn" type="button">Reload</button>
+        </div>
+        <nav id="mainMenu" class="menu-list"></nav>
+        <div class="panel-foot">
+          <span class="pill">Web UI port: 8000</span>
+        </div>
+      </aside>
+
+      <section class="panel center-panel">
+        <div class="panel-head">
+          <div>
+            <h2 id="sectionTitle">Section</h2>
+            <p id="sectionDescription" class="section-description"></p>
+          </div>
           <div class="panel-actions">
-            <input id="globalArgsInput" type="text" placeholder="Optional args for next start">
-            <button id="refreshModulesBtn" type="button">Reload</button>
+            <input id="globalArgsInput" type="text" placeholder="Optional args for run">
           </div>
         </div>
-        <div id="modulesGrid" class="modules-grid"></div>
-      </article>
+        <div id="sectionBody" class="section-body"></div>
 
-      <article class="panel panel-tasks">
-        <div class="panel-head">
+        <div class="panel-head second-head">
           <h2>Tasks</h2>
           <button id="refreshTasksBtn" type="button">Refresh</button>
         </div>
         <ul id="tasksList" class="tasks-list"></ul>
-      </article>
+      </section>
 
-      <article class="panel panel-console">
+      <section class="panel console-panel">
         <div class="panel-head">
-          <h2>Console</h2>
+          <h2>Live Console</h2>
           <div class="panel-actions">
+            <span id="activeTaskChip" class="pill">No task selected</span>
             <button id="clearConsoleBtn" type="button">Clear</button>
-            <button id="stopTaskBtn" type="button" class="danger">Stop task</button>
+            <button id="stopTaskBtn" type="button" class="danger">Stop</button>
           </div>
         </div>
         <pre id="consoleOutput" class="console-output"></pre>
@@ -56,10 +75,9 @@
           <input id="taskInputField" type="text" placeholder="Send input to selected task and press Enter">
           <button type="submit">Send</button>
         </form>
-      </article>
+      </section>
     </section>
   </main>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js" onerror="this.onerror=null;this.src='app.js';"></script>
 </body>
 </html>
-

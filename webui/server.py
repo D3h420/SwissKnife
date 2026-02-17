@@ -25,6 +25,95 @@ LOG = logging.getLogger("swissknife.webui")
 TOKEN_HEADER = "X-SwissKnife-Token"
 TOKEN_ENV_VAR = "SWISSKNIFE_WEBUI_TOKEN"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MENU_SCHEMA = {
+    "main": [
+        {
+            "id": "recon",
+            "label": "Recon",
+            "icon": "RCN",
+            "type": "module",
+            "module_id": "recon",
+            "description": "Passive discovery of APs and clients.",
+        },
+        {
+            "id": "attacks",
+            "label": "Attacks",
+            "icon": "ATK",
+            "type": "group",
+            "description": "Attack workflows available in SwissKnife.",
+            "items": [
+                {
+                    "id": "deauth",
+                    "label": "Deauth",
+                    "type": "module",
+                    "module_id": "deauth",
+                    "description": "Deauthentication workflow.",
+                },
+                {
+                    "id": "portal",
+                    "label": "Portal",
+                    "type": "module",
+                    "module_id": "portal",
+                    "description": "Captive portal workflow.",
+                },
+                {
+                    "id": "twins",
+                    "label": "Evil Twin",
+                    "type": "module",
+                    "module_id": "twins",
+                    "description": "Rogue AP + portal workflow.",
+                },
+                {
+                    "id": "handshaker",
+                    "label": "Handshaker",
+                    "type": "module",
+                    "module_id": "handshaker",
+                    "description": "Under construction module.",
+                    "under_construction": True,
+                },
+                {
+                    "id": "karma",
+                    "label": "Karma",
+                    "type": "module",
+                    "description": "Under construction module.",
+                    "disabled": True,
+                    "under_construction": True,
+                },
+            ],
+        },
+        {
+            "id": "bluetooth",
+            "label": "Bluetooth",
+            "icon": "BT",
+            "type": "module",
+            "module_id": "bluetooth",
+            "description": "Bluetooth and BLE workflows.",
+        },
+        {
+            "id": "webui",
+            "label": "Web UI",
+            "icon": "UI",
+            "type": "group",
+            "description": "Web control section.",
+            "items": [
+                {
+                    "id": "launcher",
+                    "label": "Legacy Launcher",
+                    "type": "module",
+                    "module_id": "launcher",
+                    "description": "Start the original CLI menu.",
+                }
+            ],
+        },
+        {
+            "id": "exit",
+            "label": "Exit",
+            "icon": "EXT",
+            "type": "info",
+            "description": "Equivalent to exit option in CLI launcher.",
+        },
+    ]
+}
 
 
 class StartTaskRequest(BaseModel):
@@ -80,6 +169,10 @@ def create_app(
             "token_header": TOKEN_HEADER,
             "active_task_id": manager.active_task_id,
         }
+
+    @app.get("/api/menu", dependencies=[Depends(_require_auth)])
+    async def api_menu():
+        return MENU_SCHEMA
 
     @app.get("/api/modules", dependencies=[Depends(_require_auth)])
     async def api_modules():
