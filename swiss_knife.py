@@ -429,6 +429,24 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
         pass
 
 
+def run_child_module(module_name: str, args: Optional[List[str]] = None) -> None:
+    cmd = [sys.executable or "python3", "-m", module_name]
+    if args:
+        cmd.extend(args)
+    print(style(f"Starting module {module_name}...\n", STYLE_BOLD))
+
+    try:
+        subprocess.run(cmd, cwd=base_dir())
+    except KeyboardInterrupt:
+        # Child should receive Ctrl+C too; return cleanly to launcher.
+        pass
+    print(style("\nDone. Press Enter to return to the menu.", STYLE_BOLD))
+    try:
+        input()
+    except EOFError:
+        pass
+
+
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
@@ -491,7 +509,7 @@ def main() -> None:
             if not ensure_webui_python_dependencies():
                 print(color_text("Web UI cannot start without required Python packages.\n", COLOR_HIGHLIGHT))
                 continue
-            run_child(WEBUI_SCRIPT, ["--host", "0.0.0.0", "--port", str(WEBUI_PORT), "--ap-interface", "builtin"])
+            run_child_module("webui.server", ["--host", "0.0.0.0", "--port", str(WEBUI_PORT), "--ap-interface", "builtin"])
             continue
 
 

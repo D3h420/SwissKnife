@@ -13,6 +13,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import List, Optional
 
+# Allow running as both module (`python -m webui.server`) and file (`python webui/server.py`).
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 try:
     from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
     from fastapi.responses import FileResponse
