@@ -834,6 +834,14 @@ def get_current_alias(interface: str) -> Optional[str]:
     return None
 
 
+def set_controller_alias(interface: str, alias: str) -> None:
+    if not alias:
+        return
+    run_bluetoothctl(["system-alias", alias], controller=interface)
+    if tool_exists("hciconfig") and interface.startswith("hci"):
+        run_command(["hciconfig", interface, "name", alias])
+
+
 def build_poet_identity() -> BleIdentity:
     return BleIdentity(mac=random_private_static_mac(), name=BLE_POET_NAME[:26])
 
@@ -937,6 +945,24 @@ def teardown_btmgmt_multi_advertising(interface: str) -> None:
     force_clear_btmgmt_advertising(interface)
 
 
+def hide_controller_from_pairing(interface: str) -> None:
+    run_bluetoothctl(["discoverable", "off"], controller=interface)
+    run_bluetoothctl(["pairable", "off"], controller=interface)
+    if tool_exists("hciconfig") and interface.startswith("hci"):
+        run_command(["hciconfig", interface, "noscan"])
+    disable_hci_advertising(interface)
+    teardown_btmgmt_multi_advertising(interface)
+
+
+def mute_secondary_controllers(selected_interface: str) -> None:
+    for interface in list_hci_interfaces():
+        if interface == selected_interface:
+            continue
+        hide_controller_from_pairing(interface)
+        run_bluetoothctl(["power", "off"], controller=interface)
+        logging.info("Muted secondary controller: %s", interface_display_name(interface))
+
+
 def run_ble_poet_btmgmt(
     interface: str,
     identity: BleIdentity,
@@ -1005,19 +1031,21 @@ def run_ble_poet_hcitool(
 
 
 def run_ble_poet(interface: str) -> None:
+    identity = build_poet_identity()
     ensure_bluetooth_service(interface)
+    original_alias = get_current_alias(interface)
+    mute_secondary_controllers(interface)
     teardown_btmgmt_multi_advertising(interface)
     disable_hci_advertising(interface)
+    hide_controller_from_pairing(interface)
 
     run_bluetoothctl(["power", "on"], controller=interface)
+    set_controller_alias(interface, identity.name)
     run_bluetoothctl(["discoverable", "on"], controller=interface)
     run_bluetoothctl(["pairable", "on"], controller=interface)
     run_bluetoothctl(["agent", "NoInputNoOutput"], controller=interface)
     if tool_exists("hciconfig") and interface.startswith("hci"):
         run_command(["hciconfig", interface, "piscan"])
-
-    original_alias = get_current_alias(interface)
-    identity = build_poet_identity()
 
     stop_event = threading.Event()
     previous_sigint = install_stop_on_sigint(stop_event)
@@ -1031,7 +1059,7 @@ def run_ble_poet(interface: str) -> None:
 
         logging.warning("BLE advertiser backend fallback: bluetoothctl alias only.")
         logging.warning("Install btmgmt or hcitool/hciconfig for stronger BLE advertising.")
-        run_bluetoothctl(["system-alias", identity.name], controller=interface)
+        set_controller_alias(interface, identity.name)
         last_status = 0.0
         while not stop_event.is_set():
             now = time.time()
@@ -1045,10 +1073,11 @@ def run_ble_poet(interface: str) -> None:
             time.sleep(0.2)
 
     finally:
+        hide_controller_from_pairing(interface)
         teardown_btmgmt_multi_advertising(interface)
         disable_hci_advertising(interface)
         if original_alias:
-            run_bluetoothctl(["system-alias", original_alias], controller=interface)
+            set_controller_alias(interface, original_alias)
         restore_signal(previous_sigint)
         logging.info("")
         logging.info(color_text("BLE Poet stopped.", COLOR_WARNING))
