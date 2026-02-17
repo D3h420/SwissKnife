@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from webui.ap_mode import AccessPointManager, ApModeConfig
+from webui.ap_mode import AccessPointManager, ApModeConfig, detect_builtin_wireless_interface
 from webui.process_manager import ProcessManager, TaskError
 
 
@@ -45,12 +45,9 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if ap_manager:
-            try:
-                ap_manager.start()
-                cfg = ap_manager.config
-                LOG.info("AP mode started on %s (%s)", cfg.interface, cfg.ap_ip)
-            except Exception as exc:
-                LOG.error("AP mode failed to start: %s", exc)
+            ap_manager.start()
+            cfg = ap_manager.config
+            LOG.info("AP mode started on %s (%s)", cfg.interface, cfg.ap_ip)
         try:
             yield
         finally:
@@ -242,7 +239,11 @@ def parse_args() -> argparse.Namespace:
         help="Maximum in-memory log lines per task (default: 5000).",
     )
 
-    parser.add_argument("--ap-interface", default="", help="Enable AP mode on this wireless interface")
+    parser.add_argument(
+        "--ap-interface",
+        default="builtin",
+        help="AP interface selector; must be 'builtin' (default).",
+    )
     parser.add_argument("--ap-ssid", default="SwissKnife-Control", help="SSID for AP mode")
     parser.add_argument("--ap-channel", type=int, default=6, help="Wi-Fi channel for AP mode")
     parser.add_argument("--ap-ip", default="10.10.0.1", help="AP gateway IP")
@@ -264,11 +265,18 @@ def resolve_auth_token(cli_token: str, no_auth: bool) -> Optional[str]:
     return secrets.token_urlsafe(20)
 
 
-def build_ap_manager(args: argparse.Namespace) -> Optional[AccessPointManager]:
-    if not args.ap_interface:
-        return None
+def build_ap_manager(args: argparse.Namespace) -> AccessPointManager:
+    ap_interface = (args.ap_interface or "").strip().lower()
+    if ap_interface in ("builtin", "internal", "auto"):
+        interface = detect_builtin_wireless_interface()
+    else:
+        raise RuntimeError(
+            "AP interface is fixed to built-in Wi-Fi. Use --ap-interface builtin."
+        )
+    if not interface:
+        raise RuntimeError("AP interface cannot be empty.")
     config = ApModeConfig(
-        interface=args.ap_interface,
+        interface=interface,
         ssid=args.ap_ssid,
         channel=args.ap_channel,
         ap_ip=args.ap_ip,
@@ -285,7 +293,10 @@ def main() -> None:
     auth_token = resolve_auth_token(args.token.strip(), args.no_auth)
 
     manager = ProcessManager(max_log_lines=args.max_log_lines)
-    ap_manager = build_ap_manager(args)
+    try:
+        ap_manager = build_ap_manager(args)
+    except RuntimeError as exc:
+        raise SystemExit(f"[webui] AP mode setup failed: {exc}") from exc
     app = create_app(manager, auth_token, ap_manager)
 
     if auth_token:

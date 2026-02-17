@@ -25,6 +25,48 @@ class ApModeConfig:
     dhcp_lease: str = "12h"
 
 
+def list_wireless_interfaces() -> list[str]:
+    result = subprocess.run(
+        ["iw", "dev"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return []
+    interfaces: list[str] = []
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Interface "):
+            iface = line.split("Interface", 1)[1].strip()
+            if iface:
+                interfaces.append(iface)
+    return interfaces
+
+
+def interface_is_usb(interface: str) -> bool:
+    device_path = Path("/sys/class/net") / interface / "device"
+    try:
+        resolved = device_path.resolve()
+    except OSError:
+        return False
+    return "usb" in resolved.as_posix().lower()
+
+
+def detect_builtin_wireless_interface() -> str:
+    interfaces = list_wireless_interfaces()
+    if not interfaces:
+        raise RuntimeError("No wireless interfaces found for AP mode.")
+
+    builtin = [iface for iface in interfaces if not interface_is_usb(iface)]
+    if builtin:
+        return sorted(builtin)[0]
+    raise RuntimeError(
+        "No built-in Wi-Fi interface detected. AP mode requires an internal adapter."
+    )
+
+
 class AccessPointManager:
     def __init__(self, config: ApModeConfig) -> None:
         self.config = config

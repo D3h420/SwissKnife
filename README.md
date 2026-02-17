@@ -41,15 +41,8 @@ sudo python3 -m webui.server --host 0.0.0.0 --port 8000
 Open `http://<device-ip>:8000`, paste the token printed in terminal output, and
 start/stop modules from the panel. Existing module logic is unchanged.
 
-Optional AP mode (panel served over your own AP):
-
-```bash
-sudo python3 -m webui.server \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --ap-interface wlan1 \
-  --ap-ssid SwissKnife-Control
-```
+By default, Web UI AP mode starts on the built-in Wi-Fi interface (`--ap-interface builtin`).
+This keeps external adapters (for example `wlan1`, `wlan2`) free for modules.
 
 Full options are documented in `webui/README.md`.
 
@@ -68,22 +61,37 @@ Core:
 - Python 3
 - Linux with a wireless adapter that supports monitor mode
 - Root privileges
+- Built-in Wi-Fi interface reserved for Web UI/AP communication
+- Additional adapters (for example `wlan1`, `wlan2`) for recon/attack workflows
 
-Tools used by the modules:
+Python packages for Web UI:
+- `fastapi`
+- `uvicorn`
+
+System tools used by launcher/modules:
 - `iw`
 - `ip` (from `iproute2`)
 - `ethtool`
-- `iwlist` (from `wireless-tools`)
 - `aireplay-ng` (Aircrack-ng suite)
 - `airodump-ng` (Aircrack-ng suite)
 - `hostapd`
 - `dnsmasq`
 - `iptables`
 - `bluetoothctl` (BlueZ)
+- `btmgmt` (BlueZ)
+
+Extra tools used by specific paths/fallbacks:
+- `iwlist` (wireless-tools fallback scans)
+- `nmcli` (NetworkManager scan fallback)
+- `ifconfig` and `iwconfig` (legacy mode fallback in deauth)
+- `hciconfig` and `hcitool` (Bluetooth legacy operations)
+- `rfkill` (Bluetooth unblock)
+- `systemctl` (Bluetooth service control on systemd hosts)
 
 Optional tools:
 - `mdk4`
 - `bully`
+- `avahi-daemon` (for `<hostname>.local` discovery in local network)
 
 Optional for Handshaker:
 - `scapy`

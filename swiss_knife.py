@@ -10,6 +10,7 @@ import subprocess
 import sys
 import shutil
 import platform
+import socket
 from typing import Dict, List, Optional
 
 COLOR_ENABLED = sys.stdout.isatty()
@@ -64,6 +65,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
 WEBUI_SCRIPT = os.path.join("webui", "server.py")
+WEBUI_PORT = 8000
 
 REQUIRED_TOOLS: List[str] = [
     "iw",
@@ -251,8 +253,48 @@ def script_path(filename: str) -> str:
     return os.path.join(base_dir(), filename)
 
 
-def print_header(title: str, menu: Dict[str, Dict[str, str]]) -> None:
+def detect_primary_ipv4() -> Optional[str]:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("1.1.1.1", 80))
+            ip_addr = sock.getsockname()[0]
+            if ip_addr and not ip_addr.startswith("127."):
+                return ip_addr
+    except OSError:
+        pass
+
+    try:
+        result = subprocess.run(
+            ["ip", "-4", "-o", "addr", "show", "scope", "global"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if "inet" in parts:
+                    index = parts.index("inet")
+                    if index + 1 < len(parts):
+                        return parts[index + 1].split("/", 1)[0]
+    except Exception:
+        pass
+    return None
+
+
+def webui_hint_line(port: int = WEBUI_PORT) -> str:
+    ip_addr = detect_primary_ipv4() or "<device-ip>"
+    hostname = socket.gethostname().strip() or "swissknife"
+    local_host = hostname if hostname.endswith(".local") else f"{hostname}.local"
+    return f"Web UI: http://{ip_addr}:{port}  |  http://{local_host}:{port}"
+
+
+def print_header(title: str, menu: Dict[str, Dict[str, str]], show_webui_hint: bool = False) -> None:
     print(color_text(ASCII_HEADER, COLOR_HEADER))
+    if show_webui_hint:
+        print(color_text(webui_hint_line(), COLOR_DIM))
+        print()
     print(style(title, STYLE_BOLD))
     print()
     for key, meta in menu.items():
@@ -326,7 +368,7 @@ def main() -> None:
         sys.exit(1)
 
     while True:
-        print_header("Main menu:", MAIN_MENU)
+        print_header("Main menu:", MAIN_MENU, show_webui_hint=True)
         choice = input(style("Your choice (1-5): ", STYLE_BOLD)).strip()
 
         if choice not in MAIN_MENU:
@@ -353,7 +395,7 @@ def main() -> None:
             continue
 
         if choice == "4":
-            run_child(WEBUI_SCRIPT, ["--host", "0.0.0.0", "--port", "8000"])
+            run_child(WEBUI_SCRIPT, ["--host", "0.0.0.0", "--port", str(WEBUI_PORT), "--ap-interface", "builtin"])
             continue
 
 

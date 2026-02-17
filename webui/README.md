@@ -22,21 +22,26 @@ sudo python3 -m webui.server --host 0.0.0.0 --port 8000
 The server prints an auth token in terminal output.
 Open `http://<device-ip>:8000`, paste the token, then start modules.
 
+Default AP behavior:
+- AP mode is enabled by default.
+- Interface is auto-selected as built-in Wi-Fi (`--ap-interface builtin`).
+- This leaves external adapters (for example `wlan1`, `wlan2`) free for modules.
+
 ## API auth
 
 - Header name: `X-SwissKnife-Token`
 - Env override: `SWISSKNIFE_WEBUI_TOKEN`
 - Disable auth (local trusted lab only): `--no-auth`
 
-## Optional AP mode
+## AP mode options
 
-This can create a local AP for the control panel itself.
+Built-in interface selection (default):
 
 ```bash
 sudo python3 -m webui.server \
   --host 0.0.0.0 \
   --port 8000 \
-  --ap-interface wlan1 \
+  --ap-interface builtin \
   --ap-ssid SwissKnife-Control \
   --ap-ip 10.10.0.1 \
   --ap-cidr 24 \
@@ -51,4 +56,3 @@ AP mode needs `hostapd`, `dnsmasq`, and `ip`.
 - Run as root for wireless operations and module compatibility.
 - Only one module task can run at a time to avoid RF interface conflicts.
 - Logs are buffered in memory (default: 5000 lines per task).
-
