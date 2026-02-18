@@ -385,6 +385,129 @@ function shortLine(text, limit = 88) {
   return `${clean.slice(0, limit - 1)}…`;
 }
 
+function toText(value) {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
+}
+
+function interfaceNameFrom(value) {
+  const direct = toText(value);
+  if (direct) {
+    return direct;
+  }
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+  const keys = ["name", "interface", "iface", "device", "id", "value", "key"];
+  for (const key of keys) {
+    const candidate = toText(value[key]);
+    if (candidate) {
+      return candidate;
+    }
+  }
+  return "";
+}
+
+function normalizeInterfaceEntry(rawEntry) {
+  if (rawEntry === null || rawEntry === undefined) {
+    return null;
+  }
+  if (typeof rawEntry === "string" || typeof rawEntry === "number") {
+    const name = interfaceNameFrom(rawEntry);
+    if (!name) {
+      return null;
+    }
+    return {
+      name,
+      label: name,
+      driver: "",
+      bus_info: "",
+      is_builtin: false,
+    };
+  }
+  if (typeof rawEntry !== "object") {
+    return null;
+  }
+
+  const name = interfaceNameFrom(rawEntry);
+  const driver = toText(rawEntry.driver || rawEntry.chipset || rawEntry.vendor || "");
+  const busInfo = toText(rawEntry.bus_info || rawEntry.busInfo || rawEntry.bus || "");
+  const isBuiltin = Boolean(rawEntry.is_builtin || rawEntry.builtin || rawEntry.isBuiltin);
+
+  let label = toText(rawEntry.label || rawEntry.display || rawEntry.title || rawEntry.text || "");
+  const driverKnown = driver && driver.toLowerCase() !== "unknown";
+  if (!label) {
+    label = name;
+    if (driverKnown) {
+      label = `${label} · ${driver}`;
+    }
+    if (busInfo) {
+      label = `${label} (${busInfo})`;
+    }
+  }
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    name,
+    label: label || name,
+    driver: driverKnown ? driver : "",
+    bus_info: busInfo,
+    is_builtin: isBuiltin,
+  };
+}
+
+function normalizeInterfaceList(rawList) {
+  const rows = Array.isArray(rawList) ? rawList : [];
+  const dedupe = new Map();
+  rows.forEach((rawEntry) => {
+    const entry = normalizeInterfaceEntry(rawEntry);
+    if (!entry || !entry.name) {
+      return;
+    }
+    const prev = dedupe.get(entry.name);
+    if (!prev) {
+      dedupe.set(entry.name, entry);
+      return;
+    }
+    const prevLabel = toText(prev.label);
+    const nextLabel = toText(entry.label);
+    dedupe.set(entry.name, {
+      name: entry.name,
+      label: nextLabel.length >= prevLabel.length ? nextLabel : prevLabel,
+      driver: prev.driver || entry.driver,
+      bus_info: prev.bus_info || entry.bus_info,
+      is_builtin: prev.is_builtin || entry.is_builtin,
+    });
+  });
+  return Array.from(dedupe.values()).sort((left, right) => {
+    const leftName = toText(left?.name);
+    const rightName = toText(right?.name);
+    const leftRank = leftName.startsWith("wlan") ? 0 : 1;
+    const rightRank = rightName.startsWith("wlan") ? 0 : 1;
+    if (leftRank !== rightRank) {
+      return leftRank - rightRank;
+    }
+    return leftName.localeCompare(rightName);
+  });
+}
+
+function normalizeBuiltinInterface(rawBuiltin, allInterfaces) {
+  const direct = interfaceNameFrom(rawBuiltin);
+  if (direct) {
+    return direct;
+  }
+  const builtin = (Array.isArray(allInterfaces) ? allInterfaces : []).find((entry) => entry && entry.is_builtin);
+  return builtin?.name || "";
+}
+
 function formatControlValue(control, value) {
   if (value === null || value === undefined || value === "") {
     return "-";
@@ -453,16 +576,20 @@ function getInterfaceLabel(name) {
   if (!name) {
     return "";
   }
-  const all = Array.isArray(state.interfaces.all_interfaces) ? state.interfaces.all_interfaces : [];
-  const entry = all.find((item) => item && typeof item !== "string" && item.name === name);
-  if (!entry) {
-    return name;
+  const targetName = interfaceNameFrom(name);
+  if (!targetName) {
+    return "";
   }
-  return entry.label || `${entry.name}${entry.driver ? ` · ${entry.driver}` : ""}`;
+  const all = Array.isArray(state.interfaces.all_interfaces) ? state.interfaces.all_interfaces : [];
+  const entry = all.find((item) => item && typeof item !== "string" && item.name === targetName);
+  if (!entry) {
+    return targetName;
+  }
+  return entry.label || `${entry.name}${entry.driver ? ` · ${entry.driver}` : ""}` || targetName;
 }
 
 function buildInterfaceLegend(includeBuiltin = false) {
-  const entries = Array.isArray(state.interfaces.all_interfaces) ? state.interfaces.all_interfaces : [];
+  const entries = normalizeInterfaceList(state.interfaces.all_interfaces);
   const filtered = includeBuiltin ? entries : entries.filter((entry) => !entry?.is_builtin);
   if (!filtered.length) {
     return null;
@@ -473,7 +600,7 @@ function buildInterfaceLegend(includeBuiltin = false) {
   filtered.forEach((entry) => {
     const chip = document.createElement("span");
     chip.className = "adapter-chip";
-    const label = entry?.label || entry?.name || String(entry || "");
+    const label = entry?.label || entry?.name || "";
     chip.textContent = entry?.is_builtin ? `${label} (builtin/AP)` : label;
     wrap.appendChild(chip);
   });
@@ -687,14 +814,21 @@ function renderSection() {
   dom.sectionBody.innerHTML = "";
   dom.sectionBody.dataset.sectionId = section.id || "";
 
-  if (section.id === "recon" && state.interfaces.builtin_interface) {
-    const notice = document.createElement("div");
-    notice.className = "muted-block";
-    notice.textContent = `AP/WebUI uses ${getInterfaceLabel(state.interfaces.builtin_interface)}. Recon controls target external adapters.`;
-    dom.sectionBody.appendChild(notice);
+  if (section.id === "recon") {
+    if (state.interfaces.builtin_interface) {
+      const notice = document.createElement("div");
+      notice.className = "muted-block";
+      notice.textContent = `AP/WebUI uses ${getInterfaceLabel(state.interfaces.builtin_interface)}. Recon controls target external adapters.`;
+      dom.sectionBody.appendChild(notice);
+    }
     const adapterLegend = buildInterfaceLegend(false);
     if (adapterLegend) {
       dom.sectionBody.appendChild(adapterLegend);
+    } else {
+      const missing = document.createElement("div");
+      missing.className = "muted-block";
+      missing.textContent = "No external wireless adapters detected for Recon.";
+      dom.sectionBody.appendChild(missing);
     }
   }
 
@@ -702,6 +836,11 @@ function renderSection() {
     const adapterLegend = buildInterfaceLegend(true);
     if (adapterLegend) {
       dom.sectionBody.appendChild(adapterLegend);
+    } else {
+      const missing = document.createElement("div");
+      missing.className = "muted-block";
+      missing.textContent = "No wireless interfaces detected.";
+      dom.sectionBody.appendChild(missing);
     }
   }
 
@@ -896,7 +1035,7 @@ function renderReconScanResult(result, task) {
   const summary = document.createElement("div");
   summary.className = "result-summary";
   summary.appendChild(createSummaryPill("Mode", "Scanner"));
-  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Interface", getInterfaceLabel(result.interface) || "-"));
   summary.appendChild(createSummaryPill("Networks", result.network_count ?? 0));
   summary.appendChild(createSummaryPill("Task", task.task_id));
   dom.resultsView.appendChild(summary);
@@ -909,7 +1048,7 @@ function renderReconSniffResult(result, task) {
   const summary = document.createElement("div");
   summary.className = "result-summary";
   summary.appendChild(createSummaryPill("Mode", "Sniffer"));
-  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Interface", getInterfaceLabel(result.interface) || "-"));
   summary.appendChild(createSummaryPill("Packets", result.packet_count ?? 0));
   summary.appendChild(createSummaryPill("Probes", result.probe_total ?? 0));
   summary.appendChild(createSummaryPill("Task", task.task_id));
@@ -1182,12 +1321,40 @@ async function loadModules() {
 async function loadInterfaces() {
   try {
     const data = await apiFetch("/api/interfaces");
+    const allInterfaces = normalizeInterfaceList(data.all_interfaces);
+    const allWirelessFallback = normalizeInterfaceList(data.all_wireless);
+    if (!allInterfaces.length && allWirelessFallback.length) {
+      allInterfaces.push(...allWirelessFallback);
+    }
+
+    const builtinInterface = normalizeBuiltinInterface(data.builtin_interface, allInterfaces);
+    if (builtinInterface) {
+      const idx = allInterfaces.findIndex((entry) => entry.name === builtinInterface);
+      if (idx >= 0) {
+        allInterfaces[idx] = { ...allInterfaces[idx], is_builtin: true };
+      } else {
+        allInterfaces.unshift({
+          name: builtinInterface,
+          label: builtinInterface,
+          driver: "",
+          bus_info: "",
+          is_builtin: true,
+        });
+      }
+    }
+
+    let toolInterfaces = normalizeInterfaceList(data.tool_interfaces);
+    toolInterfaces = toolInterfaces.filter((entry) => entry.name && entry.name !== builtinInterface);
+    if (!toolInterfaces.length) {
+      toolInterfaces = allInterfaces.filter((entry) => !entry.is_builtin);
+    }
+
     state.interfaces = {
-      builtin_interface: data.builtin_interface || "",
-      all_wireless: Array.isArray(data.all_wireless) ? data.all_wireless : [],
-      all_interfaces: Array.isArray(data.all_interfaces) ? data.all_interfaces : [],
-      tool_interfaces: Array.isArray(data.tool_interfaces) ? data.tool_interfaces : [],
-      tool_interface_names: Array.isArray(data.tool_interface_names) ? data.tool_interface_names : [],
+      builtin_interface: builtinInterface,
+      all_wireless: allInterfaces.map((entry) => entry.name),
+      all_interfaces: allInterfaces,
+      tool_interfaces: toolInterfaces,
+      tool_interface_names: toolInterfaces.map((entry) => entry.name),
     };
     renderSection();
   } catch (error) {
