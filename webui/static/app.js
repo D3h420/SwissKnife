@@ -109,17 +109,6 @@ const FALLBACK_MENU = {
               default: 25,
               suffix: "s",
             },
-            {
-              id: "method",
-              label: "Method",
-              kind: "select",
-              options: [
-                { value: "deauth", label: "deauth" },
-                { value: "mdk4", label: "mdk4" },
-                { value: "bully", label: "bully" },
-              ],
-              default: "deauth",
-            },
           ],
         },
         {
@@ -135,6 +124,7 @@ const FALLBACK_MENU = {
               kind: "select",
               source: "tool_interfaces",
               default: "auto",
+              arg: "--ap-interface",
             },
             {
               id: "scan_duration",
@@ -145,17 +135,24 @@ const FALLBACK_MENU = {
               step: 5,
               default: 25,
               suffix: "s",
+              arg: "--scan-duration",
             },
             {
-              id: "portal_type",
+              id: "ap_ssid",
+              label: "AP Name",
+              kind: "text",
+              default: "",
+              placeholder: "np. Free_WiFi",
+              arg: "--ap-ssid",
+            },
+            {
+              id: "portal_file",
               label: "Portal",
               kind: "select",
-              options: [
-                { value: "default", label: "default" },
-                { value: "router", label: "router style" },
-                { value: "custom", label: "custom" },
-              ],
-              default: "default",
+              source: "portal_templates",
+              options: [{ value: "portal.html", label: "portal.html" }],
+              default: "portal.html",
+              arg: "--portal-file",
             },
           ],
         },
@@ -260,11 +257,11 @@ const FALLBACK_MENU = {
       ],
     },
     {
-      id: "exit",
-      label: "Exit",
-      icon: "EXT",
+      id: "loot",
+      label: "Loot",
+      icon: "LOT",
       type: "info",
-      description: "Equivalent of exit option in CLI launcher.",
+      description: "Captured files and logs from /log.",
     },
   ],
 };
@@ -287,6 +284,12 @@ const state = {
   resultByTask: {},
   logCursorByTask: {},
   recentLogsByTask: {},
+  expandedAttackId: null,
+  portalTemplates: [],
+  lootFiles: [],
+  lootLoaded: false,
+  selectedLootFile: "",
+  lootContentByFile: {},
   pollHandle: null,
 };
 
@@ -349,6 +352,32 @@ function parseTime(timestamp) {
     return "-";
   }
   return new Date(timestamp * 1000).toLocaleTimeString();
+}
+
+function parseIsoTime(value) {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) {
+    return "0 B";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let idx = 0;
+  let size = value;
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024;
+    idx += 1;
+  }
+  return `${size.toFixed(size >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
 function getSectionById(sectionId) {
@@ -519,6 +548,13 @@ function formatControlValue(control, value) {
 }
 
 function resolveControlOptions(control) {
+  if (control.source === "portal_templates") {
+    const templates = Array.isArray(state.portalTemplates) ? state.portalTemplates : [];
+    if (templates.length) {
+      return templates.map((name) => ({ value: name, label: name }));
+    }
+  }
+
   if (Array.isArray(control.options) && control.options.length) {
     return control.options.map((entry) => {
       if (typeof entry === "string") {
@@ -683,6 +719,9 @@ function createControlField(control) {
   input.type = "text";
   input.dataset.controlId = control.id;
   input.value = control.default !== undefined ? String(control.default) : "";
+  if (control.placeholder) {
+    input.placeholder = control.placeholder;
+  }
   wrap.appendChild(input);
   return wrap;
 }
@@ -717,72 +756,82 @@ function collectModuleArgs(item, card) {
   return args;
 }
 
-function createActionCard(item, sectionId) {
-  const card = document.createElement("article");
-  card.className = "action-card";
+function evaluateActionAvailability(item, controls) {
+  let statusClass = "";
+  let statusText = "READY";
+  let disabled = Boolean(item.disabled);
 
-  const title = document.createElement("h3");
-  title.textContent = item.label;
-  card.appendChild(title);
+  if (item.under_construction) {
+    statusClass = "warn";
+    statusText = "UNDER CONSTRUCTION";
+  } else if (item.disabled) {
+    statusClass = "bad";
+    statusText = "DISABLED";
+  }
 
+  if (item.type !== "module" || !item.module_id) {
+    return {
+      disabled: true,
+      statusClass: statusClass || "bad",
+      statusText: statusText === "READY" ? "DISABLED" : statusText,
+    };
+  }
+
+  const moduleInfo = resolveModuleInfo(item.module_id);
+  if (!moduleInfo || moduleInfo.exists === false) {
+    return { disabled: true, statusClass: "bad", statusText: "MISSING SCRIPT" };
+  }
+
+  const needsToolInterface = controls.some((control) => control.source === "tool_interfaces");
+  if (needsToolInterface && (!Array.isArray(state.interfaces.tool_interfaces) || state.interfaces.tool_interfaces.length === 0)) {
+    return { disabled: true, statusClass: "bad", statusText: "NO TOOL IFACE" };
+  }
+
+  return { disabled, statusClass, statusText };
+}
+
+function createStatusChip(statusClass, statusText) {
+  const status = document.createElement("span");
+  status.className = "status-chip";
+  if (statusClass) {
+    status.classList.add(statusClass);
+  }
+  status.textContent = statusText;
+  return status;
+}
+
+function appendCardBody(contentWrap, item, sectionId, card, controls, availability) {
   const description = document.createElement("p");
   description.textContent = item.description || "";
-  card.appendChild(description);
+  contentWrap.appendChild(description);
 
-  const controls = Array.isArray(item.controls) ? item.controls : [];
   if (controls.length) {
     const controlsWrap = document.createElement("div");
     controlsWrap.className = "control-grid";
     controls.forEach((control) => {
       controlsWrap.appendChild(createControlField(control));
     });
-    card.appendChild(controlsWrap);
+    contentWrap.appendChild(controlsWrap);
   }
 
   if (sectionId === "attacks") {
     const touchHint = document.createElement("p");
     touchHint.className = "touch-hint";
     touchHint.textContent = "After Run: use touch buttons below (no keyboard typing).";
-    card.appendChild(touchHint);
+    contentWrap.appendChild(touchHint);
   }
 
   const meta = document.createElement("div");
   meta.className = "action-meta";
-
-  const status = document.createElement("span");
-  status.className = "status-chip";
-
-  if (item.under_construction) {
-    status.classList.add("warn");
-    status.textContent = "UNDER CONSTRUCTION";
-  } else if (item.disabled) {
-    status.classList.add("bad");
-    status.textContent = "DISABLED";
-  } else {
-    status.textContent = "READY";
-  }
-  meta.appendChild(status);
+  meta.appendChild(createStatusChip(availability.statusClass, availability.statusText));
 
   const button = document.createElement("button");
   button.type = "button";
   button.className = "primary";
   button.textContent = "Run";
-  button.disabled = Boolean(item.disabled);
+  button.disabled = availability.disabled;
 
   if (item.type === "module" && item.module_id) {
-    const moduleInfo = resolveModuleInfo(item.module_id);
-    if (!moduleInfo || moduleInfo.exists === false) {
-      button.disabled = true;
-      status.className = "status-chip bad";
-      status.textContent = "MISSING SCRIPT";
-    }
-    const needsToolInterface = controls.some((control) => control.source === "tool_interfaces");
-    if (needsToolInterface && (!Array.isArray(state.interfaces.tool_interfaces) || state.interfaces.tool_interfaces.length === 0)) {
-      button.disabled = true;
-      status.className = "status-chip bad";
-      status.textContent = "NO TOOL IFACE";
-    }
-
     button.addEventListener("click", async () => {
       if (button.disabled) {
         return;
@@ -799,7 +848,72 @@ function createActionCard(item, sectionId) {
   }
 
   meta.appendChild(button);
-  card.appendChild(meta);
+  contentWrap.appendChild(meta);
+}
+
+function createActionCard(item, sectionId) {
+  const card = document.createElement("article");
+  card.className = "action-card";
+
+  const title = document.createElement("h3");
+  title.textContent = item.label;
+  card.appendChild(title);
+
+  const controls = Array.isArray(item.controls) ? item.controls : [];
+  const availability = evaluateActionAvailability(item, controls);
+  appendCardBody(card, item, sectionId, card, controls, availability);
+  return card;
+}
+
+function createAttackCard(item) {
+  const card = document.createElement("article");
+  card.className = "action-card attack-card";
+  const isExpanded = state.expandedAttackId === item.id;
+  if (isExpanded) {
+    card.classList.add("expanded");
+  }
+
+  const controls = Array.isArray(item.controls) ? item.controls : [];
+  const availability = evaluateActionAvailability(item, controls);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "attack-toggle";
+  toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+
+  const heading = document.createElement("div");
+  heading.className = "attack-heading";
+
+  const title = document.createElement("h3");
+  title.textContent = item.label;
+  heading.appendChild(title);
+
+  const subtitle = document.createElement("span");
+  subtitle.className = "attack-subtitle";
+  subtitle.textContent = item.description || "";
+  heading.appendChild(subtitle);
+
+  toggle.appendChild(heading);
+  toggle.appendChild(createStatusChip(availability.statusClass, availability.statusText));
+
+  const chevron = document.createElement("span");
+  chevron.className = "attack-chevron";
+  chevron.textContent = ">";
+  toggle.appendChild(chevron);
+
+  toggle.addEventListener("click", () => {
+    state.expandedAttackId = state.expandedAttackId === item.id ? null : item.id;
+    renderSection();
+  });
+
+  card.appendChild(toggle);
+
+  const body = document.createElement("div");
+  body.className = "attack-body";
+  body.hidden = !isExpanded;
+  appendCardBody(body, item, "attacks", card, controls, availability);
+  card.appendChild(body);
+
   return card;
 }
 
@@ -844,6 +958,14 @@ function renderSection() {
     }
   }
 
+  if (section.id === "loot") {
+    renderLootSection();
+    if (!state.lootLoaded) {
+      loadLootFiles(true);
+    }
+    return;
+  }
+
   if (section.type === "module") {
     const grid = document.createElement("div");
     grid.className = "action-grid";
@@ -861,6 +983,18 @@ function renderSection() {
       dom.sectionBody.appendChild(muted);
       return;
     }
+
+    if (section.id === "attacks") {
+      if (!state.expandedAttackId || !items.some((item) => item.id === state.expandedAttackId)) {
+        state.expandedAttackId = items[0]?.id || null;
+      }
+      const attacksGrid = document.createElement("div");
+      attacksGrid.className = "action-grid attacks-grid";
+      items.forEach((item) => attacksGrid.appendChild(createAttackCard(item)));
+      dom.sectionBody.appendChild(attacksGrid);
+      return;
+    }
+
     const grid = document.createElement("div");
     grid.className = "action-grid";
     items.forEach((item) => grid.appendChild(createActionCard(item, section.id)));
@@ -872,6 +1006,131 @@ function renderSection() {
   info.className = "muted-block";
   info.textContent = section.description || "Section information.";
   dom.sectionBody.appendChild(info);
+}
+
+function renderLootSection() {
+  const wrap = document.createElement("div");
+  wrap.className = "loot-layout";
+
+  const listPanel = document.createElement("div");
+  listPanel.className = "loot-panel";
+
+  const listHead = document.createElement("div");
+  listHead.className = "loot-head";
+  const listTitle = document.createElement("strong");
+  listTitle.textContent = "Log Files (/log)";
+  listHead.appendChild(listTitle);
+
+  const refreshBtn = document.createElement("button");
+  refreshBtn.type = "button";
+  refreshBtn.textContent = "Refresh";
+  refreshBtn.addEventListener("click", () => loadLootFiles());
+  listHead.appendChild(refreshBtn);
+  listPanel.appendChild(listHead);
+
+  const files = Array.isArray(state.lootFiles) ? state.lootFiles : [];
+  if (!files.length) {
+    const muted = document.createElement("div");
+    muted.className = "muted-block";
+    muted.textContent = "No files found in /log.";
+    listPanel.appendChild(muted);
+  } else {
+    const list = document.createElement("div");
+    list.className = "loot-list";
+    files.forEach((file) => {
+      const row = document.createElement("div");
+      row.className = "loot-row";
+
+      const fileBtn = document.createElement("button");
+      fileBtn.type = "button";
+      fileBtn.className = `loot-file-btn${state.selectedLootFile === file.name ? " active" : ""}`;
+      fileBtn.addEventListener("click", async () => {
+        state.selectedLootFile = file.name;
+        await loadLootContent(file.name, true);
+        renderSection();
+      });
+
+      const fileName = document.createElement("span");
+      fileName.className = "loot-file-name";
+      fileName.textContent = file.name;
+      fileBtn.appendChild(fileName);
+
+      const fileMeta = document.createElement("span");
+      fileMeta.className = "loot-file-meta";
+      fileMeta.textContent = `${formatBytes(file.size_bytes)} · ${parseIsoTime(file.modified_at)}`;
+      fileBtn.appendChild(fileMeta);
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "loot-delete-btn danger";
+      deleteBtn.title = `Delete ${file.name}`;
+      deleteBtn.setAttribute("aria-label", `Delete ${file.name}`);
+
+      const icon = document.createElement("span");
+      icon.className = "trash-icon";
+      deleteBtn.appendChild(icon);
+
+      deleteBtn.addEventListener("click", async () => {
+        const accepted = window.confirm(`Delete file ${file.name}?`);
+        if (!accepted) {
+          return;
+        }
+        await deleteLootFile(file.name);
+      });
+
+      row.appendChild(fileBtn);
+      row.appendChild(deleteBtn);
+      list.appendChild(row);
+    });
+    listPanel.appendChild(list);
+  }
+
+  const previewPanel = document.createElement("div");
+  previewPanel.className = "loot-preview";
+  const selectedName = state.selectedLootFile;
+  if (!selectedName) {
+    const empty = document.createElement("div");
+    empty.className = "muted-block";
+    empty.textContent = "Select file to preview content.";
+    previewPanel.appendChild(empty);
+  } else {
+    const content = state.lootContentByFile[selectedName] || null;
+    const title = document.createElement("div");
+    title.className = "loot-preview-head";
+    const headLabel = document.createElement("strong");
+    headLabel.textContent = selectedName;
+    title.appendChild(headLabel);
+
+    if (content) {
+      const details = document.createElement("span");
+      details.className = "loot-preview-meta";
+      details.textContent = `${formatBytes(content.size_bytes)} · ${parseIsoTime(content.modified_at)}`;
+      title.appendChild(details);
+    }
+    previewPanel.appendChild(title);
+
+    if (!content) {
+      const loading = document.createElement("div");
+      loading.className = "muted-block";
+      loading.textContent = "Loading file preview...";
+      previewPanel.appendChild(loading);
+    } else {
+      if (content.truncated) {
+        const trunc = document.createElement("div");
+        trunc.className = "loot-truncate";
+        trunc.textContent = "Showing last 300 lines.";
+        previewPanel.appendChild(trunc);
+      }
+      const pre = document.createElement("pre");
+      pre.className = "loot-text";
+      pre.textContent = content.text || "(empty file)";
+      previewPanel.appendChild(pre);
+    }
+  }
+
+  wrap.appendChild(listPanel);
+  wrap.appendChild(previewPanel);
+  dom.sectionBody.appendChild(wrap);
 }
 
 function renderMenu() {
@@ -903,6 +1162,12 @@ function renderMenu() {
       state.selectedSectionId = section.id;
       renderMenu();
       renderSection();
+      if (section.id === "attacks") {
+        loadPortalTemplates(true);
+      }
+      if (section.id === "loot") {
+        loadLootFiles(true);
+      }
     });
     dom.mainMenu.appendChild(button);
   });
@@ -1366,6 +1631,105 @@ async function loadInterfaces() {
   }
 }
 
+async function loadPortalTemplates(silent = false) {
+  try {
+    const data = await apiFetch("/api/portals");
+    const templates = Array.isArray(data.templates) ? data.templates : [];
+    state.portalTemplates = templates.filter((entry) => typeof entry === "string" && entry.trim());
+    if (state.selectedSectionId === "attacks") {
+      renderSection();
+    }
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      if (!silent) {
+        setHint("Unauthorized. Provide valid token.", "error");
+      }
+      return;
+    }
+    if (!silent) {
+      setHint(`Failed to load portal templates: ${error.message}`, "error");
+    }
+  }
+}
+
+async function loadLootContent(fileName, silent = false) {
+  if (!fileName) {
+    return;
+  }
+  try {
+    const name = encodeURIComponent(fileName);
+    const data = await apiFetch(`/api/loot/view?name=${name}&tail=300`);
+    state.lootContentByFile[fileName] = data;
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      if (!silent) {
+        setHint("Unauthorized. Provide valid token.", "error");
+      }
+      return;
+    }
+    if (!silent) {
+      setHint(`Failed to load loot content: ${error.message}`, "error");
+    }
+  }
+}
+
+async function loadLootFiles(silent = false) {
+  try {
+    const data = await apiFetch("/api/loot");
+    const files = Array.isArray(data.files) ? data.files : [];
+    state.lootFiles = files
+      .filter((entry) => entry && typeof entry.name === "string")
+      .sort((left, right) => String(right.modified_at || "").localeCompare(String(left.modified_at || "")));
+    state.lootLoaded = true;
+
+    if (!state.lootFiles.length) {
+      state.selectedLootFile = "";
+      state.lootContentByFile = {};
+    } else if (
+      !state.selectedLootFile
+      || !state.lootFiles.some((entry) => entry.name === state.selectedLootFile)
+    ) {
+      state.selectedLootFile = state.lootFiles[0].name;
+      await loadLootContent(state.selectedLootFile, true);
+    } else if (!state.lootContentByFile[state.selectedLootFile]) {
+      await loadLootContent(state.selectedLootFile, true);
+    }
+
+    if (state.selectedSectionId === "loot") {
+      renderSection();
+    }
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      if (!silent) {
+        setHint("Unauthorized. Provide valid token.", "error");
+      }
+      return;
+    }
+    if (!silent) {
+      setHint(`Failed to load loot files: ${error.message}`, "error");
+    }
+  }
+}
+
+async function deleteLootFile(fileName) {
+  try {
+    const name = encodeURIComponent(fileName);
+    await apiFetch(`/api/loot?name=${name}`, { method: "DELETE" });
+    delete state.lootContentByFile[fileName];
+    setHint(`Deleted ${fileName}.`, "success");
+    await loadLootFiles(true);
+    if (state.selectedSectionId === "loot") {
+      renderSection();
+    }
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      setHint("Unauthorized. Provide valid token.", "error");
+      return;
+    }
+    setHint(`Delete failed: ${error.message}`, "error");
+  }
+}
+
 async function loadTaskLogs(taskId, silent = false) {
   if (!taskId) {
     return;
@@ -1526,13 +1890,22 @@ function installHandlers() {
   dom.saveTokenBtn.addEventListener("click", async () => {
     state.token = dom.tokenInput.value.trim();
     localStorage.setItem("swissknife.webui.token", state.token);
-    await Promise.all([loadMenu(), loadModules(), loadInterfaces(), loadTasks()]);
+    await Promise.all([
+      loadMenu(),
+      loadModules(),
+      loadInterfaces(),
+      loadPortalTemplates(true),
+      loadLootFiles(true),
+      loadTasks(),
+    ]);
   });
 
   dom.refreshMenuBtn.addEventListener("click", async () => {
     await loadMenu();
     await loadModules();
     await loadInterfaces();
+    await loadPortalTemplates(true);
+    await loadLootFiles(true);
   });
 
   dom.refreshTasksBtn.addEventListener("click", loadTasks);
@@ -1545,6 +1918,8 @@ async function bootstrap() {
   await loadMenu();
   await loadModules();
   await loadInterfaces();
+  await loadPortalTemplates(true);
+  await loadLootFiles(true);
   await loadTasks();
 
   if (state.pollHandle) {

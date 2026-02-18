@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import argparse
 import os
 import sys
 import time
@@ -58,6 +59,10 @@ CAPTURE_FILE_PATH = None
 SUBMISSION_EVENT = threading.Event()
 SUBMISSION_LOCK = threading.Lock()
 LAST_SUBMISSION_IP = None
+CLI_AP_INTERFACE = ""
+CLI_SCAN_DURATION = 0
+CLI_AP_SSID = ""
+CLI_PORTAL_FILE = ""
 
 
 
@@ -78,6 +83,24 @@ def list_portal_html_files():
     ]
     files.sort(key=lambda name: (name.lower() != "portal.html", name.lower()))
     return files
+
+
+def resolve_portal_html_file(raw_value):
+    value = (raw_value or "").strip()
+    if not value:
+        return ""
+
+    candidates = []
+    if os.path.isabs(value):
+        candidates.append(value)
+    else:
+        candidates.append(os.path.join(HTML_DIR, value))
+        candidates.append(value)
+
+    for candidate in candidates:
+        if os.path.isfile(candidate) and candidate.lower().endswith(".html"):
+            return candidate
+    return ""
 
 
 def select_portal_html_file():
@@ -503,41 +526,72 @@ def run_portal_session():
     
     # Select AP interface.
     interfaces = list_network_interfaces()
-    globals()["AP_INTERFACE"] = select_interface(interfaces)
+    requested_interface = (CLI_AP_INTERFACE or "").strip()
+    if requested_interface and requested_interface.lower() not in {"auto"}:
+        if requested_interface in interfaces:
+            globals()["AP_INTERFACE"] = requested_interface
+            logging.info("Using AP interface from args: %s", AP_INTERFACE)
+        else:
+            logging.error("AP interface '%s' not found.", CLI_AP_INTERFACE)
+            return False
+    elif requested_interface.lower() == "auto":
+        auto_candidates = [iface for iface in interfaces if iface.startswith("wl")]
+        if auto_candidates:
+            globals()["AP_INTERFACE"] = auto_candidates[0]
+            logging.info("Using auto AP interface: %s", AP_INTERFACE)
+        else:
+            globals()["AP_INTERFACE"] = select_interface(interfaces)
+    else:
+        globals()["AP_INTERFACE"] = select_interface(interfaces)
 
     subprocess.run(['ip', 'link', 'set', AP_INTERFACE, 'up'], stderr=subprocess.DEVNULL)
     logging.info("")
-    while True:
-        method = input(
-            f"{style('SSID source', STYLE_BOLD)} - "
-            f"{style('Scan', STYLE_BOLD)} (S) or {style('Manual', STYLE_BOLD)} (M): "
-        ).strip().lower()
-        if method in {"s", "scan", ""}:
-            scan_prompt = (
-                f"{style('Scan duration', STYLE_BOLD)} in seconds "
-                f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
-            )
-            scan_input = input(scan_prompt).strip()
-            try:
-                scan_seconds = int(scan_input) if scan_input else 15
-            except ValueError:
-                logging.warning("Invalid duration. Using 15 seconds.")
-                scan_seconds = 15
-            if scan_seconds < 1:
-                logging.warning("Scan duration too short. Using 1 second.")
-                scan_seconds = 1
+    if CLI_AP_SSID:
+        globals()["AP_SSID"] = CLI_AP_SSID
+        logging.info("Using AP name from args: %s", AP_SSID)
+    else:
+        while True:
+            method = input(
+                f"{style('SSID source', STYLE_BOLD)} - "
+                f"{style('Scan', STYLE_BOLD)} (S) or {style('Manual', STYLE_BOLD)} (M): "
+            ).strip().lower()
+            if method in {"s", "scan", ""}:
+                if CLI_SCAN_DURATION > 0:
+                    scan_seconds = max(1, CLI_SCAN_DURATION)
+                    logging.info("Using scan duration from args: %s seconds", scan_seconds)
+                else:
+                    scan_prompt = (
+                        f"{style('Scan duration', STYLE_BOLD)} in seconds "
+                        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
+                    )
+                    scan_input = input(scan_prompt).strip()
+                    try:
+                        scan_seconds = int(scan_input) if scan_input else 15
+                    except ValueError:
+                        logging.warning("Invalid duration. Using 15 seconds.")
+                        scan_seconds = 15
+                    if scan_seconds < 1:
+                        logging.warning("Scan duration too short. Using 1 second.")
+                        scan_seconds = 1
 
-            input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {AP_INTERFACE}...")
+                input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {AP_INTERFACE}...")
 
-            # Select SSID after scan (or enter manually).
-            globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE, scan_seconds)
-            break
-        if method in {"m", "manual"}:
-            globals()["AP_SSID"] = prompt_manual_ssid()
-            break
-        logging.warning("Please enter S or M.")
+                # Select SSID after scan (or enter manually).
+                globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE, scan_seconds)
+                break
+            if method in {"m", "manual"}:
+                globals()["AP_SSID"] = prompt_manual_ssid()
+                break
+            logging.warning("Please enter S or M.")
 
-    globals()["PORTAL_HTML_PATH"] = select_portal_html_file()
+    if CLI_PORTAL_FILE:
+        resolved_portal = resolve_portal_html_file(CLI_PORTAL_FILE)
+        if not resolved_portal:
+            logging.error("Portal HTML file not found: %s", CLI_PORTAL_FILE)
+            return False
+        globals()["PORTAL_HTML_PATH"] = resolved_portal
+    else:
+        globals()["PORTAL_HTML_PATH"] = select_portal_html_file()
     globals()["PORTAL_HTML"] = None
     logging.info("Selected portal file: %s", os.path.basename(PORTAL_HTML_PATH))
 
@@ -624,8 +678,26 @@ def run_portal_session():
     return restart_requested
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="SwissKnife Portal module")
+    parser.add_argument("--ap-interface", default="", help="AP interface name")
+    parser.add_argument("--scan-duration", type=int, default=0, help="Scan duration in seconds")
+    parser.add_argument("--ap-ssid", default="", help="AP SSID to use directly")
+    parser.add_argument("--portal-file", default="", help="Portal HTML filename/path")
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        logging.warning("Ignoring unknown args: %s", " ".join(unknown))
+    return args
+
+
 def main():
     """Main entry point."""
+    args = parse_args()
+    globals()["CLI_AP_INTERFACE"] = (args.ap_interface or "").strip()
+    globals()["CLI_SCAN_DURATION"] = int(args.scan_duration or 0)
+    globals()["CLI_AP_SSID"] = (args.ap_ssid or "").strip()
+    globals()["CLI_PORTAL_FILE"] = (args.portal_file or "").strip()
+
     logging.info(color_text("Portal Wizard", COLOR_HEADER))
     logging.info("Starting Captive Portal System")
     logging.info("")

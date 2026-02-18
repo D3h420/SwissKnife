@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -46,6 +47,8 @@ LOG = logging.getLogger("swissknife.webui")
 TOKEN_HEADER = "X-SwissKnife-Token"
 TOKEN_ENV_VAR = "SWISSKNIFE_WEBUI_TOKEN"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+LOG_DIR = PROJECT_ROOT / "log"
+HTML_DIR = PROJECT_ROOT / "html"
 MENU_SCHEMA = {
     "main": [
         {
@@ -157,17 +160,6 @@ MENU_SCHEMA = {
                             "default": 25,
                             "suffix": "s",
                         },
-                        {
-                            "id": "method",
-                            "label": "Method",
-                            "kind": "select",
-                            "options": [
-                                {"value": "deauth", "label": "deauth"},
-                                {"value": "mdk4", "label": "mdk4"},
-                                {"value": "bully", "label": "bully"},
-                            ],
-                            "default": "deauth",
-                        },
                     ],
                 },
                 {
@@ -183,6 +175,7 @@ MENU_SCHEMA = {
                             "kind": "select",
                             "source": "tool_interfaces",
                             "default": "auto",
+                            "arg": "--ap-interface",
                         },
                         {
                             "id": "scan_duration",
@@ -193,17 +186,24 @@ MENU_SCHEMA = {
                             "step": 5,
                             "default": 25,
                             "suffix": "s",
+                            "arg": "--scan-duration",
                         },
                         {
-                            "id": "portal_type",
+                            "id": "ap_ssid",
+                            "label": "AP Name",
+                            "kind": "text",
+                            "default": "",
+                            "placeholder": "np. Free_WiFi",
+                            "arg": "--ap-ssid",
+                        },
+                        {
+                            "id": "portal_file",
                             "label": "Portal",
                             "kind": "select",
-                            "options": [
-                                {"value": "default", "label": "default"},
-                                {"value": "router", "label": "router style"},
-                                {"value": "custom", "label": "custom"},
-                            ],
-                            "default": "default",
+                            "source": "portal_templates",
+                            "options": [{"value": "portal.html", "label": "portal.html"}],
+                            "default": "portal.html",
+                            "arg": "--portal-file",
                         },
                     ],
                 },
@@ -308,14 +308,59 @@ MENU_SCHEMA = {
             ],
         },
         {
-            "id": "exit",
-            "label": "Exit",
-            "icon": "EXT",
+            "id": "loot",
+            "label": "Loot",
+            "icon": "LOT",
             "type": "info",
-            "description": "Equivalent to exit option in CLI launcher.",
+            "description": "Captured files and logs from /log.",
         },
     ]
 }
+
+
+def list_portal_templates() -> List[str]:
+    if not HTML_DIR.is_dir():
+        return []
+    files = [
+        path.name
+        for path in HTML_DIR.iterdir()
+        if path.is_file() and path.suffix.lower() == ".html"
+    ]
+    files.sort(key=lambda name: (name.lower() != "portal.html", name.lower()))
+    return files
+
+
+def list_loot_files() -> List[dict]:
+    if not LOG_DIR.is_dir():
+        return []
+    files: List[dict] = []
+    for path in LOG_DIR.iterdir():
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        files.append(
+            {
+                "name": path.name,
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            }
+        )
+    files.sort(key=lambda item: item["modified_at"], reverse=True)
+    return files
+
+
+def resolve_loot_file(raw_name: str, must_exist: bool = True) -> Path:
+    name = Path((raw_name or "").strip()).name
+    if not name:
+        raise HTTPException(status_code=400, detail="Loot file name cannot be empty.")
+
+    log_root = LOG_DIR.resolve()
+    path = (log_root / name).resolve()
+    if path.parent != log_root:
+        raise HTTPException(status_code=400, detail="Invalid loot file path.")
+    if must_exist and (not path.is_file() or not path.exists()):
+        raise HTTPException(status_code=404, detail=f"Loot file not found: {name}")
+    return path
 
 
 def _read_interface_driver(interface: str) -> tuple[str, str]:
@@ -472,6 +517,42 @@ def create_app(
     @app.get("/api/interfaces", dependencies=[Depends(_require_auth)])
     async def api_interfaces():
         return collect_interface_payload()
+
+    @app.get("/api/portals", dependencies=[Depends(_require_auth)])
+    async def api_portals():
+        return {"templates": list_portal_templates()}
+
+    @app.get("/api/loot", dependencies=[Depends(_require_auth)])
+    async def api_loot():
+        return {"files": list_loot_files()}
+
+    @app.get("/api/loot/view", dependencies=[Depends(_require_auth)])
+    async def api_loot_view(
+        name: str = Query(default="", min_length=1),
+        tail: int = Query(default=300, ge=20, le=5000),
+    ):
+        path = resolve_loot_file(name, must_exist=True)
+        stat = path.stat()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
+        truncated = False
+        if len(lines) > tail:
+            lines = lines[-tail:]
+            truncated = True
+        return {
+            "name": path.name,
+            "size_bytes": stat.st_size,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
+            "line_count": len(lines),
+            "truncated": truncated,
+            "text": "\n".join(lines),
+        }
+
+    @app.delete("/api/loot", dependencies=[Depends(_require_auth)])
+    async def api_loot_delete(name: str = Query(default="", min_length=1)):
+        path = resolve_loot_file(name, must_exist=True)
+        path.unlink(missing_ok=False)
+        return {"deleted": path.name}
 
     @app.get("/api/tasks", dependencies=[Depends(_require_auth)])
     async def api_tasks():
