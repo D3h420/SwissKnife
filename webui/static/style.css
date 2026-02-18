@@ -322,10 +322,6 @@ body {
   align-items: start;
 }
 
-.attacks-grid {
-  grid-template-columns: 1fr;
-}
-
 .action-card {
   border: 1px solid rgba(95, 148, 189, 0.35);
   border-radius: 16px;
@@ -355,66 +351,92 @@ body {
   font-size: var(--content-size);
 }
 
-.attack-card {
-  padding: 0;
-  overflow: hidden;
-}
-
-.attack-toggle {
-  width: 100%;
-  height: auto;
-  min-height: 0;
-  border: 0;
-  border-radius: 0;
-  padding: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  justify-content: space-between;
-  background: rgba(9, 19, 30, 0.85);
-}
-
-.attack-toggle:hover {
-  transform: none;
-  box-shadow: none;
-}
-
-.attack-heading {
+.attacks-workspace {
   display: grid;
-  gap: 5px;
-  text-align: left;
-  min-width: 0;
+  gap: 10px;
 }
 
-.attack-heading h3 {
+.attack-quick-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+}
+
+.attack-quick-btn {
+  min-height: 78px;
+  height: auto;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+  text-align: left;
+  padding: 10px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(91, 165, 206, 0.45);
+  background: linear-gradient(165deg, rgba(10, 27, 43, 0.96), rgba(7, 15, 26, 0.94));
+}
+
+.attack-quick-btn:hover {
+  transform: translateY(-1px);
+}
+
+.attack-quick-btn.active {
+  box-shadow:
+    0 0 0 1px rgba(83, 245, 232, 0.45),
+    0 0 20px rgba(48, 223, 230, 0.35);
+}
+
+.attack-quick-btn[data-attack-id="deauth"] {
+  border-color: rgba(76, 237, 223, 0.66);
+  background: linear-gradient(160deg, rgba(9, 59, 63, 0.96), rgba(8, 18, 31, 0.95));
+}
+
+.attack-quick-btn[data-attack-id="portal"] {
+  border-color: rgba(255, 198, 90, 0.66);
+  background: linear-gradient(160deg, rgba(58, 45, 13, 0.96), rgba(12, 18, 31, 0.95));
+}
+
+.attack-quick-btn[data-attack-id="twins"] {
+  border-color: rgba(255, 109, 121, 0.66);
+  background: linear-gradient(160deg, rgba(64, 20, 29, 0.96), rgba(12, 18, 31, 0.95));
+}
+
+.attack-quick-btn[data-attack-id="handshaker"] {
+  border-color: rgba(98, 247, 158, 0.66);
+  background: linear-gradient(160deg, rgba(19, 50, 32, 0.96), rgba(9, 18, 30, 0.95));
+}
+
+.attack-quick-btn[data-attack-id="karma"] {
+  border-color: rgba(140, 174, 200, 0.55);
+  background: linear-gradient(160deg, rgba(22, 31, 43, 0.96), rgba(8, 14, 23, 0.95));
+}
+
+.attack-quick-title {
   margin: 0;
-  font-size: 0.95rem;
   font-family: "Orbitron", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  font-size: 0.84rem;
 }
 
-.attack-subtitle {
-  color: var(--text-muted);
-  font-size: var(--content-size-sm);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.attack-quick-status {
+  font-size: var(--content-size-xs);
+  color: #b8e3fd;
+  letter-spacing: 0.05em;
 }
 
-.attack-chevron {
-  color: #8cc6df;
-  font-size: 1rem;
-  transform: rotate(90deg);
-  transition: transform 160ms ease;
+.attack-quick-desc {
+  font-size: var(--content-size-xs);
+  color: #86b7d5;
+  line-height: 1.25;
 }
 
-.attack-card.expanded .attack-chevron {
-  transform: rotate(-90deg);
+.attack-detail-wrap {
+  min-width: 0;
 }
 
-.attack-body {
-  padding: 0 12px 12px;
+.attack-focus-card .control-grid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .control-grid {
@@ -997,6 +1019,10 @@ button.danger {
 
   .action-grid {
     grid-template-columns: 1fr;
+  }
+
+  .attack-quick-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .loot-layout {

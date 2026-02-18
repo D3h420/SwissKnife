@@ -865,56 +865,63 @@ function createActionCard(item, sectionId) {
   return card;
 }
 
-function createAttackCard(item) {
-  const card = document.createElement("article");
-  card.className = "action-card attack-card";
-  const isExpanded = state.expandedAttackId === item.id;
-  if (isExpanded) {
-    card.classList.add("expanded");
-  }
-
+function createAttackQuickButton(item) {
+  const isActive = state.expandedAttackId === item.id;
   const controls = Array.isArray(item.controls) ? item.controls : [];
   const availability = evaluateActionAvailability(item, controls);
 
-  const toggle = document.createElement("button");
-  toggle.type = "button";
-  toggle.className = "attack-toggle";
-  toggle.setAttribute("aria-expanded", isExpanded ? "true" : "false");
-
-  const heading = document.createElement("div");
-  heading.className = "attack-heading";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `attack-quick-btn${isActive ? " active" : ""}`;
+  button.dataset.attackId = item.id || "";
+  button.setAttribute("aria-pressed", isActive ? "true" : "false");
 
   const title = document.createElement("h3");
   title.textContent = item.label;
-  heading.appendChild(title);
+  title.className = "attack-quick-title";
+  button.appendChild(title);
+
+  const status = document.createElement("span");
+  status.className = "attack-quick-status";
+  status.textContent = availability.statusText;
+  button.appendChild(status);
 
   const subtitle = document.createElement("span");
-  subtitle.className = "attack-subtitle";
+  subtitle.className = "attack-quick-desc";
   subtitle.textContent = item.description || "";
-  heading.appendChild(subtitle);
+  button.appendChild(subtitle);
 
-  toggle.appendChild(heading);
-  toggle.appendChild(createStatusChip(availability.statusClass, availability.statusText));
-
-  const chevron = document.createElement("span");
-  chevron.className = "attack-chevron";
-  chevron.textContent = ">";
-  toggle.appendChild(chevron);
-
-  toggle.addEventListener("click", () => {
-    state.expandedAttackId = state.expandedAttackId === item.id ? null : item.id;
+  button.addEventListener("click", () => {
+    state.expandedAttackId = item.id;
     renderSection();
   });
+  return button;
+}
 
-  card.appendChild(toggle);
+function renderAttacksSection(items) {
+  if (!state.expandedAttackId || !items.some((item) => item.id === state.expandedAttackId)) {
+    state.expandedAttackId = items[0]?.id || null;
+  }
 
-  const body = document.createElement("div");
-  body.className = "attack-body";
-  body.hidden = !isExpanded;
-  appendCardBody(body, item, "attacks", card, controls, availability);
-  card.appendChild(body);
+  const workspace = document.createElement("div");
+  workspace.className = "attacks-workspace";
 
-  return card;
+  const quickGrid = document.createElement("div");
+  quickGrid.className = "attack-quick-grid";
+  items.forEach((item) => quickGrid.appendChild(createAttackQuickButton(item)));
+  workspace.appendChild(quickGrid);
+
+  const selected = items.find((item) => item.id === state.expandedAttackId) || null;
+  if (selected) {
+    const detailWrap = document.createElement("div");
+    detailWrap.className = "attack-detail-wrap";
+    const selectedCard = createActionCard(selected, "attacks");
+    selectedCard.classList.add("attack-focus-card");
+    detailWrap.appendChild(selectedCard);
+    workspace.appendChild(detailWrap);
+  }
+
+  dom.sectionBody.appendChild(workspace);
 }
 
 function renderSection() {
@@ -985,13 +992,7 @@ function renderSection() {
     }
 
     if (section.id === "attacks") {
-      if (!state.expandedAttackId || !items.some((item) => item.id === state.expandedAttackId)) {
-        state.expandedAttackId = items[0]?.id || null;
-      }
-      const attacksGrid = document.createElement("div");
-      attacksGrid.className = "action-grid attacks-grid";
-      items.forEach((item) => attacksGrid.appendChild(createAttackCard(item)));
-      dom.sectionBody.appendChild(attacksGrid);
+      renderAttacksSection(items);
       return;
     }
 
