@@ -8,6 +8,7 @@ import logging
 import os
 import secrets
 import shlex
+import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -138,6 +139,36 @@ MENU_SCHEMA = {
                     "type": "module",
                     "module_id": "deauth",
                     "description": "Deauthentication workflow.",
+                    "controls": [
+                        {
+                            "id": "interface",
+                            "label": "Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "default": "auto",
+                        },
+                        {
+                            "id": "scan_depth",
+                            "label": "Scan Depth",
+                            "kind": "range",
+                            "min": 10,
+                            "max": 90,
+                            "step": 5,
+                            "default": 25,
+                            "suffix": "s",
+                        },
+                        {
+                            "id": "method",
+                            "label": "Method",
+                            "kind": "select",
+                            "options": [
+                                {"value": "deauth", "label": "deauth"},
+                                {"value": "mdk4", "label": "mdk4"},
+                                {"value": "bully", "label": "bully"},
+                            ],
+                            "default": "deauth",
+                        },
+                    ],
                 },
                 {
                     "id": "portal",
@@ -145,6 +176,36 @@ MENU_SCHEMA = {
                     "type": "module",
                     "module_id": "portal",
                     "description": "Captive portal workflow.",
+                    "controls": [
+                        {
+                            "id": "ap_interface",
+                            "label": "AP Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "default": "auto",
+                        },
+                        {
+                            "id": "scan_duration",
+                            "label": "Scan Time",
+                            "kind": "range",
+                            "min": 10,
+                            "max": 120,
+                            "step": 5,
+                            "default": 25,
+                            "suffix": "s",
+                        },
+                        {
+                            "id": "portal_type",
+                            "label": "Portal",
+                            "kind": "select",
+                            "options": [
+                                {"value": "default", "label": "default"},
+                                {"value": "router", "label": "router style"},
+                                {"value": "custom", "label": "custom"},
+                            ],
+                            "default": "default",
+                        },
+                    ],
                 },
                 {
                     "id": "twins",
@@ -152,6 +213,32 @@ MENU_SCHEMA = {
                     "type": "module",
                     "module_id": "twins",
                     "description": "Rogue AP + portal workflow.",
+                    "controls": [
+                        {
+                            "id": "attack_interface",
+                            "label": "Attack Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "default": "auto",
+                        },
+                        {
+                            "id": "ap_interface",
+                            "label": "AP Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "default": "auto",
+                        },
+                        {
+                            "id": "scan_duration",
+                            "label": "Recon Time",
+                            "kind": "range",
+                            "min": 10,
+                            "max": 120,
+                            "step": 5,
+                            "default": 25,
+                            "suffix": "s",
+                        },
+                    ],
                 },
                 {
                     "id": "handshaker",
@@ -160,6 +247,25 @@ MENU_SCHEMA = {
                     "module_id": "handshaker",
                     "description": "Under construction module.",
                     "under_construction": True,
+                    "controls": [
+                        {
+                            "id": "interface",
+                            "label": "Interface",
+                            "kind": "select",
+                            "source": "tool_interfaces",
+                            "default": "auto",
+                        },
+                        {
+                            "id": "scan_duration",
+                            "label": "Scan Time",
+                            "kind": "range",
+                            "min": 10,
+                            "max": 120,
+                            "step": 5,
+                            "default": 25,
+                            "suffix": "s",
+                        },
+                    ],
                 },
                 {
                     "id": "karma",
@@ -178,6 +284,28 @@ MENU_SCHEMA = {
             "type": "module",
             "module_id": "bluetooth",
             "description": "Bluetooth and BLE workflows.",
+            "controls": [
+                {
+                    "id": "scan_mode",
+                    "label": "Mode",
+                    "kind": "select",
+                    "options": [
+                        {"value": "bt", "label": "Bluetooth"},
+                        {"value": "ble", "label": "BLE"},
+                    ],
+                    "default": "bt",
+                },
+                {
+                    "id": "timeout",
+                    "label": "Timeout",
+                    "kind": "range",
+                    "min": 10,
+                    "max": 180,
+                    "step": 5,
+                    "default": 30,
+                    "suffix": "s",
+                },
+            ],
         },
         {
             "id": "exit",
@@ -190,6 +318,49 @@ MENU_SCHEMA = {
 }
 
 
+def _read_interface_driver(interface: str) -> tuple[str, str]:
+    try:
+        result = subprocess.run(
+            ["ethtool", "-i", interface],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return "unknown", ""
+    if result.returncode != 0:
+        return "unknown", ""
+
+    driver = "unknown"
+    bus_info = ""
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line.startswith("driver:"):
+            value = line.split(":", 1)[1].strip()
+            if value:
+                driver = value
+        if line.startswith("bus-info:"):
+            value = line.split(":", 1)[1].strip()
+            if value:
+                bus_info = value
+    return driver, bus_info
+
+
+def _interface_payload(interface: str, builtin_iface: str) -> dict:
+    driver, bus_info = _read_interface_driver(interface)
+    label = f"{interface} · {driver}" if driver else interface
+    if bus_info:
+        label = f"{label} ({bus_info})"
+    return {
+        "name": interface,
+        "driver": driver,
+        "bus_info": bus_info,
+        "is_builtin": interface == builtin_iface,
+        "label": label,
+    }
+
+
 def collect_interface_payload() -> dict:
     try:
         builtin_iface = detect_builtin_wireless_interface()
@@ -197,12 +368,15 @@ def collect_interface_payload() -> dict:
         builtin_iface = ""
 
     all_wireless = list_wireless_interfaces()
-    tool_wireless = [iface for iface in all_wireless if iface != builtin_iface]
+    all_details = [_interface_payload(iface, builtin_iface) for iface in all_wireless]
+    tool_details = [entry for entry in all_details if not entry["is_builtin"]]
 
     return {
         "builtin_interface": builtin_iface,
-        "all_wireless": all_wireless,
-        "tool_interfaces": tool_wireless,
+        "all_wireless": [entry["name"] for entry in all_details],
+        "all_interfaces": all_details,
+        "tool_interfaces": tool_details,
+        "tool_interface_names": [entry["name"] for entry in tool_details],
     }
 
 

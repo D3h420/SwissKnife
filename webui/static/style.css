@@ -29,6 +29,7 @@ body {
 body {
   color: var(--text);
   font-family: "Exo 2", "Segoe UI", sans-serif;
+  font-size: 15px;
   background:
     radial-gradient(circle at 8% 12%, rgba(54, 246, 234, 0.17), transparent 32%),
     radial-gradient(circle at 88% 6%, rgba(255, 198, 90, 0.16), transparent 26%),
@@ -130,7 +131,7 @@ body {
 .brand-wrap p {
   margin: 6px 0 0;
   color: var(--text-muted);
-  font-size: 1rem;
+  font-size: 0.92rem;
 }
 
 .topbar-controls label {
@@ -174,7 +175,7 @@ body {
   font-family: "Orbitron", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  font-size: 0.98rem;
+  font-size: 0.9rem;
 }
 
 .panel-actions {
@@ -193,7 +194,7 @@ body {
 .section-description {
   margin: 6px 0 0;
   color: var(--text-muted);
-  font-size: 0.94rem;
+  font-size: 0.9rem;
 }
 
 .menu-list {
@@ -259,13 +260,12 @@ body {
   padding: 12px;
   display: grid;
   gap: 10px;
-  max-height: 36vh;
-  overflow: auto;
+  overflow: visible;
 }
 
 .action-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
   gap: 12px;
 }
 
@@ -283,7 +283,7 @@ body {
 
 .action-card h3 {
   margin: 0;
-  font-size: 1.2rem;
+  font-size: 1rem;
   font-family: "Orbitron", sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -293,13 +293,32 @@ body {
   margin: 8px 0 12px;
   color: var(--text-muted);
   line-height: 1.35;
-  min-height: 2.5em;
+  min-height: 0;
+  font-size: 0.9rem;
 }
 
 .control-grid {
   display: grid;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.adapter-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.adapter-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 167, 208, 0.44);
+  background: rgba(9, 24, 37, 0.86);
+  color: #9fd3f6;
+  font-size: 0.78rem;
 }
 
 .control-field {
@@ -312,6 +331,12 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: #9dc2da;
+}
+
+.control-note {
+  color: #6da6c9;
+  font-size: 0.74rem;
+  line-height: 1.25;
 }
 
 .range-row {
@@ -367,6 +392,12 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px;
 }
 
+.touch-hint {
+  margin: -2px 0 10px;
+  font-size: 0.8rem;
+  color: #81c4de;
+}
+
 .status-chip {
   display: inline-flex;
   align-items: center;
@@ -394,7 +425,7 @@ input[type="range"]::-moz-range-thumb {
   padding: 12px;
   display: grid;
   gap: 8px;
-  max-height: 26vh;
+  max-height: 24vh;
   overflow: auto;
 }
 
@@ -440,13 +471,13 @@ input[type="range"]::-moz-range-thumb {
 .task-detail {
   margin-top: 6px;
   color: var(--text-muted);
-  font-size: 0.83rem;
+  font-size: 0.8rem;
 }
 
 .results-view {
   flex: 1;
-  min-height: 24vh;
-  max-height: 38vh;
+  min-height: 20vh;
+  max-height: 44vh;
   overflow: auto;
   padding: 12px;
   display: grid;
@@ -502,6 +533,71 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.4;
 }
 
+.prompt-bar {
+  border: 1px solid rgba(89, 170, 209, 0.45);
+  border-radius: 12px;
+  padding: 8px 10px;
+  color: #b3dbf5;
+  font-size: 0.82rem;
+  background: rgba(8, 18, 30, 0.88);
+}
+
+.wizard-pad {
+  display: grid;
+  gap: 9px;
+}
+
+.wizard-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 8px;
+}
+
+.quick-btn {
+  min-height: 44px;
+  height: auto;
+  border-radius: 14px;
+  border-color: rgba(90, 180, 222, 0.45);
+  background: linear-gradient(165deg, rgba(12, 30, 47, 0.95), rgba(8, 17, 30, 0.93));
+  color: #c8eeff;
+  font-size: 0.87rem;
+}
+
+.quick-btn.accent {
+  border-color: rgba(82, 244, 233, 0.74);
+  color: #b6fff6;
+  background: linear-gradient(160deg, rgba(8, 64, 69, 0.94), rgba(7, 16, 28, 0.95));
+}
+
+.log-feed {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: rgba(7, 14, 24, 0.9);
+  max-height: 190px;
+  overflow: auto;
+  color: #92bbd6;
+  font-size: 0.8rem;
+}
+
+.status-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.status-list li {
+  border-bottom: 1px dashed rgba(84, 127, 161, 0.3);
+  padding-bottom: 5px;
+}
+
+.status-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
 .hint {
   min-height: 1.2rem;
   margin: 8px 0 0;
@@ -530,10 +626,10 @@ select,
 button {
   border-radius: 14px;
   border: 1px solid var(--stroke);
-  height: 40px;
+  height: 38px;
   color: var(--text);
   font-family: "Exo 2", sans-serif;
-  font-size: 0.97rem;
+  font-size: 0.9rem;
   background: rgba(8, 15, 25, 0.9);
   padding: 0 12px;
 }
@@ -602,5 +698,31 @@ button.danger {
   .menu-panel,
   .center-panel {
     min-height: auto;
+  }
+
+  .menu-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px;
+  }
+
+  .menu-btn {
+    height: 56px;
+  }
+
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tasks-list {
+    max-height: 28vh;
+  }
+
+  .results-view {
+    max-height: 42vh;
+  }
+
+  .quick-btn {
+    min-height: 52px;
+    font-size: 0.94rem;
   }
 }
