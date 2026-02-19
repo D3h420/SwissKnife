@@ -15,20 +15,16 @@
   <div class="background-glow background-glow-b" aria-hidden="true"></div>
 
   <section id="introGate" class="intro-gate">
-    <div class="intro-card panel">
-      <div class="intro-media">
-        <div class="intro-logo-slot">Logo / Image slot</div>
-        <p>SwissKnife secure access panel.</p>
-      </div>
-      <div class="intro-login">
-        <h2>Enter Password</h2>
-        <p class="section-description">Default (if unchanged): <strong>SwissKnife</strong></p>
-        <div class="token-row">
-          <input id="introPasswordInput" type="password" autocomplete="current-password" placeholder="Password">
-          <button id="introLoginBtn" type="button" class="primary">Enter</button>
-        </div>
-        <p id="introHint" class="hint"></p>
-      </div>
+    <canvas id="matrixCanvas" class="matrix-canvas" aria-hidden="true"></canvas>
+    <div class="intro-content">
+      <img id="introLogo" class="intro-logo" src="/static/intro-logo.png" alt="SwissKnife logo" onerror="this.hidden=true;document.getElementById('introLogoFallback').hidden=false;">
+      <div id="introLogoFallback" class="intro-logo-fallback" hidden>SWISSKNIFE</div>
+      <form id="introLoginForm" class="intro-form" autocomplete="on">
+        <label for="introPasswordInput">Password</label>
+        <input id="introPasswordInput" type="password" autocomplete="current-password" placeholder="SwissKnife">
+        <button id="introLoginBtn" type="submit" class="primary">Unlock</button>
+      </form>
+      <p id="introHint" class="hint"></p>
     </div>
   </section>
 

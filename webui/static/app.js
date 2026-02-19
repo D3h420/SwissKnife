@@ -295,9 +295,21 @@ const state = {
   pollHandle: null,
 };
 
+const matrix = {
+  fontSize: 18,
+  chars: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#$%*+=<>[]{}",
+  rafId: 0,
+  lastTick: 0,
+  columns: 0,
+  drops: [],
+  running: false,
+};
+
 const dom = {
   appShell: document.getElementById("appShell"),
   introGate: document.getElementById("introGate"),
+  matrixCanvas: document.getElementById("matrixCanvas"),
+  introLoginForm: document.getElementById("introLoginForm"),
   introPasswordInput: document.getElementById("introPasswordInput"),
   introLoginBtn: document.getElementById("introLoginBtn"),
   introHint: document.getElementById("introHint"),
@@ -344,6 +356,90 @@ function setIntroHint(message, level = "") {
   }
 }
 
+function resetMatrix() {
+  if (!dom.matrixCanvas) {
+    return;
+  }
+  const canvas = dom.matrixCanvas;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    return;
+  }
+
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, window.innerWidth);
+  const height = Math.max(1, window.innerHeight);
+  canvas.width = Math.floor(width * dpr);
+  canvas.height = Math.floor(height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = "#020a03";
+  ctx.fillRect(0, 0, width, height);
+
+  matrix.columns = Math.max(1, Math.floor(width / matrix.fontSize));
+  matrix.drops = Array.from({ length: matrix.columns }, () => Math.floor(Math.random() * -30));
+}
+
+function drawMatrixFrame(timestamp = 0) {
+  if (!matrix.running || !dom.matrixCanvas) {
+    return;
+  }
+
+  const delta = timestamp - matrix.lastTick;
+  if (delta < 42) {
+    matrix.rafId = window.requestAnimationFrame(drawMatrixFrame);
+    return;
+  }
+  matrix.lastTick = timestamp;
+
+  const canvas = dom.matrixCanvas;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    matrix.rafId = window.requestAnimationFrame(drawMatrixFrame);
+    return;
+  }
+
+  const width = canvas.width / (window.devicePixelRatio || 1);
+  const height = canvas.height / (window.devicePixelRatio || 1);
+
+  ctx.fillStyle = "rgba(2, 10, 4, 0.14)";
+  ctx.fillRect(0, 0, width, height);
+  ctx.font = `${matrix.fontSize}px "JetBrains Mono", monospace`;
+  ctx.fillStyle = "#7aff96";
+
+  for (let index = 0; index < matrix.columns; index += 1) {
+    const char = matrix.chars[Math.floor(Math.random() * matrix.chars.length)];
+    const x = index * matrix.fontSize;
+    const y = matrix.drops[index] * matrix.fontSize;
+    ctx.fillText(char, x, y);
+
+    if (y > height && Math.random() > 0.976) {
+      matrix.drops[index] = 0;
+    } else {
+      matrix.drops[index] += 1;
+    }
+  }
+
+  matrix.rafId = window.requestAnimationFrame(drawMatrixFrame);
+}
+
+function startMatrixRain() {
+  if (matrix.running) {
+    return;
+  }
+  matrix.running = true;
+  matrix.lastTick = 0;
+  resetMatrix();
+  matrix.rafId = window.requestAnimationFrame(drawMatrixFrame);
+}
+
+function stopMatrixRain() {
+  matrix.running = false;
+  if (matrix.rafId) {
+    window.cancelAnimationFrame(matrix.rafId);
+    matrix.rafId = 0;
+  }
+}
+
 function showIntro(message = "") {
   state.unlocked = false;
   if (dom.appShell) {
@@ -363,6 +459,7 @@ function showIntro(message = "") {
   } else {
     setIntroHint("");
   }
+  startMatrixRain();
   if (dom.introPasswordInput) {
     dom.introPasswordInput.focus();
   }
@@ -376,6 +473,7 @@ function showApp() {
   if (dom.appShell) {
     dom.appShell.hidden = false;
   }
+  stopMatrixRain();
   setIntroHint("");
 }
 
@@ -2099,17 +2197,20 @@ async function unlockFromIntro() {
 }
 
 function installHandlers() {
-  if (dom.introLoginBtn) {
+  if (dom.introLoginForm) {
+    dom.introLoginForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      unlockFromIntro();
+    });
+  } else if (dom.introLoginBtn) {
     dom.introLoginBtn.addEventListener("click", unlockFromIntro);
   }
-  if (dom.introPasswordInput) {
-    dom.introPasswordInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        unlockFromIntro();
-      }
-    });
-  }
+
+  window.addEventListener("resize", () => {
+    if (matrix.running) {
+      resetMatrix();
+    }
+  });
 
   if (dom.settingsToggleBtn) {
     dom.settingsToggleBtn.addEventListener("click", () => {
