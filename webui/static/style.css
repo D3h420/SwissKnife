@@ -80,6 +80,64 @@ body {
   z-index: 1;
 }
 
+.intro-gate {
+  position: relative;
+  z-index: 2;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+}
+
+.intro-card {
+  width: min(860px, 100%);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 18px;
+}
+
+.intro-media {
+  border: 1px dashed rgba(107, 159, 199, 0.46);
+  border-radius: 18px;
+  min-height: 240px;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: rgba(7, 15, 26, 0.8);
+}
+
+.intro-logo-slot {
+  width: min(280px, 92%);
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  border: 1px solid rgba(95, 163, 204, 0.4);
+  display: grid;
+  place-items: center;
+  color: #89bad8;
+  background: linear-gradient(145deg, rgba(11, 31, 49, 0.92), rgba(7, 15, 25, 0.9));
+}
+
+.intro-login {
+  display: grid;
+  align-content: center;
+  gap: 8px;
+}
+
+.intro-login .token-row input {
+  flex: 1;
+}
+
+.intro-login h2 {
+  margin: 0;
+  font-family: "Orbitron", sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: 1.05rem;
+}
+
 .panel {
   background:
     linear-gradient(175deg, rgba(11, 23, 39, 0.94), rgba(7, 14, 24, 0.9));
@@ -145,9 +203,56 @@ body {
   font-size: var(--content-size);
 }
 
+.topbar-controls {
+  display: grid;
+  justify-items: end;
+  align-content: center;
+  gap: 8px;
+}
+
 .token-row {
   display: flex;
   gap: 10px;
+  align-items: center;
+}
+
+.settings-wrap {
+  position: relative;
+}
+
+.gear-btn {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  font-size: 1.12rem;
+  border-radius: 999px;
+  border-color: rgba(80, 238, 228, 0.6);
+  background: linear-gradient(165deg, rgba(11, 31, 50, 0.94), rgba(7, 14, 24, 0.9));
+  box-shadow: 0 0 22px rgba(54, 244, 236, 0.24);
+}
+
+.settings-menu {
+  position: absolute;
+  right: 0;
+  top: 50px;
+  width: min(280px, 78vw);
+  border: 1px solid rgba(82, 148, 190, 0.45);
+  border-radius: 14px;
+  background: rgba(6, 13, 24, 0.97);
+  box-shadow: var(--shadow);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  z-index: 20;
+}
+
+.settings-inline {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-menu button {
+  width: 100%;
 }
 
 .layout {
@@ -275,11 +380,8 @@ body {
   padding: 10px 12px 12px;
   display: grid;
   gap: 10px;
-  overflow: auto;
-  max-height: clamp(260px, 46vh, 560px);
-  min-height: 0;
-  flex-shrink: 0;
-  scrollbar-gutter: stable both-edges;
+  overflow: visible;
+  max-height: none;
 }
 
 .section-body,
@@ -989,6 +1091,14 @@ button.danger {
 }
 
 @media (max-width: 920px) {
+  .intro-card {
+    grid-template-columns: 1fr;
+  }
+
+  .intro-media {
+    min-height: 170px;
+  }
+
   .topbar {
     grid-template-columns: 1fr;
   }

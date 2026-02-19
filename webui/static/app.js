@@ -268,7 +268,9 @@ const FALLBACK_MENU = {
 
 const state = {
   token: localStorage.getItem("swissknife.webui.token") || "",
+  panelSession: localStorage.getItem("swissknife.webui.panel_session") || "",
   authRequired: false,
+  unlocked: false,
   menu: FALLBACK_MENU.main,
   selectedSectionId: null,
   moduleById: {},
@@ -294,8 +296,18 @@ const state = {
 };
 
 const dom = {
-  tokenInput: document.getElementById("tokenInput"),
-  saveTokenBtn: document.getElementById("saveTokenBtn"),
+  appShell: document.getElementById("appShell"),
+  introGate: document.getElementById("introGate"),
+  introPasswordInput: document.getElementById("introPasswordInput"),
+  introLoginBtn: document.getElementById("introLoginBtn"),
+  introHint: document.getElementById("introHint"),
+  settingsToggleBtn: document.getElementById("settingsToggleBtn"),
+  settingsMenu: document.getElementById("settingsMenu"),
+  openPasswordChangeBtn: document.getElementById("openPasswordChangeBtn"),
+  passwordChangePanel: document.getElementById("passwordChangePanel"),
+  newPasswordInput: document.getElementById("newPasswordInput"),
+  changePasswordBtn: document.getElementById("changePasswordBtn"),
+  turnOffBtn: document.getElementById("turnOffBtn"),
   authHint: document.getElementById("authHint"),
   refreshMenuBtn: document.getElementById("refreshMenuBtn"),
   mainMenu: document.getElementById("mainMenu"),
@@ -311,11 +323,67 @@ const dom = {
 };
 
 function setHint(message, level = "") {
+  if (!dom.authHint) {
+    return;
+  }
   dom.authHint.textContent = message;
   dom.authHint.classList.remove("success", "error");
   if (level) {
     dom.authHint.classList.add(level);
   }
+}
+
+function setIntroHint(message, level = "") {
+  if (!dom.introHint) {
+    return;
+  }
+  dom.introHint.textContent = message;
+  dom.introHint.classList.remove("success", "error");
+  if (level) {
+    dom.introHint.classList.add(level);
+  }
+}
+
+function showIntro(message = "") {
+  state.unlocked = false;
+  if (dom.appShell) {
+    dom.appShell.hidden = true;
+  }
+  if (dom.introGate) {
+    dom.introGate.hidden = false;
+  }
+  if (dom.settingsMenu) {
+    dom.settingsMenu.hidden = true;
+  }
+  if (dom.passwordChangePanel) {
+    dom.passwordChangePanel.hidden = true;
+  }
+  if (message) {
+    setIntroHint(message, "error");
+  } else {
+    setIntroHint("");
+  }
+  if (dom.introPasswordInput) {
+    dom.introPasswordInput.focus();
+  }
+}
+
+function showApp() {
+  state.unlocked = true;
+  if (dom.introGate) {
+    dom.introGate.hidden = true;
+  }
+  if (dom.appShell) {
+    dom.appShell.hidden = false;
+  }
+  setIntroHint("");
+}
+
+function lockPanel(message = "Session expired. Enter password again.") {
+  state.unlocked = false;
+  state.panelSession = "";
+  localStorage.removeItem("swissknife.webui.panel_session");
+  showIntro(message);
 }
 
 function isUnauthorizedError(error) {
@@ -326,6 +394,9 @@ async function apiFetch(path, options = {}) {
   const headers = Object.assign({}, options.headers || {});
   if (state.token) {
     headers["X-SwissKnife-Token"] = state.token;
+  }
+  if (state.panelSession) {
+    headers["X-SwissKnife-Panel-Session"] = state.panelSession;
   }
   if (options.body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -1345,7 +1416,7 @@ async function sendTaskInput(taskId, text, successLabel = "Command sent") {
     await loadTaskLogs(taskId, true);
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Input failed: ${error.message}`, "error");
@@ -1534,13 +1605,117 @@ async function loadMeta() {
   try {
     const data = await fetch("/api/meta").then((response) => response.json());
     state.authRequired = Boolean(data.auth_required);
-    if (state.authRequired) {
-      setHint("Token required. Paste token and click Apply.");
-    } else {
-      setHint("Auth disabled on server.", "success");
-    }
+    setHint("Panel ready.", "success");
   } catch (_error) {
     setHint("Meta unavailable. Open panel through web server, not local file path.", "error");
+  }
+}
+
+async function gateLogin(password) {
+  const response = await fetch("/api/gate/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ password }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || "Login failed.");
+  }
+
+  const sessionToken = String(payload.session_token || "").trim();
+  if (!sessionToken) {
+    throw new Error("Missing panel session token.");
+  }
+  state.panelSession = sessionToken;
+  localStorage.setItem("swissknife.webui.panel_session", sessionToken);
+
+  if (payload.api_token) {
+    state.token = String(payload.api_token);
+    localStorage.setItem("swissknife.webui.token", state.token);
+  }
+}
+
+async function restorePanelSession() {
+  if (!state.panelSession) {
+    return false;
+  }
+  try {
+    const headers = {
+      "X-SwissKnife-Panel-Session": state.panelSession,
+    };
+    const response = await fetch("/api/gate/session", { headers });
+    if (response.status === 401) {
+      return false;
+    }
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) {
+      return false;
+    }
+    if (payload.api_token) {
+      state.token = String(payload.api_token);
+      localStorage.setItem("swissknife.webui.token", state.token);
+    }
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function changePanelPassword() {
+  const nextPassword = (dom.newPasswordInput?.value || "").trim();
+  if (nextPassword.length < 4) {
+    setHint("Password must be at least 4 characters.", "error");
+    return;
+  }
+  try {
+    const payload = await apiFetch("/api/gate/change-password", {
+      method: "POST",
+      body: {
+        new_password: nextPassword,
+      },
+    });
+    const sessionToken = String(payload.session_token || "").trim();
+    if (sessionToken) {
+      state.panelSession = sessionToken;
+      localStorage.setItem("swissknife.webui.panel_session", sessionToken);
+    }
+    if (dom.newPasswordInput) {
+      dom.newPasswordInput.value = "";
+    }
+    if (dom.passwordChangePanel) {
+      dom.passwordChangePanel.hidden = true;
+    }
+    if (dom.settingsMenu) {
+      dom.settingsMenu.hidden = true;
+    }
+    setHint("Password changed.", "success");
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      lockPanel("Session expired. Enter password again.");
+      return;
+    }
+    setHint(`Password change failed: ${error.message}`, "error");
+  }
+}
+
+async function turnOffSystem() {
+  try {
+    await apiFetch("/api/system/turn-off", { method: "POST" });
+    if (dom.settingsMenu) {
+      dom.settingsMenu.hidden = true;
+    }
+    setHint("Turn off requested. Closing services...", "success");
+    setTimeout(() => {
+      window.location.reload();
+    }, 2000);
+  } catch (error) {
+    if (isUnauthorizedError(error)) {
+      lockPanel("Session expired. Enter password again.");
+      return;
+    }
+    setHint(`Turn off failed: ${error.message}`, "error");
   }
 }
 
@@ -1551,7 +1726,7 @@ async function loadMenu() {
     state.menu = main;
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       state.menu = FALLBACK_MENU.main;
     } else {
       state.menu = FALLBACK_MENU.main;
@@ -1577,7 +1752,7 @@ async function loadModules() {
     renderSection();
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Failed to load modules: ${error.message}`, "error");
@@ -1625,7 +1800,7 @@ async function loadInterfaces() {
     renderSection();
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Failed to load interfaces: ${error.message}`, "error");
@@ -1643,7 +1818,7 @@ async function loadPortalTemplates(silent = false) {
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
-        setHint("Unauthorized. Provide valid token.", "error");
+        lockPanel("Session expired. Enter password again.");
       }
       return;
     }
@@ -1664,7 +1839,7 @@ async function loadLootContent(fileName, silent = false) {
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
-        setHint("Unauthorized. Provide valid token.", "error");
+        lockPanel("Session expired. Enter password again.");
       }
       return;
     }
@@ -1702,7 +1877,7 @@ async function loadLootFiles(silent = false) {
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
-        setHint("Unauthorized. Provide valid token.", "error");
+        lockPanel("Session expired. Enter password again.");
       }
       return;
     }
@@ -1724,7 +1899,7 @@ async function deleteLootFile(fileName) {
     }
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Delete failed: ${error.message}`, "error");
@@ -1759,7 +1934,7 @@ async function loadTaskLogs(taskId, silent = false) {
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
-        setHint("Unauthorized. Provide valid token.", "error");
+        lockPanel("Session expired. Enter password again.");
       }
       return;
     }
@@ -1781,7 +1956,7 @@ async function loadTaskResult(taskId, silent = false) {
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
-        setHint("Unauthorized. Provide valid token.", "error");
+        lockPanel("Session expired. Enter password again.");
       }
       return;
     }
@@ -1815,7 +1990,7 @@ async function loadTasks() {
     renderResultView();
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Failed to load tasks: ${error.message}`, "error");
@@ -1844,7 +2019,7 @@ async function startModule(moduleId, args = []) {
     }
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Start failed: ${error.message}`, "error");
@@ -1863,7 +2038,7 @@ async function stopActiveTask() {
     setHint(`Stop signal sent to ${state.activeTaskId}.`, "success");
   } catch (error) {
     if (isUnauthorizedError(error)) {
-      setHint("Unauthorized. Provide valid token.", "error");
+      lockPanel("Session expired. Enter password again.");
       return;
     }
     setHint(`Stop failed: ${error.message}`, "error");
@@ -1885,20 +2060,98 @@ function selectTask(taskId) {
   ]).then(renderResultView);
 }
 
-function installHandlers() {
-  dom.tokenInput.value = state.token;
+async function initializeDashboard() {
+  await loadMenu();
+  await loadModules();
+  await loadInterfaces();
+  await loadPortalTemplates(true);
+  await loadLootFiles(true);
+  await loadTasks();
 
-  dom.saveTokenBtn.addEventListener("click", async () => {
-    state.token = dom.tokenInput.value.trim();
-    localStorage.setItem("swissknife.webui.token", state.token);
-    await Promise.all([
-      loadMenu(),
-      loadModules(),
-      loadInterfaces(),
-      loadPortalTemplates(true),
-      loadLootFiles(true),
-      loadTasks(),
-    ]);
+  if (state.pollHandle) {
+    clearInterval(state.pollHandle);
+  }
+  state.pollHandle = setInterval(() => {
+    if (!state.unlocked) {
+      return;
+    }
+    loadTasks();
+  }, 2500);
+}
+
+async function unlockFromIntro() {
+  const password = (dom.introPasswordInput?.value || "").trim();
+  if (!password) {
+    setIntroHint("Enter password first.", "error");
+    return;
+  }
+  try {
+    await gateLogin(password);
+    if (dom.introPasswordInput) {
+      dom.introPasswordInput.value = "";
+    }
+    showApp();
+    setHint("Access granted.", "success");
+    await initializeDashboard();
+  } catch (error) {
+    setIntroHint(error.message || "Invalid password.", "error");
+  }
+}
+
+function installHandlers() {
+  if (dom.introLoginBtn) {
+    dom.introLoginBtn.addEventListener("click", unlockFromIntro);
+  }
+  if (dom.introPasswordInput) {
+    dom.introPasswordInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        unlockFromIntro();
+      }
+    });
+  }
+
+  if (dom.settingsToggleBtn) {
+    dom.settingsToggleBtn.addEventListener("click", () => {
+      if (!dom.settingsMenu) {
+        return;
+      }
+      dom.settingsMenu.hidden = !dom.settingsMenu.hidden;
+    });
+  }
+  if (dom.openPasswordChangeBtn) {
+    dom.openPasswordChangeBtn.addEventListener("click", () => {
+      if (!dom.passwordChangePanel) {
+        return;
+      }
+      dom.passwordChangePanel.hidden = !dom.passwordChangePanel.hidden;
+      if (!dom.passwordChangePanel.hidden && dom.newPasswordInput) {
+        dom.newPasswordInput.focus();
+      }
+    });
+  }
+  if (dom.changePasswordBtn) {
+    dom.changePasswordBtn.addEventListener("click", changePanelPassword);
+  }
+  if (dom.turnOffBtn) {
+    dom.turnOffBtn.addEventListener("click", turnOffSystem);
+  }
+
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (!dom.settingsMenu || !dom.settingsToggleBtn) {
+      return;
+    }
+    if (dom.settingsMenu.hidden) {
+      return;
+    }
+    if (dom.settingsMenu.contains(target) || dom.settingsToggleBtn.contains(target)) {
+      return;
+    }
+    dom.settingsMenu.hidden = true;
   });
 
   dom.refreshMenuBtn.addEventListener("click", async () => {
@@ -1916,17 +2169,17 @@ function installHandlers() {
 async function bootstrap() {
   installHandlers();
   await loadMeta();
-  await loadMenu();
-  await loadModules();
-  await loadInterfaces();
-  await loadPortalTemplates(true);
-  await loadLootFiles(true);
-  await loadTasks();
 
-  if (state.pollHandle) {
-    clearInterval(state.pollHandle);
+  const restored = await restorePanelSession();
+  if (!restored) {
+    state.panelSession = "";
+    localStorage.removeItem("swissknife.webui.panel_session");
+    showIntro();
+    return;
   }
-  state.pollHandle = setInterval(loadTasks, 2500);
+
+  showApp();
+  await initializeDashboard();
 }
 
 bootstrap();

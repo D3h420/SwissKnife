@@ -76,6 +76,7 @@ WEBUI_AP_IP = "10.10.0.1"
 WEBUI_TOKEN_HEADER = "X-SwissKnife-Token"
 WEBUI_LOG_FILE = os.path.join("webui", "webui_server.log")
 WEBUI_TOKEN_FILE = os.path.join("webui", ".webui_token")
+WEBUI_LAUNCHER_PID_ENV = "SWISSKNIFE_LAUNCHER_PID"
 WEBUI_REQUIRED_PY_MODULES: List[str] = [
     "fastapi",
     "uvicorn",
@@ -488,6 +489,8 @@ def start_webui_background() -> Optional[WebUIProcess]:
     log_path = script_path(WEBUI_LOG_FILE)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log_handle = open(log_path, "w", encoding="utf-8")
+    env = os.environ.copy()
+    env[WEBUI_LAUNCHER_PID_ENV] = str(os.getpid())
     cmd = [
         sys.executable or "python3",
         "-m",
@@ -512,6 +515,7 @@ def start_webui_background() -> Optional[WebUIProcess]:
             stderr=subprocess.STDOUT,
             text=True,
             start_new_session=True,
+            env=env,
         )
         time.sleep(1.4)
         if process.poll() is not None:

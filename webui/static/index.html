@@ -14,7 +14,25 @@
   <div class="background-glow background-glow-a" aria-hidden="true"></div>
   <div class="background-glow background-glow-b" aria-hidden="true"></div>
 
-  <main class="app-shell">
+  <section id="introGate" class="intro-gate">
+    <div class="intro-card panel">
+      <div class="intro-media">
+        <div class="intro-logo-slot">Logo / Image slot</div>
+        <p>SwissKnife secure access panel.</p>
+      </div>
+      <div class="intro-login">
+        <h2>Enter Password</h2>
+        <p class="section-description">Default (if unchanged): <strong>SwissKnife</strong></p>
+        <div class="token-row">
+          <input id="introPasswordInput" type="password" autocomplete="current-password" placeholder="Password">
+          <button id="introLoginBtn" type="button" class="primary">Enter</button>
+        </div>
+        <p id="introHint" class="hint"></p>
+      </div>
+    </div>
+  </section>
+
+  <main id="appShell" class="app-shell" hidden>
     <header class="topbar panel">
       <div class="brand-wrap">
         <div class="brand-badge">SK</div>
@@ -25,10 +43,16 @@
       </div>
 
       <div class="topbar-controls">
-        <label for="tokenInput">Auth token</label>
-        <div class="token-row">
-          <input id="tokenInput" type="password" placeholder="Paste token from terminal output">
-          <button id="saveTokenBtn" type="button">Apply</button>
+        <div class="settings-wrap">
+          <button id="settingsToggleBtn" type="button" class="gear-btn" aria-label="Settings">&#9881;</button>
+          <div id="settingsMenu" class="settings-menu" hidden>
+            <button id="openPasswordChangeBtn" type="button">Change password</button>
+            <div id="passwordChangePanel" class="settings-inline" hidden>
+              <input id="newPasswordInput" type="password" autocomplete="new-password" placeholder="New password">
+              <button id="changePasswordBtn" type="button" class="primary">Save</button>
+            </div>
+            <button id="turnOffBtn" type="button" class="danger">Turn off</button>
+          </div>
         </div>
         <p id="authHint" class="hint"></p>
       </div>

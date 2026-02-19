@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import secrets
 import shlex
+import signal
 import subprocess
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +51,10 @@ from webui.process_manager import ProcessManager, TaskError
 LOG = logging.getLogger("swissknife.webui")
 TOKEN_HEADER = "X-SwissKnife-Token"
 TOKEN_ENV_VAR = "SWISSKNIFE_WEBUI_TOKEN"
+PANEL_SESSION_HEADER = "X-SwissKnife-Panel-Session"
+PANEL_PASSWORD_FILE = Path(__file__).resolve().parent / ".webui_password.json"
+PANEL_DEFAULT_PASSWORD = "SwissKnife"
+LAUNCHER_PID_ENV = "SWISSKNIFE_LAUNCHER_PID"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 LOG_DIR = PROJECT_ROOT / "log"
 HTML_DIR = PROJECT_ROOT / "html"
@@ -435,10 +444,126 @@ class TaskInputRequest(BaseModel):
     text: str
 
 
+class PanelLoginRequest(BaseModel):
+    password: str
+
+
+class PanelPasswordChangeRequest(BaseModel):
+    new_password: str
+
+
+class PanelAccessManager:
+    def __init__(
+        self,
+        password_file: Path = PANEL_PASSWORD_FILE,
+        default_password: str = PANEL_DEFAULT_PASSWORD,
+        iterations: int = 220_000,
+        session_ttl_seconds: int = 60 * 60 * 12,
+    ) -> None:
+        self.password_file = password_file
+        self.default_password = default_password
+        self.iterations = max(120_000, iterations)
+        self.session_ttl_seconds = max(900, session_ttl_seconds)
+        self._lock = threading.Lock()
+        self._salt_hex = ""
+        self._hash_hex = ""
+        self._sessions: dict[str, float] = {}
+        self.initialized_default = False
+        self._load_or_initialize()
+
+    def _derive_hash(self, password: str, salt_hex: str, iterations: int) -> str:
+        salt = bytes.fromhex(salt_hex)
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8", errors="ignore"),
+            salt,
+            iterations,
+        )
+        return digest.hex()
+
+    def _load_or_initialize(self) -> None:
+        with self._lock:
+            if self.password_file.is_file():
+                try:
+                    payload = json.loads(self.password_file.read_text(encoding="utf-8"))
+                    salt_hex = str(payload.get("salt", "")).strip()
+                    hash_hex = str(payload.get("hash", "")).strip()
+                    iterations = int(payload.get("iterations", self.iterations))
+                    if (
+                        len(salt_hex) >= 16
+                        and len(hash_hex) >= 32
+                        and iterations >= 120_000
+                    ):
+                        self._salt_hex = salt_hex
+                        self._hash_hex = hash_hex
+                        self.iterations = iterations
+                        self.initialized_default = False
+                        return
+                except Exception:
+                    pass
+            self._set_password_locked(self.default_password)
+            self.initialized_default = True
+
+    def _set_password_locked(self, password: str) -> None:
+        self._salt_hex = secrets.token_hex(16)
+        self._hash_hex = self._derive_hash(password, self._salt_hex, self.iterations)
+        payload = {
+            "salt": self._salt_hex,
+            "hash": self._hash_hex,
+            "iterations": self.iterations,
+        }
+        try:
+            self.password_file.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(self.password_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+            try:
+                os.chmod(self.password_file, 0o600)
+            except OSError:
+                LOG.warning("Could not set permissions on panel password file: %s", self.password_file)
+        except OSError:
+            LOG.warning("Could not persist panel password file: %s", self.password_file)
+        self._sessions.clear()
+
+    def verify_password(self, password: str) -> bool:
+        candidate = self._derive_hash(password, self._salt_hex, self.iterations)
+        return secrets.compare_digest(candidate, self._hash_hex)
+
+    def issue_session(self) -> str:
+        with self._lock:
+            self._purge_sessions_locked()
+            session_token = secrets.token_urlsafe(24)
+            self._sessions[session_token] = time.time() + self.session_ttl_seconds
+            return session_token
+
+    def validate_session(self, session_token: str) -> bool:
+        if not session_token:
+            return False
+        with self._lock:
+            self._purge_sessions_locked()
+            expiry = self._sessions.get(session_token, 0.0)
+            return expiry > time.time()
+
+    def _purge_sessions_locked(self) -> None:
+        now = time.time()
+        expired = [token for token, expiry in self._sessions.items() if expiry <= now]
+        for token in expired:
+            self._sessions.pop(token, None)
+
+    def change_password(self, new_password: str) -> None:
+        cleaned = (new_password or "").strip()
+        if len(cleaned) < 4:
+            raise ValueError("Password must be at least 4 characters.")
+        with self._lock:
+            self._set_password_locked(cleaned)
+            self.initialized_default = False
+
+
 def create_app(
     manager: ProcessManager,
     auth_token: Optional[str],
     ap_manager: Optional[AccessPointManager],
+    panel_access: PanelAccessManager,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -494,6 +619,15 @@ def create_app(
         if not provided or not secrets.compare_digest(provided, auth_token):
             raise HTTPException(status_code=401, detail="Unauthorized")
 
+    def _require_panel_session(request: Request) -> None:
+        provided = request.headers.get(PANEL_SESSION_HEADER, "")
+        if not panel_access.validate_session(provided):
+            raise HTTPException(status_code=401, detail="Panel locked")
+
+    def _require_access(request: Request) -> None:
+        _require_auth(request)
+        _require_panel_session(request)
+
     @app.get("/", include_in_schema=False)
     async def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -503,30 +637,87 @@ def create_app(
         return {
             "auth_required": bool(auth_token),
             "token_header": TOKEN_HEADER,
+            "panel_session_header": PANEL_SESSION_HEADER,
+            "password_default": PANEL_DEFAULT_PASSWORD,
             "active_task_id": manager.active_task_id,
         }
 
-    @app.get("/api/menu", dependencies=[Depends(_require_auth)])
+    @app.post("/api/gate/login")
+    async def api_gate_login(payload: PanelLoginRequest):
+        password = (payload.password or "").strip()
+        if not panel_access.verify_password(password):
+            raise HTTPException(status_code=401, detail="Invalid password.")
+        session_token = panel_access.issue_session()
+        return {
+            "ok": True,
+            "session_token": session_token,
+            "session_header": PANEL_SESSION_HEADER,
+            "auth_required": bool(auth_token),
+            "token_header": TOKEN_HEADER,
+            "api_token": auth_token or "",
+        }
+
+    @app.get("/api/gate/session", dependencies=[Depends(_require_panel_session)])
+    async def api_gate_session():
+        return {
+            "ok": True,
+            "auth_required": bool(auth_token),
+            "token_header": TOKEN_HEADER,
+            "api_token": auth_token or "",
+        }
+
+    @app.post("/api/gate/change-password", dependencies=[Depends(_require_panel_session)])
+    async def api_gate_change_password(payload: PanelPasswordChangeRequest):
+        try:
+            panel_access.change_password(payload.new_password)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        session_token = panel_access.issue_session()
+        return {
+            "ok": True,
+            "session_token": session_token,
+            "session_header": PANEL_SESSION_HEADER,
+        }
+
+    @app.post("/api/system/turn-off", dependencies=[Depends(_require_panel_session)])
+    async def api_system_turn_off():
+        launcher_pid_raw = (os.environ.get(LAUNCHER_PID_ENV) or "").strip()
+        target = "webui"
+        if launcher_pid_raw.isdigit():
+            try:
+                os.kill(int(launcher_pid_raw), signal.SIGINT)
+                target = "launcher"
+            except OSError:
+                pass
+
+        async def _shutdown_self() -> None:
+            await asyncio.sleep(0.35)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        asyncio.create_task(_shutdown_self())
+        return {"ok": True, "target": target}
+
+    @app.get("/api/menu", dependencies=[Depends(_require_access)])
     async def api_menu():
         return MENU_SCHEMA
 
-    @app.get("/api/modules", dependencies=[Depends(_require_auth)])
+    @app.get("/api/modules", dependencies=[Depends(_require_access)])
     async def api_modules():
         return {"modules": manager.list_modules()}
 
-    @app.get("/api/interfaces", dependencies=[Depends(_require_auth)])
+    @app.get("/api/interfaces", dependencies=[Depends(_require_access)])
     async def api_interfaces():
         return collect_interface_payload()
 
-    @app.get("/api/portals", dependencies=[Depends(_require_auth)])
+    @app.get("/api/portals", dependencies=[Depends(_require_access)])
     async def api_portals():
         return {"templates": list_portal_templates()}
 
-    @app.get("/api/loot", dependencies=[Depends(_require_auth)])
+    @app.get("/api/loot", dependencies=[Depends(_require_access)])
     async def api_loot():
         return {"files": list_loot_files()}
 
-    @app.get("/api/loot/view", dependencies=[Depends(_require_auth)])
+    @app.get("/api/loot/view", dependencies=[Depends(_require_access)])
     async def api_loot_view(
         name: str = Query(default="", min_length=1),
         tail: int = Query(default=300, ge=20, le=5000),
@@ -548,34 +739,34 @@ def create_app(
             "text": "\n".join(lines),
         }
 
-    @app.delete("/api/loot", dependencies=[Depends(_require_auth)])
+    @app.delete("/api/loot", dependencies=[Depends(_require_access)])
     async def api_loot_delete(name: str = Query(default="", min_length=1)):
         path = resolve_loot_file(name, must_exist=True)
         path.unlink(missing_ok=False)
         return {"deleted": path.name}
 
-    @app.get("/api/tasks", dependencies=[Depends(_require_auth)])
+    @app.get("/api/tasks", dependencies=[Depends(_require_access)])
     async def api_tasks():
         return {
             "tasks": manager.list_tasks(),
             "active_task_id": manager.active_task_id,
         }
 
-    @app.get("/api/tasks/{task_id}", dependencies=[Depends(_require_auth)])
+    @app.get("/api/tasks/{task_id}", dependencies=[Depends(_require_access)])
     async def api_task(task_id: str):
         try:
             return {"task": manager.get_task_snapshot(task_id)}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.get("/api/tasks/{task_id}/result", dependencies=[Depends(_require_auth)])
+    @app.get("/api/tasks/{task_id}/result", dependencies=[Depends(_require_access)])
     async def api_task_result(task_id: str):
         try:
             return {"result": manager.get_task_result(task_id)}
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/tasks/start", dependencies=[Depends(_require_auth)])
+    @app.post("/api/tasks/start", dependencies=[Depends(_require_access)])
     async def api_start_task(payload: StartTaskRequest):
         args = list(payload.args)
         if payload.raw_args.strip():
@@ -594,7 +785,7 @@ def create_app(
         except TaskError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post("/api/tasks/{task_id}/stop", dependencies=[Depends(_require_auth)])
+    @app.post("/api/tasks/{task_id}/stop", dependencies=[Depends(_require_access)])
     async def api_stop_task(task_id: str):
         try:
             task = manager.stop_task(task_id)
@@ -602,7 +793,7 @@ def create_app(
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/tasks/{task_id}/input", dependencies=[Depends(_require_auth)])
+    @app.post("/api/tasks/{task_id}/input", dependencies=[Depends(_require_access)])
     async def api_task_input(task_id: str, payload: TaskInputRequest):
         try:
             task = manager.send_input(task_id, payload.text)
@@ -612,7 +803,7 @@ def create_app(
         except TaskError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.get("/api/tasks/{task_id}/logs", dependencies=[Depends(_require_auth)])
+    @app.get("/api/tasks/{task_id}/logs", dependencies=[Depends(_require_access)])
     async def api_task_logs(
         task_id: str,
         since: int = Query(default=0, ge=0),
@@ -637,6 +828,10 @@ def create_app(
 
     @app.websocket("/ws/tasks/{task_id}")
     async def ws_task_logs(websocket: WebSocket, task_id: str) -> None:
+        panel_session = websocket.query_params.get("panel_session", "")
+        if not panel_access.validate_session(panel_session):
+            await websocket.close(code=1008)
+            return
         if auth_token:
             provided = websocket.query_params.get("token", "")
             if not provided or not secrets.compare_digest(provided, auth_token):
@@ -767,18 +962,23 @@ def build_ap_manager(args: argparse.Namespace) -> AccessPointManager:
 def main() -> None:
     args = parse_args()
     auth_token = resolve_auth_token(args.token.strip(), args.no_auth)
+    panel_access = PanelAccessManager()
 
     manager = ProcessManager(max_log_lines=args.max_log_lines)
     try:
         ap_manager = build_ap_manager(args)
     except RuntimeError as exc:
         raise SystemExit(f"[webui] AP mode setup failed: {exc}") from exc
-    app = create_app(manager, auth_token, ap_manager)
+    app = create_app(manager, auth_token, ap_manager, panel_access)
 
     if auth_token:
         print(f"[webui] token required in header {TOKEN_HEADER}: {auth_token}")
     else:
         print("[webui] auth disabled")
+    if panel_access.initialized_default:
+        print(f"[webui] panel password initialized to default: {PANEL_DEFAULT_PASSWORD}")
+    else:
+        print(f"[webui] panel password file: {panel_access.password_file}")
     display_host = args.host if args.host not in ("0.0.0.0", "::") else "<device-ip>"
     print(f"[webui] panel url: http://{display_host}:{args.port}")
     if ap_manager:

@@ -33,6 +33,14 @@ If you join AP mode SSID (`SwissKnife-Control`), open `http://10.10.0.1:8000`.
 When started from `swiss_knife.py`, token is persisted in `webui/.webui_token`,
 so browser login is typically needed only once per device/browser.
 
+Panel intro/auth:
+- Web UI opens with an intro page and password prompt.
+- Default password: `SwissKnife`.
+- Settings (gear icon, top-right) lets you:
+  - change panel password
+  - request full SwissKnife shutdown (`Turn off`)
+- Password hash is persisted in `webui/.webui_password.json`.
+
 Default AP behavior:
 - AP mode is enabled by default.
 - Interface is auto-selected as built-in Wi-Fi (`--ap-interface builtin`).
@@ -44,6 +52,7 @@ Interface API:
 ## API auth
 
 - Header name: `X-SwissKnife-Token`
+- Panel session header: `X-SwissKnife-Panel-Session` (issued after intro password login)
 - Env override: `SWISSKNIFE_WEBUI_TOKEN`
 - Disable auth (local trusted lab only): `--no-auth`
 
