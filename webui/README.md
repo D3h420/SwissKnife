@@ -30,6 +30,9 @@ The server prints an auth token in terminal output.
 Open `http://<device-ip>:8000`, paste the token, then start modules.
 If you join AP mode SSID (`SwissKnife-Control`), open `http://10.10.0.1:8000`.
 
+When started from `swiss_knife.py`, token is persisted in `webui/.webui_token`,
+so browser login is typically needed only once per device/browser.
+
 Default AP behavior:
 - AP mode is enabled by default.
 - Interface is auto-selected as built-in Wi-Fi (`--ap-interface builtin`).

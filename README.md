@@ -29,7 +29,8 @@ Run as root (required for wireless operations). The menu lets you choose which
 attack to run and guides you through the steps.
 
 `swiss_knife.py` now auto-starts Web UI in background on launch (port `8000`).
-The CLI header shows panel URLs and the current auth token.
+The launcher now keeps a persistent Web UI token in `webui/.webui_token`.
+After first login in browser, token entry is automatic on next runs.
 When connecting through the SwissKnife AP, use `http://10.10.0.1:8000`.
 
 ## Web UI control panel 🌐
@@ -42,8 +43,10 @@ pip install -r webui/requirements.txt
 sudo python3 -m webui.server --host 0.0.0.0 --port 8000
 ```
 
-Open `http://<device-ip>:8000`, paste the token printed in terminal output, and
-start/stop modules from the panel. Existing module logic is unchanged.
+Open `http://<device-ip>:8000` and start/stop modules from the panel.
+On first launch, use the token shown in terminal (or from `webui/.webui_token`);
+later runs reuse the same token automatically via browser storage.
+Existing module logic is unchanged.
 
 Recon in Web UI is now click-first:
 - `Scanner` action: interface selector + timeout slider
@@ -114,3 +117,5 @@ or set `SWISSKNIFE_VENDOR_DB` to a custom path.
 ## Legal note ⚠️
 
 Use only on networks you own or have explicit permission to test.
+
+/LAB5/

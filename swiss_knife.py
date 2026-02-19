@@ -75,6 +75,7 @@ WEBUI_AP_INTERFACE = "builtin"
 WEBUI_AP_IP = "10.10.0.1"
 WEBUI_TOKEN_HEADER = "X-SwissKnife-Token"
 WEBUI_LOG_FILE = os.path.join("webui", "webui_server.log")
+WEBUI_TOKEN_FILE = os.path.join("webui", ".webui_token")
 WEBUI_REQUIRED_PY_MODULES: List[str] = [
     "fastapi",
     "uvicorn",
@@ -146,6 +147,9 @@ class WebUIProcess:
     token: str
     log_handle: TextIO
     log_path: str
+    token_path: str
+    token_created: bool
+    token_persistent: bool
 
 
 def base_dir() -> str:
@@ -440,8 +444,47 @@ def stop_background_process(process: Optional[subprocess.Popen]) -> None:
         pass
 
 
+def _read_persistent_webui_token(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError:
+        return ""
+
+    if len(token) < 16 or any(char.isspace() for char in token):
+        return ""
+    return token
+
+
+def _write_persistent_webui_token(path: str, token: str) -> bool:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token + "\n")
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    except OSError:
+        return False
+    return True
+
+
+def load_or_create_webui_token() -> tuple[str, str, bool, bool]:
+    token_path = script_path(WEBUI_TOKEN_FILE)
+    existing = _read_persistent_webui_token(token_path)
+    if existing:
+        return existing, token_path, False, True
+
+    generated = secrets.token_urlsafe(20)
+    if _write_persistent_webui_token(token_path, generated):
+        return generated, token_path, True, True
+    return generated, token_path, True, False
+
+
 def start_webui_background() -> Optional[WebUIProcess]:
-    token = secrets.token_urlsafe(20)
+    token, token_path, token_created, token_persistent = load_or_create_webui_token()
     log_path = script_path(WEBUI_LOG_FILE)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     log_handle = open(log_path, "w", encoding="utf-8")
@@ -479,7 +522,15 @@ def start_webui_background() -> Optional[WebUIProcess]:
                 print(color_text(log_tail, COLOR_DIM))
             log_handle.close()
             return None
-        return WebUIProcess(process=process, token=token, log_handle=log_handle, log_path=log_path)
+        return WebUIProcess(
+            process=process,
+            token=token,
+            log_handle=log_handle,
+            log_path=log_path,
+            token_path=token_path,
+            token_created=token_created,
+            token_persistent=token_persistent,
+        )
     except OSError as exc:
         if process and process.poll() is None:
             stop_background_process(process)
@@ -503,7 +554,19 @@ def webui_status_line(service: Optional[WebUIProcess]) -> str:
         return f"Web UI autostart unavailable (check {script_path(WEBUI_LOG_FILE)})"
     if service.process.poll() is not None:
         return f"Web UI stopped (check {service.log_path})"
-    return f"Web UI token ({WEBUI_TOKEN_HEADER}): {service.token}"
+    if service.token_created and service.token_persistent:
+        return (
+            f"Web UI token saved to {service.token_path} "
+            f"({WEBUI_TOKEN_HEADER}): {service.token}"
+        )
+    if service.token_persistent:
+        return (
+            f"Web UI token loaded from {service.token_path} "
+            "(browser remembers it after first login)"
+        )
+    return (
+        f"Web UI token ({WEBUI_TOKEN_HEADER}, ephemeral): {service.token}"
+    )
 
 
 def print_header(
