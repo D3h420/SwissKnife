@@ -294,6 +294,7 @@ const state = {
   selectedLootFile: "",
   lootContentByFile: {},
   pollHandle: null,
+  deauthStateByTask: {},
 };
 
 const matrix = {
@@ -328,8 +329,10 @@ const dom = {
   sectionDescription: document.getElementById("sectionDescription"),
   sectionBody: document.getElementById("sectionBody"),
   globalArgsInput: document.getElementById("globalArgsInput"),
+  tasksHead: document.getElementById("tasksHead"),
   refreshTasksBtn: document.getElementById("refreshTasksBtn"),
   tasksList: document.getElementById("tasksList"),
+  resultsHead: document.getElementById("resultsHead"),
   activeTaskChip: document.getElementById("activeTaskChip"),
   stopTaskBtn: document.getElementById("stopTaskBtn"),
   resultsView: document.getElementById("resultsView"),
@@ -557,6 +560,29 @@ function getSectionById(sectionId) {
 
 function getTaskById(taskId) {
   return state.tasks.find((task) => task.task_id === taskId) || null;
+}
+
+function getLatestTaskForModule(moduleId) {
+  const candidates = state.tasks
+    .filter((task) => task.module_id === moduleId)
+    .sort((left, right) => (right.started_at || 0) - (left.started_at || 0));
+  return candidates[0] || null;
+}
+
+function getRunningTaskForModule(moduleId) {
+  const running = state.tasks
+    .filter((task) => task.module_id === moduleId && task.running)
+    .sort((left, right) => (right.started_at || 0) - (left.started_at || 0));
+  return running[0] || null;
+}
+
+function setAttackPanelsHidden(hidden) {
+  const targets = [dom.tasksHead, dom.tasksList, dom.resultsHead, dom.resultsView];
+  targets.forEach((target) => {
+    if (target) {
+      target.hidden = hidden;
+    }
+  });
 }
 
 function resolveModuleInfo(moduleId) {
@@ -971,6 +997,167 @@ function createStatusChip(statusClass, statusText) {
   return status;
 }
 
+function collectAttackPreset(item, card) {
+  if (item.module_id !== "deauth") {
+    return null;
+  }
+  const interfaceRaw = card.querySelector('[data-control-id="interface"]')?.value || "auto";
+  const scanDurationRaw = card.querySelector('[data-control-id="scan_depth"]')?.value || 25;
+  return {
+    interfaceName: resolvePreferredAttackInterface(interfaceRaw),
+    scanDuration: Math.max(5, Number(scanDurationRaw) || 25),
+    interfaceSent: false,
+    managedEnterSent: false,
+    scanDurationSent: false,
+    scanStartSent: false,
+    networkSelected: false,
+    monitorEnterSent: false,
+    selectedNetworkIndex: null,
+    autoLock: false,
+  };
+}
+
+function createDeauthFlowPanel(task) {
+  const wrap = document.createElement("div");
+  wrap.className = "attack-runtime-body";
+
+  const deauth = getDeauthState(task.task_id);
+
+  const prompt = latestPrompt(task.task_id);
+  if (prompt) {
+    const promptBar = document.createElement("div");
+    promptBar.className = "attack-prompt";
+    promptBar.textContent = prompt;
+    wrap.appendChild(promptBar);
+  }
+
+  const waitingNetwork = hasPrompt(task.task_id, /Select network.*R to rescan/i);
+  const waitingRescan = hasPrompt(task.task_id, /Rescan\? \(Y\/N\)/i);
+  const networks = parseDeauthNetworks(task.task_id);
+
+  if (waitingNetwork) {
+    if (networks.length) {
+      const networkGrid = document.createElement("div");
+      networkGrid.className = "attack-network-grid";
+      networks.forEach((entry) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "attack-network-btn";
+        if (deauth.selectedNetworkIndex === entry.index) {
+          button.classList.add("active");
+        }
+        button.addEventListener("click", async () => {
+          await sendTaskInput(task.task_id, String(entry.index), `Target: ${entry.ssid}`);
+          setDeauthState(task.task_id, {
+            networkSelected: true,
+            selectedNetworkIndex: entry.index,
+          });
+          renderSection();
+        });
+        const title = document.createElement("strong");
+        title.textContent = `${entry.index}) ${entry.ssid}`;
+        button.appendChild(title);
+        const meta = document.createElement("span");
+        meta.className = "attack-network-meta";
+        meta.textContent = `${entry.bssid} | ch ${entry.channel} | ${entry.signal}`;
+        button.appendChild(meta);
+        networkGrid.appendChild(button);
+      });
+      wrap.appendChild(networkGrid);
+
+      const rescanBtn = document.createElement("button");
+      rescanBtn.type = "button";
+      rescanBtn.textContent = "Rescan";
+      rescanBtn.addEventListener("click", () => {
+        sendTaskInput(task.task_id, "r", "Rescan requested");
+      });
+      wrap.appendChild(rescanBtn);
+    } else {
+      const waiting = document.createElement("div");
+      waiting.className = "attack-runtime-state";
+      waiting.textContent = "Scanning... waiting for network list.";
+      wrap.appendChild(waiting);
+    }
+  } else if (waitingRescan) {
+    const actions = document.createElement("div");
+    actions.className = "panel-actions";
+    const yesBtn = document.createElement("button");
+    yesBtn.type = "button";
+    yesBtn.textContent = "Rescan";
+    yesBtn.addEventListener("click", () => sendTaskInput(task.task_id, "y", "Rescan confirmed"));
+    const noBtn = document.createElement("button");
+    noBtn.type = "button";
+    noBtn.className = "danger";
+    noBtn.textContent = "Cancel";
+    noBtn.addEventListener("click", () => sendTaskInput(task.task_id, "n", "Rescan canceled"));
+    actions.appendChild(yesBtn);
+    actions.appendChild(noBtn);
+    wrap.appendChild(actions);
+  } else {
+    const status = document.createElement("div");
+    status.className = "attack-runtime-state";
+    status.textContent = "Flow automation active. Waiting for next deauth step.";
+    wrap.appendChild(status);
+  }
+
+  return wrap;
+}
+
+function createAttackRuntimePanel(item) {
+  if (!item.module_id) {
+    return null;
+  }
+
+  const task = getRunningTaskForModule(item.module_id) || getLatestTaskForModule(item.module_id);
+  const runtime = document.createElement("div");
+  runtime.className = "attack-runtime";
+
+  const head = document.createElement("div");
+  head.className = "attack-runtime-head";
+  const status = document.createElement("span");
+  status.className = "attack-runtime-state";
+  if (!task) {
+    status.textContent = "idle";
+  } else {
+    status.textContent = `${task.running ? "running" : "stopped"} | task ${task.task_id}`;
+  }
+  head.appendChild(status);
+
+  if (task?.running) {
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "danger";
+    stop.textContent = "Stop";
+    stop.addEventListener("click", () => {
+      stopTaskById(task.task_id);
+    });
+    head.appendChild(stop);
+  }
+  runtime.appendChild(head);
+
+  if (!task) {
+    const hint = document.createElement("div");
+    hint.className = "attack-runtime-state";
+    hint.textContent = "Run attack to start workflow.";
+    runtime.appendChild(hint);
+    return runtime;
+  }
+
+  if (item.module_id === "deauth") {
+    runtime.appendChild(createDeauthFlowPanel(task));
+  } else {
+    const prompt = latestPrompt(task.task_id);
+    if (prompt) {
+      const promptBar = document.createElement("div");
+      promptBar.className = "attack-prompt";
+      promptBar.textContent = prompt;
+      runtime.appendChild(promptBar);
+    }
+  }
+
+  return runtime;
+}
+
 function appendCardBody(contentWrap, item, sectionId, card, controls, availability) {
   const description = document.createElement("p");
   description.textContent = item.description || "";
@@ -983,13 +1170,6 @@ function appendCardBody(contentWrap, item, sectionId, card, controls, availabili
       controlsWrap.appendChild(createControlField(control));
     });
     contentWrap.appendChild(controlsWrap);
-  }
-
-  if (sectionId === "attacks") {
-    const touchHint = document.createElement("p");
-    touchHint.className = "touch-hint";
-    touchHint.textContent = "After Run: use touch buttons below (no keyboard typing).";
-    contentWrap.appendChild(touchHint);
   }
 
   const meta = document.createElement("div");
@@ -1009,7 +1189,16 @@ function appendCardBody(contentWrap, item, sectionId, card, controls, availabili
       }
       try {
         const args = collectModuleArgs(item, card);
-        await startModule(item.module_id, args);
+        const task = await startModule(item.module_id, args);
+        if (sectionId === "attacks" && item.module_id === "deauth" && task?.task_id) {
+          const preset = collectAttackPreset(item, card);
+          if (preset) {
+            setDeauthState(task.task_id, preset);
+          }
+          await loadTaskLogs(task.task_id, true);
+          await maybeDriveDeauth(task);
+          renderSection();
+        }
       } catch (error) {
         setHint(`Start failed: ${error.message}`, "error");
       }
@@ -1020,6 +1209,13 @@ function appendCardBody(contentWrap, item, sectionId, card, controls, availabili
 
   meta.appendChild(button);
   contentWrap.appendChild(meta);
+
+  if (sectionId === "attacks") {
+    const runtime = createAttackRuntimePanel(item);
+    if (runtime) {
+      contentWrap.appendChild(runtime);
+    }
+  }
 }
 
 function createActionCard(item, sectionId) {
@@ -1100,6 +1296,8 @@ function renderSection() {
   if (!section) {
     return;
   }
+
+  setAttackPanelsHidden(section.id === "attacks");
 
   dom.sectionTitle.textContent = section.label;
   dom.sectionDescription.textContent = section.description || "";
@@ -1508,10 +1706,7 @@ function renderReconSniffResult(result, task) {
 
 async function sendTaskInput(taskId, text, successLabel = "Command sent") {
   try {
-    await apiFetch(`/api/tasks/${taskId}/input`, {
-      method: "POST",
-      body: { text },
-    });
+    await postTaskInput(taskId, text);
     setHint(successLabel, "success");
     await loadTaskLogs(taskId, true);
   } catch (error) {
@@ -1546,6 +1741,168 @@ function latestPrompt(taskId) {
     }
   }
   return "";
+}
+
+function parseDeauthNetworks(taskId) {
+  const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
+  const networksByIndex = new Map();
+  const regex = /^\s*(\d+)\)\s+(.+?)\s+\(([0-9a-f]{2}(?::[0-9a-f]{2}){5})\)\s*-\s*ch\s*([0-9?]+)\s*(.*)$/i;
+
+  lines.forEach((line) => {
+    const clean = stripAnsi(line);
+    const match = clean.match(regex);
+    if (!match) {
+      return;
+    }
+    const index = Number(match[1]);
+    if (!Number.isFinite(index) || index <= 0) {
+      return;
+    }
+    networksByIndex.set(index, {
+      index,
+      ssid: (match[2] || "").trim() || "<hidden>",
+      bssid: (match[3] || "").toLowerCase(),
+      channel: (match[4] || "?").trim(),
+      signal: (match[5] || "").trim() || "signal unknown",
+    });
+  });
+
+  return Array.from(networksByIndex.values()).sort((left, right) => left.index - right.index);
+}
+
+function hasPrompt(taskId, pattern) {
+  const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
+  for (let index = lines.length - 1; index >= Math.max(lines.length - 30, 0); index -= 1) {
+    if (pattern.test(stripAnsi(lines[index] || ""))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolvePreferredAttackInterface(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (value && value !== "auto") {
+    return value;
+  }
+  const tool = Array.isArray(state.interfaces.tool_interface_names) ? state.interfaces.tool_interface_names : [];
+  if (tool.length) {
+    return tool[0];
+  }
+  const all = Array.isArray(state.interfaces.all_interfaces) ? state.interfaces.all_interfaces : [];
+  const fallback = all.find((entry) => entry && !entry.is_builtin);
+  return fallback?.name || "";
+}
+
+function getDeauthState(taskId) {
+  if (!state.deauthStateByTask[taskId]) {
+    state.deauthStateByTask[taskId] = {
+      interfaceName: resolvePreferredAttackInterface("auto"),
+      scanDuration: 25,
+      interfaceSent: false,
+      managedEnterSent: false,
+      scanDurationSent: false,
+      scanStartSent: false,
+      networkSelected: false,
+      monitorEnterSent: false,
+      selectedNetworkIndex: null,
+      autoLock: false,
+    };
+  }
+  return state.deauthStateByTask[taskId];
+}
+
+function setDeauthState(taskId, patch) {
+  const current = getDeauthState(taskId);
+  state.deauthStateByTask[taskId] = { ...current, ...patch };
+}
+
+async function postTaskInput(taskId, text) {
+  await apiFetch(`/api/tasks/${taskId}/input`, {
+    method: "POST",
+    body: { text },
+  });
+}
+
+async function maybeDriveDeauth(task) {
+  if (!task || task.module_id !== "deauth" || !task.running) {
+    return;
+  }
+  const taskId = task.task_id;
+  const deauth = getDeauthState(taskId);
+  if (deauth.autoLock) {
+    return;
+  }
+
+  const selectInterfacePrompt = hasPrompt(taskId, /Select interface.*number or name/i);
+  if (selectInterfacePrompt && !deauth.interfaceSent) {
+    const interfaceName = resolvePreferredAttackInterface(deauth.interfaceName);
+    if (!interfaceName) {
+      return;
+    }
+    deauth.autoLock = true;
+    try {
+      await postTaskInput(taskId, interfaceName);
+      setDeauthState(taskId, {
+        interfaceName,
+        interfaceSent: true,
+      });
+      setHint(`Deauth: selected interface ${interfaceName}.`, "success");
+    } catch (_error) {
+      setHint("Deauth: interface auto-select failed.", "error");
+    } finally {
+      deauth.autoLock = false;
+    }
+    return;
+  }
+
+  const managedPrompt = hasPrompt(taskId, /Press Enter.*managed mode for scanning/i);
+  if (managedPrompt && !deauth.managedEnterSent) {
+    deauth.autoLock = true;
+    try {
+      await postTaskInput(taskId, "");
+      setDeauthState(taskId, { managedEnterSent: true });
+    } finally {
+      deauth.autoLock = false;
+    }
+    return;
+  }
+
+  const scanDurationPrompt = hasPrompt(taskId, /Scan duration.*seconds/i);
+  if (scanDurationPrompt && !deauth.scanDurationSent) {
+    deauth.autoLock = true;
+    try {
+      const duration = Math.max(5, Number(deauth.scanDuration) || 25);
+      await postTaskInput(taskId, String(duration));
+      setDeauthState(taskId, { scanDurationSent: true, scanDuration: duration });
+    } finally {
+      deauth.autoLock = false;
+    }
+    return;
+  }
+
+  const scanStartPrompt = hasPrompt(taskId, /Press Enter.*scan networks/i);
+  if (scanStartPrompt && !deauth.scanStartSent) {
+    deauth.autoLock = true;
+    try {
+      await postTaskInput(taskId, "");
+      setDeauthState(taskId, { scanStartSent: true });
+    } finally {
+      deauth.autoLock = false;
+    }
+    return;
+  }
+
+  const monitorPrompt = hasPrompt(taskId, /Press Enter.*monitor mode for attack/i);
+  if (monitorPrompt && !deauth.monitorEnterSent) {
+    deauth.autoLock = true;
+    try {
+      await postTaskInput(taskId, "");
+      setDeauthState(taskId, { monitorEnterSent: true });
+    } finally {
+      deauth.autoLock = false;
+    }
+  }
 }
 
 function touchPadRowsForModule(moduleId) {
@@ -2022,7 +2379,7 @@ async function loadTaskLogs(taskId, silent = false) {
 
     const bucket = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
     entries.forEach((entry) => {
-      const line = shortLine(entry.line || "");
+      const line = stripAnsi(entry.line || "").trim();
       if (!line) {
         return;
       }
@@ -2031,7 +2388,12 @@ async function loadTaskLogs(taskId, silent = false) {
       }
       bucket.push(line);
     });
-    state.recentLogsByTask[taskId] = bucket.slice(-20);
+    state.recentLogsByTask[taskId] = bucket.slice(-180);
+
+    const task = getTaskById(taskId);
+    if (task?.module_id === "deauth") {
+      await maybeDriveDeauth(task);
+    }
   } catch (error) {
     if (isUnauthorizedError(error)) {
       if (!silent) {
@@ -2076,6 +2438,9 @@ async function loadTasks() {
       state.activeTaskId = null;
       renderTasks();
       renderResultView();
+      if (state.selectedSectionId === "attacks") {
+        renderSection();
+      }
       return;
     }
 
@@ -2089,6 +2454,9 @@ async function loadTasks() {
       loadTaskLogs(state.activeTaskId, true),
     ]);
     renderResultView();
+    if (state.selectedSectionId === "attacks") {
+      renderSection();
+    }
   } catch (error) {
     if (isUnauthorizedError(error)) {
       lockPanel("Session expired. Enter password again.");
@@ -2118,12 +2486,14 @@ async function startModule(moduleId, args = []) {
     if (task?.task_id) {
       setHint(`Started ${moduleId} as task ${task.task_id}.`, "success");
     }
+    return task || null;
   } catch (error) {
     if (isUnauthorizedError(error)) {
       lockPanel("Session expired. Enter password again.");
-      return;
+      return null;
     }
     setHint(`Start failed: ${error.message}`, "error");
+    return null;
   }
 }
 
@@ -2133,10 +2503,19 @@ async function stopActiveTask() {
     return;
   }
 
+  await stopTaskById(state.activeTaskId);
+}
+
+async function stopTaskById(taskId) {
+  if (!taskId) {
+    return;
+  }
+
   try {
-    await apiFetch(`/api/tasks/${state.activeTaskId}/stop`, { method: "POST" });
+    await apiFetch(`/api/tasks/${taskId}/stop`, { method: "POST" });
     await loadTasks();
-    setHint(`Stop signal sent to ${state.activeTaskId}.`, "success");
+    setHint(`Stop signal sent to ${taskId}.`, "success");
+    renderSection();
   } catch (error) {
     if (isUnauthorizedError(error)) {
       lockPanel("Session expired. Enter password again.");

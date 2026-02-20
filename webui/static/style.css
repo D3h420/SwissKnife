@@ -204,6 +204,9 @@ body {
 }
 
 .topbar {
+  position: relative;
+  z-index: 40;
+  overflow: visible;
   display: grid;
   grid-template-columns: 1.2fr 1fr;
   gap: 18px;
@@ -296,7 +299,7 @@ body {
   padding: 10px;
   display: grid;
   gap: 8px;
-  z-index: 20;
+  z-index: 220;
 }
 
 .settings-inline {
@@ -309,6 +312,8 @@ body {
 }
 
 .layout {
+  position: relative;
+  z-index: 5;
   display: grid;
   grid-template-columns: 332px minmax(0, 1fr);
   gap: 16px;
@@ -689,10 +694,81 @@ input[type="range"]::-moz-range-thumb {
   gap: 8px;
 }
 
-.touch-hint {
-  margin: -2px 0 10px;
+.attack-runtime {
+  margin-top: 10px;
+  border: 1px solid rgba(88, 155, 196, 0.38);
+  border-radius: 12px;
+  background: rgba(7, 16, 26, 0.88);
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+}
+
+.attack-runtime-body {
+  display: grid;
+  gap: 8px;
+}
+
+.attack-runtime-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.attack-runtime-state {
+  font-size: var(--content-size-xs);
+  color: #98beda;
+  letter-spacing: 0.04em;
+}
+
+.attack-runtime .danger {
+  min-height: 34px;
+  padding: 0 12px;
   font-size: var(--content-size-sm);
-  color: #81c4de;
+}
+
+.attack-network-grid {
+  display: grid;
+  gap: 7px;
+}
+
+.attack-network-btn {
+  min-height: 46px;
+  border-radius: 11px;
+  border: 1px solid rgba(83, 171, 207, 0.46);
+  background: linear-gradient(165deg, rgba(9, 26, 40, 0.94), rgba(7, 14, 23, 0.9));
+  text-align: left;
+  padding: 8px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.attack-network-btn.active {
+  border-color: rgba(86, 245, 231, 0.7);
+  box-shadow: 0 0 16px rgba(54, 222, 215, 0.24);
+}
+
+.attack-network-btn strong {
+  font-size: var(--content-size-sm);
+  color: #c4eaff;
+  font-weight: 600;
+}
+
+.attack-network-meta {
+  font-size: var(--content-size-xs);
+  color: #8cbad8;
+  white-space: normal;
+  line-height: 1.25;
+}
+
+.attack-prompt {
+  font-size: var(--content-size-xs);
+  color: #8eb5d2;
+  border: 1px dashed rgba(89, 170, 209, 0.33);
+  border-radius: 10px;
+  padding: 6px 8px;
 }
 
 .status-chip {
