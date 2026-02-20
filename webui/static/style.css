@@ -491,7 +491,6 @@ body {
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.03),
     inset 0 -18px 34px -28px rgba(41, 212, 250, 0.35);
-  animation: rise 340ms ease-out;
   min-width: 0;
 }
 
@@ -746,8 +745,15 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .attack-network-btn.active {
-  border-color: rgba(86, 245, 231, 0.7);
-  box-shadow: 0 0 16px rgba(54, 222, 215, 0.24);
+  border-color: rgba(112, 255, 224, 0.92);
+  background: linear-gradient(165deg, rgba(8, 46, 54, 0.97), rgba(9, 26, 40, 0.95));
+  box-shadow:
+    inset 0 0 0 1px rgba(140, 255, 239, 0.45),
+    0 0 18px rgba(66, 240, 219, 0.35);
+}
+
+.attack-network-btn.active strong {
+  color: #e8fffd;
 }
 
 .attack-network-btn strong {

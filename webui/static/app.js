@@ -293,6 +293,7 @@ const state = {
   lootLoaded: false,
   selectedLootFile: "",
   lootContentByFile: {},
+  attackTaskSig: "",
   pollHandle: null,
   deauthStateByTask: {},
   portalStateByTask: {},
@@ -1124,7 +1125,7 @@ function collectAutomationPreset(item, card) {
       interfaceName: resolvePreferredAttackInterface(readControlValue(card, "interface", "auto")),
       scanDuration: normalizePositiveInt(readControlValue(card, "scan_depth", 25), 25, 5),
       selectedNetworkIndex: null,
-      autoSelectNetwork: true,
+      autoSelectNetwork: false,
     };
   }
   if (item.module_id === "portal") {
@@ -1178,8 +1179,11 @@ function applyAutomationPreset(taskId, moduleId, preset) {
       networkSelected: false,
       monitorEnterSent: false,
       selectedNetworkIndex: preset.selectedNetworkIndex || null,
-      autoSelectNetwork: preset.autoSelectNetwork !== false,
+      pendingNetworkIndex: null,
+      autoSelectNetwork: Boolean(preset.autoSelectNetwork),
       rescanAttempts: 0,
+      lastPromptLine: "",
+      lastNetworkCount: 0,
       autoLock: false,
       lastActionByKey: {},
     });
@@ -1277,19 +1281,25 @@ function createDeauthFlowPanel(task) {
 
   const deauth = getDeauthState(task.task_id);
 
-  const prompt = latestPrompt(task.task_id);
-  if (prompt) {
+  const promptText = latestPrompt(task.task_id);
+  if (promptText) {
     const promptBar = document.createElement("div");
     promptBar.className = "attack-prompt";
-    promptBar.textContent = prompt;
+    promptBar.textContent = promptText;
     wrap.appendChild(promptBar);
   }
 
-  const waitingNetwork = hasPrompt(task.task_id, /Select network.*R to rescan/i);
-  const waitingRescan = hasPrompt(task.task_id, /Rescan\? \(Y\/N\)/i);
+  const waitingNetwork = isLatestPrompt(task.task_id, /Select network.*R to rescan/i);
+  const waitingRescan = isLatestPrompt(task.task_id, /Rescan\? \(Y\/N\)/i);
+  const waitingStop = isLatestPrompt(task.task_id, /Press Enter to stop attack and exit/i);
   const networks = parseDeauthNetworks(task.task_id);
 
   if (waitingNetwork) {
+    const modeInfo = document.createElement("div");
+    modeInfo.className = "attack-runtime-state";
+    modeInfo.textContent = "Single target mode: select one network, then tap Start Deauth.";
+    wrap.appendChild(modeInfo);
+
     if (networks.length) {
       const networkGrid = document.createElement("div");
       networkGrid.className = "attack-network-grid";
@@ -1297,15 +1307,16 @@ function createDeauthFlowPanel(task) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = "attack-network-btn";
-        if (deauth.selectedNetworkIndex === entry.index) {
+        if (
+          deauth.pendingNetworkIndex === entry.index
+          || (!deauth.pendingNetworkIndex && deauth.selectedNetworkIndex === entry.index)
+        ) {
           button.classList.add("active");
         }
-        button.addEventListener("click", async () => {
+        button.addEventListener("click", () => {
           markAttackUiInteraction();
-          await sendTaskInput(task.task_id, String(entry.index), `Target: ${entry.ssid}`);
           setDeauthState(task.task_id, {
-            networkSelected: true,
-            selectedNetworkIndex: entry.index,
+            pendingNetworkIndex: entry.index,
             autoSelectNetwork: false,
           });
           renderSection();
@@ -1321,14 +1332,53 @@ function createDeauthFlowPanel(task) {
       });
       wrap.appendChild(networkGrid);
 
+      const actions = document.createElement("div");
+      actions.className = "panel-actions";
+
+      const startBtn = document.createElement("button");
+      startBtn.type = "button";
+      startBtn.className = "primary";
+      startBtn.textContent = "Start Deauth";
+      startBtn.disabled = !deauth.pendingNetworkIndex;
+      startBtn.addEventListener("click", async () => {
+        if (!deauth.pendingNetworkIndex) {
+          return;
+        }
+        markAttackUiInteraction(6000);
+        const ok = await sendTaskInput(
+          task.task_id,
+          String(deauth.pendingNetworkIndex),
+          `Target ${deauth.pendingNetworkIndex} confirmed`,
+        );
+        if (!ok) {
+          return;
+        }
+        setDeauthState(task.task_id, {
+          networkSelected: true,
+          selectedNetworkIndex: deauth.pendingNetworkIndex,
+          pendingNetworkIndex: null,
+          autoSelectNetwork: false,
+        });
+        await loadTaskLogs(task.task_id, true);
+        renderSection();
+      });
+      actions.appendChild(startBtn);
+
       const rescanBtn = document.createElement("button");
       rescanBtn.type = "button";
       rescanBtn.textContent = "Rescan";
       rescanBtn.addEventListener("click", () => {
         markAttackUiInteraction();
+        setDeauthState(task.task_id, {
+          networkSelected: false,
+          selectedNetworkIndex: null,
+          pendingNetworkIndex: null,
+        });
         sendTaskInput(task.task_id, "r", "Rescan requested");
       });
-      wrap.appendChild(rescanBtn);
+      actions.appendChild(rescanBtn);
+
+      wrap.appendChild(actions);
     } else {
       const waiting = document.createElement("div");
       waiting.className = "attack-runtime-state";
@@ -1356,6 +1406,22 @@ function createDeauthFlowPanel(task) {
     actions.appendChild(yesBtn);
     actions.appendChild(noBtn);
     wrap.appendChild(actions);
+  } else if (waitingStop) {
+    const active = document.createElement("div");
+    active.className = "attack-runtime-state";
+    const targetLabel = deauth.selectedNetworkIndex
+      ? `target #${deauth.selectedNetworkIndex}`
+      : "target selected";
+    active.textContent = `Deauth active | ${targetLabel}`;
+    wrap.appendChild(active);
+  } else if (task.running && deauth.networkSelected) {
+    const active = document.createElement("div");
+    active.className = "attack-runtime-state";
+    const targetLabel = deauth.selectedNetworkIndex
+      ? `target #${deauth.selectedNetworkIndex}`
+      : "target selected";
+    active.textContent = `Deauth running | ${targetLabel}`;
+    wrap.appendChild(active);
   } else {
     const status = document.createElement("div");
     status.className = "attack-runtime-state";
@@ -2178,25 +2244,41 @@ function buildQuickButton(taskId, label, payload, successLabel = "Command sent")
 }
 
 function latestPrompt(taskId) {
+  const line = latestPromptLine(taskId, 90);
+  return line ? shortLine(line, 140) : "";
+}
+
+function latestPromptLine(taskId, lookback = 80) {
   const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
+  const span = Math.max(12, Number(lookback) || 80);
+  const start = Math.max(0, lines.length - span);
+  for (let index = lines.length - 1; index >= start; index -= 1) {
+    const line = stripAnsi(lines[index] || "");
     if (!line) {
       continue;
     }
-    if (line.includes("choice") || line.includes("Select") || line.includes("Press Enter") || line.includes("Proceed")) {
-      return shortLine(line, 140);
+    if (
+      line.includes("choice")
+      || line.includes("Select")
+      || line.includes("Press Enter")
+      || line.includes("Proceed")
+      || line.includes("Rescan")
+      || line.includes("Back to main menu")
+    ) {
+      return line;
     }
   }
   return "";
 }
 
-function findPromptLine(taskId, pattern) {
+function findPromptLine(taskId, pattern, lookback = 80) {
   if (!(pattern instanceof RegExp)) {
     return "";
   }
   const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
+  const span = Math.max(12, Number(lookback) || 80);
+  const start = Math.max(0, lines.length - span);
+  for (let index = lines.length - 1; index >= start; index -= 1) {
     const clean = stripAnsi(lines[index] || "");
     if (pattern.test(clean)) {
       return clean;
@@ -2232,8 +2314,19 @@ function parseDeauthNetworks(taskId) {
   return Array.from(networksByIndex.values()).sort((left, right) => left.index - right.index);
 }
 
-function hasPrompt(taskId, pattern) {
-  return Boolean(findPromptLine(taskId, pattern));
+function hasPrompt(taskId, pattern, lookback = 80) {
+  return Boolean(findPromptLine(taskId, pattern, lookback));
+}
+
+function isLatestPrompt(taskId, pattern, lookback = 80) {
+  if (!(pattern instanceof RegExp)) {
+    return false;
+  }
+  const latest = latestPromptLine(taskId, lookback);
+  if (!latest) {
+    return false;
+  }
+  return pattern.test(latest);
 }
 
 function resolvePreferredAttackInterface(rawValue) {
@@ -2331,8 +2424,11 @@ function getDeauthState(taskId) {
       networkSelected: false,
       monitorEnterSent: false,
       selectedNetworkIndex: null,
-      autoSelectNetwork: true,
+      pendingNetworkIndex: null,
+      autoSelectNetwork: false,
       rescanAttempts: 0,
+      lastPromptLine: "",
+      lastNetworkCount: 0,
       autoLock: false,
       lastActionByKey: {},
     };
@@ -2528,7 +2624,19 @@ async function maybeDriveDeauth(task) {
   const taskId = task.task_id;
   const deauth = getDeauthState(taskId);
 
-  const selectInterfacePrompt = hasPrompt(taskId, /Select interface.*number or name/i);
+  const promptLine = latestPromptLine(taskId, 100);
+  const networkCount = parseDeauthNetworks(taskId).length;
+  if (promptLine !== deauth.lastPromptLine || networkCount !== deauth.lastNetworkCount) {
+    setDeauthState(taskId, {
+      lastPromptLine: promptLine,
+      lastNetworkCount: networkCount,
+    });
+    if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
+      renderSection();
+    }
+  }
+
+  const selectInterfacePrompt = isLatestPrompt(taskId, /Select interface.*number or name/i);
   if (selectInterfacePrompt && !deauth.interfaceSent) {
     const interfaceName = resolvePreferredAttackInterface(deauth.interfaceName);
     if (!interfaceName) {
@@ -2547,7 +2655,7 @@ async function maybeDriveDeauth(task) {
     return;
   }
 
-  const managedPrompt = hasPrompt(taskId, /Press Enter.*managed mode for scanning/i);
+  const managedPrompt = isLatestPrompt(taskId, /Press Enter.*managed mode for scanning/i);
   if (managedPrompt && !deauth.managedEnterSent) {
     if (
       await autoSendTaskInput(taskId, deauth, "managed-enter", "", {
@@ -2560,7 +2668,7 @@ async function maybeDriveDeauth(task) {
     return;
   }
 
-  const scanDurationPrompt = hasPrompt(taskId, /Scan duration.*seconds/i);
+  const scanDurationPrompt = isLatestPrompt(taskId, /Scan duration.*seconds/i);
   if (scanDurationPrompt && !deauth.scanDurationSent) {
     const duration = Math.max(5, Number(deauth.scanDuration) || 25);
     if (
@@ -2573,7 +2681,7 @@ async function maybeDriveDeauth(task) {
     return;
   }
 
-  const scanStartPrompt = hasPrompt(taskId, /Press Enter.*scan networks/i);
+  const scanStartPrompt = isLatestPrompt(taskId, /Press Enter.*scan networks/i);
   if (scanStartPrompt && !deauth.scanStartSent) {
     if (
       await autoSendTaskInput(taskId, deauth, "scan-start-enter", "", {
@@ -2586,31 +2694,33 @@ async function maybeDriveDeauth(task) {
     return;
   }
 
-  const waitingNetwork = hasPrompt(taskId, /Select network.*R to rescan/i);
+  const waitingNetwork = isLatestPrompt(taskId, /Select network.*R to rescan/i);
   if (waitingNetwork && !deauth.networkSelected) {
-    const networks = parseDeauthNetworks(taskId);
-    let targetIndex = normalizePositiveInt(deauth.selectedNetworkIndex, 0, 0);
-    if (!targetIndex && deauth.autoSelectNetwork && networks.length) {
-      targetIndex = networks[0].index;
-    }
-    if (targetIndex > 0) {
-      if (
-        await autoSendTaskInput(taskId, deauth, "network-select", String(targetIndex), {
-          successHint: `Deauth: auto target ${targetIndex}.`,
-          cooldownMs: 1500,
-          silentError: true,
-        })
-      ) {
-        setDeauthState(taskId, {
-          selectedNetworkIndex: targetIndex,
-          networkSelected: true,
-        });
+    if (deauth.autoSelectNetwork) {
+      const networks = parseDeauthNetworks(taskId);
+      let targetIndex = normalizePositiveInt(deauth.selectedNetworkIndex, 0, 0);
+      if (!targetIndex && networks.length) {
+        targetIndex = networks[0].index;
+      }
+      if (targetIndex > 0) {
+        if (
+          await autoSendTaskInput(taskId, deauth, "network-select", String(targetIndex), {
+            successHint: `Deauth: auto target ${targetIndex}.`,
+            cooldownMs: 1500,
+            silentError: true,
+          })
+        ) {
+          setDeauthState(taskId, {
+            selectedNetworkIndex: targetIndex,
+            networkSelected: true,
+          });
+        }
       }
     }
     return;
   }
 
-  const rescanPrompt = hasPrompt(taskId, /Rescan\? \(Y\/N\)/i);
+  const rescanPrompt = isLatestPrompt(taskId, /Rescan\? \(Y\/N\)/i);
   if (rescanPrompt && !deauth.networkSelected) {
     const retries = normalizePositiveInt(deauth.rescanAttempts, 0, 0);
     const payload = retries < 2 ? "y" : "n";
@@ -2625,7 +2735,7 @@ async function maybeDriveDeauth(task) {
     return;
   }
 
-  const monitorPrompt = hasPrompt(taskId, /Press Enter.*monitor mode for attack/i);
+  const monitorPrompt = isLatestPrompt(taskId, /Press Enter.*monitor mode for attack/i);
   if (monitorPrompt && !deauth.monitorEnterSent) {
     if (
       await autoSendTaskInput(taskId, deauth, "monitor-enter", "", {
@@ -2635,6 +2745,12 @@ async function maybeDriveDeauth(task) {
     ) {
       setDeauthState(taskId, { monitorEnterSent: true });
     }
+    return;
+  }
+
+  const stopPrompt = isLatestPrompt(taskId, /Press Enter to stop attack and exit/i);
+  if (stopPrompt) {
+    return;
   }
 }
 
@@ -3739,12 +3855,22 @@ async function loadTasks() {
   try {
     const data = await apiFetch("/api/tasks");
     state.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    const attackSig = state.tasks
+      .map((task) => `${task.task_id}:${task.running ? 1 : 0}:${task.returncode ?? "-"}`)
+      .join("|");
 
     if (!state.tasks.length) {
       state.activeTaskId = null;
       renderTasks();
       renderResultView();
-      if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
+      if (state.selectedSectionId === "attacks") {
+        if (state.attackTaskSig !== "empty" && !shouldPauseAttackRefresh()) {
+          state.attackTaskSig = "empty";
+          renderSection();
+        } else {
+          state.attackTaskSig = "empty";
+        }
+      } else if (!shouldPauseAttackRefresh()) {
         renderSection();
       }
       return;
@@ -3760,7 +3886,14 @@ async function loadTasks() {
       loadTaskLogs(state.activeTaskId, true),
     ]);
     renderResultView();
-    if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
+    if (state.selectedSectionId === "attacks") {
+      if (state.attackTaskSig !== attackSig && !shouldPauseAttackRefresh()) {
+        state.attackTaskSig = attackSig;
+        renderSection();
+      } else {
+        state.attackTaskSig = attackSig;
+      }
+    } else if (!shouldPauseAttackRefresh()) {
       renderSection();
     }
   } catch (error) {
