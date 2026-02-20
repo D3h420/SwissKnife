@@ -302,9 +302,11 @@ const state = {
   bluetoothStateByTask: {},
   attackControlDraftByModule: {},
   attackUiLockUntil: 0,
+  sectionUiLockUntil: 0,
 };
 
 const ATTACK_UI_LOCK_MS = 12000;
+const SECTION_UI_LOCK_MS = 8000;
 
 const matrix = {
   fontSize: 18,
@@ -599,15 +601,17 @@ function markAttackUiInteraction(extraMs = ATTACK_UI_LOCK_MS) {
   state.attackUiLockUntil = Math.max(state.attackUiLockUntil || 0, lockUntil);
 }
 
-function isAttackUiLocked() {
-  if (state.selectedSectionId !== "attacks") {
-    return false;
-  }
-  return Date.now() < (state.attackUiLockUntil || 0);
+function markSectionUiInteraction(extraMs = SECTION_UI_LOCK_MS) {
+  const lockUntil = Date.now() + Math.max(1200, Number(extraMs) || SECTION_UI_LOCK_MS);
+  state.sectionUiLockUntil = Math.max(state.sectionUiLockUntil || 0, lockUntil);
 }
 
-function isAttackFormFocused() {
-  if (state.selectedSectionId !== "attacks" || !dom.sectionBody) {
+function isSectionUiLocked() {
+  return Date.now() < (state.sectionUiLockUntil || 0);
+}
+
+function isSectionFormFocused() {
+  if (!dom.sectionBody) {
     return false;
   }
   const active = document.activeElement;
@@ -620,8 +624,29 @@ function isAttackFormFocused() {
   return Boolean(active.closest(".control-field, .control-grid, .attack-quick-grid, .attack-focus-card"));
 }
 
+function isAttackUiLocked() {
+  if (state.selectedSectionId !== "attacks") {
+    return false;
+  }
+  return Date.now() < (state.attackUiLockUntil || 0);
+}
+
+function isAttackFormFocused() {
+  if (state.selectedSectionId !== "attacks") {
+    return false;
+  }
+  return isSectionFormFocused();
+}
+
 function shouldPauseAttackRefresh() {
-  return isAttackUiLocked() || isAttackFormFocused();
+  return isAttackUiLocked() || isSectionUiLocked() || isAttackFormFocused();
+}
+
+function shouldPauseSectionRefresh() {
+  if (state.selectedSectionId === "attacks") {
+    return shouldPauseAttackRefresh();
+  }
+  return isSectionUiLocked() || isSectionFormFocused();
 }
 
 function getAttackControlDraft(moduleId) {
@@ -902,9 +927,11 @@ function createControlField(control, context = {}) {
   const sectionId = String(context.sectionId || "");
   const moduleId = String(context.moduleId || "");
   const isAttackControl = sectionId === "attacks" && moduleId;
-  const attackDraft = isAttackControl ? getAttackControlDraft(moduleId) : null;
+  const hasModuleControl = Boolean(moduleId);
+  const attackDraft = hasModuleControl ? getAttackControlDraft(moduleId) : null;
 
   const markTouched = () => {
+    markSectionUiInteraction();
     if (isAttackControl) {
       markAttackUiInteraction();
     }
@@ -949,7 +976,7 @@ function createControlField(control, context = {}) {
     select.addEventListener("mousedown", markTouched);
     select.addEventListener("touchstart", markTouched, { passive: true });
     select.addEventListener("change", () => {
-      if (isAttackControl) {
+      if (hasModuleControl) {
         setAttackControlDraft(moduleId, control.id, select.value);
       }
       markTouched();
@@ -990,7 +1017,7 @@ function createControlField(control, context = {}) {
 
     input.addEventListener("input", () => {
       badge.textContent = formatControlValue(control, input.value);
-      if (isAttackControl) {
+      if (hasModuleControl) {
         setAttackControlDraft(moduleId, control.id, input.value);
       }
       markTouched();
@@ -1021,7 +1048,7 @@ function createControlField(control, context = {}) {
   input.addEventListener("mousedown", markTouched);
   input.addEventListener("touchstart", markTouched, { passive: true });
   input.addEventListener("input", () => {
-    if (isAttackControl) {
+    if (hasModuleControl) {
       setAttackControlDraft(moduleId, control.id, input.value);
     }
     markTouched();
@@ -1184,6 +1211,7 @@ function applyAutomationPreset(taskId, moduleId, preset) {
       rescanAttempts: 0,
       lastPromptLine: "",
       lastNetworkCount: 0,
+      renderPending: false,
       autoLock: false,
       lastActionByKey: {},
     });
@@ -2248,27 +2276,38 @@ function latestPrompt(taskId) {
   return line ? shortLine(line, 140) : "";
 }
 
+function isPromptLikeLine(line) {
+  if (!line) {
+    return false;
+  }
+  const text = String(line).trim();
+  if (!text) {
+    return false;
+  }
+  if (/[:?]\s*$/i.test(text)) {
+    return true;
+  }
+  return /(select|press enter|rescan|your choice|scan duration|back to main menu|proceed)/i.test(text);
+}
+
 function latestPromptLine(taskId, lookback = 80) {
   const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
   const span = Math.max(12, Number(lookback) || 80);
   const start = Math.max(0, lines.length - span);
+  let latestNonEmpty = "";
   for (let index = lines.length - 1; index >= start; index -= 1) {
     const line = stripAnsi(lines[index] || "");
     if (!line) {
       continue;
     }
-    if (
-      line.includes("choice")
-      || line.includes("Select")
-      || line.includes("Press Enter")
-      || line.includes("Proceed")
-      || line.includes("Rescan")
-      || line.includes("Back to main menu")
-    ) {
+    if (!latestNonEmpty) {
+      latestNonEmpty = line;
+    }
+    if (isPromptLikeLine(line)) {
       return line;
     }
   }
-  return "";
+  return latestNonEmpty;
 }
 
 function findPromptLine(taskId, pattern, lookback = 80) {
@@ -2429,6 +2468,7 @@ function getDeauthState(taskId) {
       rescanAttempts: 0,
       lastPromptLine: "",
       lastNetworkCount: 0,
+      renderPending: false,
       autoLock: false,
       lastActionByKey: {},
     };
@@ -2622,17 +2662,32 @@ async function maybeDriveDeauth(task) {
     return;
   }
   const taskId = task.task_id;
-  const deauth = getDeauthState(taskId);
+  let deauth = getDeauthState(taskId);
+
+  if (deauth.renderPending && state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
+    setDeauthState(taskId, { renderPending: false });
+    renderSection();
+    deauth = getDeauthState(taskId);
+  }
 
   const promptLine = latestPromptLine(taskId, 100);
   const networkCount = parseDeauthNetworks(taskId).length;
   if (promptLine !== deauth.lastPromptLine || networkCount !== deauth.lastNetworkCount) {
-    setDeauthState(taskId, {
+    const patch = {
       lastPromptLine: promptLine,
       lastNetworkCount: networkCount,
-    });
-    if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
-      renderSection();
+    };
+    if (state.selectedSectionId === "attacks") {
+      if (!shouldPauseAttackRefresh()) {
+        patch.renderPending = false;
+        setDeauthState(taskId, patch);
+        renderSection();
+      } else {
+        patch.renderPending = true;
+        setDeauthState(taskId, patch);
+      }
+    } else {
+      setDeauthState(taskId, patch);
     }
   }
 
@@ -3864,13 +3919,13 @@ async function loadTasks() {
       renderTasks();
       renderResultView();
       if (state.selectedSectionId === "attacks") {
-        if (state.attackTaskSig !== "empty" && !shouldPauseAttackRefresh()) {
+        if (state.attackTaskSig !== "empty" && !shouldPauseSectionRefresh()) {
           state.attackTaskSig = "empty";
           renderSection();
         } else {
           state.attackTaskSig = "empty";
         }
-      } else if (!shouldPauseAttackRefresh()) {
+      } else if (!shouldPauseSectionRefresh()) {
         renderSection();
       }
       return;
@@ -3887,13 +3942,13 @@ async function loadTasks() {
     ]);
     renderResultView();
     if (state.selectedSectionId === "attacks") {
-      if (state.attackTaskSig !== attackSig && !shouldPauseAttackRefresh()) {
+      if (state.attackTaskSig !== attackSig && !shouldPauseSectionRefresh()) {
         state.attackTaskSig = attackSig;
         renderSection();
       } else {
         state.attackTaskSig = attackSig;
       }
-    } else if (!shouldPauseAttackRefresh()) {
+    } else if (!shouldPauseSectionRefresh()) {
       renderSection();
     }
   } catch (error) {
