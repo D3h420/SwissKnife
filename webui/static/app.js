@@ -270,6 +270,7 @@ const state = {
   token: localStorage.getItem("swissknife.webui.token") || "",
   panelSession: localStorage.getItem("swissknife.webui.panel_session") || "",
   authRequired: false,
+  devNoCache: false,
   unlocked: false,
   menu: FALLBACK_MENU.main,
   selectedSectionId: null,
@@ -461,6 +462,7 @@ function showIntro(message = "") {
   }
   startMatrixRain();
   if (dom.introPasswordInput) {
+    dom.introPasswordInput.value = "";
     dom.introPasswordInput.focus();
   }
 }
@@ -1701,8 +1703,9 @@ function renderResultView() {
 
 async function loadMeta() {
   try {
-    const data = await fetch("/api/meta").then((response) => response.json());
+    const data = await fetch("/api/meta", { cache: "no-store" }).then((response) => response.json());
     state.authRequired = Boolean(data.auth_required);
+    state.devNoCache = Boolean(data.dev_no_cache);
     setHint("Panel ready.", "success");
   } catch (_error) {
     setHint("Meta unavailable. Open panel through web server, not local file path.", "error");
@@ -2183,6 +2186,11 @@ async function unlockFromIntro() {
     setIntroHint("Enter password first.", "error");
     return;
   }
+  if (dom.introLoginBtn) {
+    dom.introLoginBtn.disabled = true;
+    dom.introLoginBtn.textContent = "Unlocking...";
+  }
+  setIntroHint("Verifying...", "success");
   try {
     await gateLogin(password);
     if (dom.introPasswordInput) {
@@ -2192,7 +2200,17 @@ async function unlockFromIntro() {
     setHint("Access granted.", "success");
     await initializeDashboard();
   } catch (error) {
-    setIntroHint(error.message || "Invalid password.", "error");
+    const message = String(error?.message || "").trim();
+    if (message.toLowerCase().includes("invalid password")) {
+      setIntroHint("Invalid pass.", "error");
+    } else {
+      setIntroHint(message || "Unlock failed.", "error");
+    }
+  } finally {
+    if (dom.introLoginBtn) {
+      dom.introLoginBtn.disabled = false;
+      dom.introLoginBtn.textContent = "Unlock";
+    }
   }
 }
 
@@ -2270,6 +2288,15 @@ function installHandlers() {
 async function bootstrap() {
   installHandlers();
   await loadMeta();
+
+  if (state.devNoCache) {
+    state.token = "";
+    state.panelSession = "";
+    localStorage.removeItem("swissknife.webui.token");
+    localStorage.removeItem("swissknife.webui.panel_session");
+    showIntro();
+    return;
+  }
 
   const restored = await restorePanelSession();
   if (!restored) {

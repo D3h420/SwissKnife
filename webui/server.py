@@ -51,6 +51,7 @@ from webui.process_manager import ProcessManager, TaskError
 LOG = logging.getLogger("swissknife.webui")
 TOKEN_HEADER = "X-SwissKnife-Token"
 TOKEN_ENV_VAR = "SWISSKNIFE_WEBUI_TOKEN"
+DEV_NOCACHE_ENV_VAR = "SWISSKNIFE_WEBUI_DEV_NOCACHE"
 PANEL_SESSION_HEADER = "X-SwissKnife-Panel-Session"
 PANEL_PASSWORD_FILE = Path(__file__).resolve().parent / ".webui_password.json"
 PANEL_DEFAULT_PASSWORD = "SwissKnife"
@@ -564,6 +565,7 @@ def create_app(
     auth_token: Optional[str],
     ap_manager: Optional[AccessPointManager],
     panel_access: PanelAccessManager,
+    dev_no_cache: bool,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -612,6 +614,18 @@ def create_app(
     )
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+    @app.middleware("http")
+    async def no_cache_middleware(request: Request, call_next):
+        response = await call_next(request)
+        if not dev_no_cache:
+            return response
+        path = request.url.path or "/"
+        if path == "/" or path.startswith("/static/") or path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
     def _require_auth(request: Request) -> None:
         if not auth_token:
             return
@@ -639,6 +653,7 @@ def create_app(
             "token_header": TOKEN_HEADER,
             "panel_session_header": PANEL_SESSION_HEADER,
             "password_default": PANEL_DEFAULT_PASSWORD,
+            "dev_no_cache": dev_no_cache,
             "active_task_id": manager.active_task_id,
         }
 
@@ -936,6 +951,14 @@ def resolve_auth_token(cli_token: str, no_auth: bool) -> Optional[str]:
     return secrets.token_urlsafe(20)
 
 
+def resolve_env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    return value not in ("", "0", "false", "no", "off")
+
+
 def build_ap_manager(args: argparse.Namespace) -> AccessPointManager:
     ap_interface = (args.ap_interface or "").strip().lower()
     if ap_interface in ("builtin", "internal", "auto"):
@@ -963,13 +986,14 @@ def main() -> None:
     args = parse_args()
     auth_token = resolve_auth_token(args.token.strip(), args.no_auth)
     panel_access = PanelAccessManager()
+    dev_no_cache = resolve_env_flag(DEV_NOCACHE_ENV_VAR, default=True)
 
     manager = ProcessManager(max_log_lines=args.max_log_lines)
     try:
         ap_manager = build_ap_manager(args)
     except RuntimeError as exc:
         raise SystemExit(f"[webui] AP mode setup failed: {exc}") from exc
-    app = create_app(manager, auth_token, ap_manager, panel_access)
+    app = create_app(manager, auth_token, ap_manager, panel_access, dev_no_cache)
 
     if auth_token:
         print(f"[webui] token required in header {TOKEN_HEADER}: {auth_token}")
@@ -979,6 +1003,10 @@ def main() -> None:
         print(f"[webui] panel password initialized to default: {PANEL_DEFAULT_PASSWORD}")
     else:
         print(f"[webui] panel password file: {panel_access.password_file}")
+    if dev_no_cache:
+        print(f"[webui] dev no-cache mode: enabled ({DEV_NOCACHE_ENV_VAR}=1)")
+    else:
+        print(f"[webui] dev no-cache mode: disabled ({DEV_NOCACHE_ENV_VAR}=0)")
     display_host = args.host if args.host not in ("0.0.0.0", "::") else "<device-ip>"
     print(f"[webui] panel url: http://{display_host}:{args.port}")
     if ap_manager:

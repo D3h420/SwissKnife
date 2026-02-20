@@ -36,10 +36,14 @@ so browser login is typically needed only once per device/browser.
 Panel intro/auth:
 - Web UI opens with an intro page and password prompt.
 - Default password: `SwissKnife`.
+- Default password constant: `PANEL_DEFAULT_PASSWORD` in `webui/server.py`.
+- Intro input is intentionally empty (no suggested value shown in the field).
 - Settings (gear icon, top-right) lets you:
   - change panel password
   - request full SwissKnife shutdown (`Turn off`)
 - Password hash is persisted in `webui/.webui_password.json`.
+- Dev no-cache mode is enabled by default via `SWISSKNIFE_WEBUI_DEV_NOCACHE=1`.
+  Set `SWISSKNIFE_WEBUI_DEV_NOCACHE=0` to restore normal browser caching/session restore behavior.
 
 Default AP behavior:
 - AP mode is enabled by default.

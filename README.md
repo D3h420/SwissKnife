@@ -50,9 +50,13 @@ Existing module logic is unchanged.
 
 Web UI now starts with an intro/login screen:
 - default panel password: `SwissKnife`
+- default password is defined in code as `PANEL_DEFAULT_PASSWORD` in `webui/server.py`
+- intro password field is intentionally empty (no suggested value in input box)
 - password can be changed from the top-right settings gear
 - `Turn off` in settings requests full launcher shutdown (equivalent to CLI exit)
 - password hash is stored in `webui/.webui_password.json`
+- dev cache mode is enabled by default (`SWISSKNIFE_WEBUI_DEV_NOCACHE=1`) to force fresh UI files and avoid stale browser cache during Web UI work
+- to disable dev cache mode: run with `SWISSKNIFE_WEBUI_DEV_NOCACHE=0`
 
 Recon in Web UI is now click-first:
 - `Scanner` action: interface selector + timeout slider

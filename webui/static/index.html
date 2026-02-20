@@ -3,11 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <title>SwissKnife Control Matrix</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Exo+2:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/style.css" onerror="this.onerror=null;this.href='style.css';">
+  <link rel="stylesheet" href="/static/style.css?v=20260220a" onerror="this.onerror=null;this.href='style.css';">
 </head>
 <body>
   <div class="background-grid" aria-hidden="true"></div>
@@ -19,9 +22,9 @@
     <div class="intro-content">
       <img id="introLogo" class="intro-logo" src="/static/intro-logo.png" alt="SwissKnife logo" onerror="this.hidden=true;document.getElementById('introLogoFallback').hidden=false;">
       <div id="introLogoFallback" class="intro-logo-fallback" hidden>SWISSKNIFE</div>
-      <form id="introLoginForm" class="intro-form" autocomplete="on">
-        <label for="introPasswordInput">Password</label>
-        <input id="introPasswordInput" type="password" autocomplete="current-password" placeholder="SwissKnife">
+      <form id="introLoginForm" class="intro-form" autocomplete="off">
+        <label for="introPasswordInput">pass</label>
+        <input id="introPasswordInput" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
         <button id="introLoginBtn" type="submit" class="primary">Unlock</button>
       </form>
       <p id="introHint" class="hint"></p>
@@ -97,6 +100,6 @@
     </section>
   </main>
 
-  <script src="/static/app.js" onerror="this.onerror=null;this.src='app.js';"></script>
+  <script src="/static/app.js?v=20260220a" onerror="this.onerror=null;this.src='app.js';"></script>
 </body>
 </html>
