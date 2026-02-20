@@ -295,7 +295,11 @@ const state = {
   lootContentByFile: {},
   pollHandle: null,
   deauthStateByTask: {},
+  attackControlDraftByModule: {},
+  attackUiLockUntil: 0,
 };
+
+const ATTACK_UI_LOCK_MS = 12000;
 
 const matrix = {
   fontSize: 18,
@@ -585,6 +589,55 @@ function setAttackPanelsHidden(hidden) {
   });
 }
 
+function markAttackUiInteraction(extraMs = ATTACK_UI_LOCK_MS) {
+  const lockUntil = Date.now() + Math.max(1200, Number(extraMs) || ATTACK_UI_LOCK_MS);
+  state.attackUiLockUntil = Math.max(state.attackUiLockUntil || 0, lockUntil);
+}
+
+function isAttackUiLocked() {
+  if (state.selectedSectionId !== "attacks") {
+    return false;
+  }
+  return Date.now() < (state.attackUiLockUntil || 0);
+}
+
+function isAttackFormFocused() {
+  if (state.selectedSectionId !== "attacks" || !dom.sectionBody) {
+    return false;
+  }
+  const active = document.activeElement;
+  if (!(active instanceof Element)) {
+    return false;
+  }
+  if (!dom.sectionBody.contains(active)) {
+    return false;
+  }
+  return Boolean(active.closest(".control-field, .control-grid, .attack-quick-grid, .attack-focus-card"));
+}
+
+function shouldPauseAttackRefresh() {
+  return isAttackUiLocked() || isAttackFormFocused();
+}
+
+function getAttackControlDraft(moduleId) {
+  if (!moduleId) {
+    return {};
+  }
+  if (!state.attackControlDraftByModule[moduleId]) {
+    state.attackControlDraftByModule[moduleId] = {};
+  }
+  return state.attackControlDraftByModule[moduleId];
+}
+
+function setAttackControlDraft(moduleId, controlId, value) {
+  if (!moduleId || !controlId) {
+    return;
+  }
+  const draft = getAttackControlDraft(moduleId);
+  draft[controlId] = value;
+  state.attackControlDraftByModule[moduleId] = draft;
+}
+
 function resolveModuleInfo(moduleId) {
   return state.moduleById[moduleId] || null;
 }
@@ -840,7 +893,18 @@ function buildInterfaceLegend(includeBuiltin = false) {
   return wrap;
 }
 
-function createControlField(control) {
+function createControlField(control, context = {}) {
+  const sectionId = String(context.sectionId || "");
+  const moduleId = String(context.moduleId || "");
+  const isAttackControl = sectionId === "attacks" && moduleId;
+  const attackDraft = isAttackControl ? getAttackControlDraft(moduleId) : null;
+
+  const markTouched = () => {
+    if (isAttackControl) {
+      markAttackUiInteraction();
+    }
+  };
+
   const wrap = document.createElement("label");
   wrap.className = "control-field";
 
@@ -870,7 +934,21 @@ function createControlField(control) {
       if (defaultValue && options.some((entry) => entry.value === defaultValue)) {
         select.value = defaultValue;
       }
+      const draftValue = attackDraft ? String(attackDraft[control.id] ?? "") : "";
+      if (draftValue && options.some((entry) => String(entry.value) === draftValue)) {
+        select.value = draftValue;
+      }
     }
+    select.addEventListener("focus", markTouched);
+    select.addEventListener("pointerdown", markTouched);
+    select.addEventListener("mousedown", markTouched);
+    select.addEventListener("touchstart", markTouched, { passive: true });
+    select.addEventListener("change", () => {
+      if (isAttackControl) {
+        setAttackControlDraft(moduleId, control.id, select.value);
+      }
+      markTouched();
+    });
     wrap.appendChild(select);
     if (control.source === "tool_interfaces" || control.source === "all_interfaces") {
       const note = document.createElement("span");
@@ -897,6 +975,9 @@ function createControlField(control) {
     input.max = String(control.max ?? 100);
     input.step = String(control.step ?? 1);
     input.value = String(control.default ?? control.min ?? 0);
+    if (attackDraft && attackDraft[control.id] !== undefined) {
+      input.value = String(attackDraft[control.id]);
+    }
 
     const badge = document.createElement("strong");
     badge.className = "range-value";
@@ -904,7 +985,15 @@ function createControlField(control) {
 
     input.addEventListener("input", () => {
       badge.textContent = formatControlValue(control, input.value);
+      if (isAttackControl) {
+        setAttackControlDraft(moduleId, control.id, input.value);
+      }
+      markTouched();
     });
+    input.addEventListener("focus", markTouched);
+    input.addEventListener("pointerdown", markTouched);
+    input.addEventListener("mousedown", markTouched);
+    input.addEventListener("touchstart", markTouched, { passive: true });
 
     row.appendChild(input);
     row.appendChild(badge);
@@ -916,9 +1005,22 @@ function createControlField(control) {
   input.type = "text";
   input.dataset.controlId = control.id;
   input.value = control.default !== undefined ? String(control.default) : "";
+  if (attackDraft && attackDraft[control.id] !== undefined) {
+    input.value = String(attackDraft[control.id]);
+  }
   if (control.placeholder) {
     input.placeholder = control.placeholder;
   }
+  input.addEventListener("focus", markTouched);
+  input.addEventListener("pointerdown", markTouched);
+  input.addEventListener("mousedown", markTouched);
+  input.addEventListener("touchstart", markTouched, { passive: true });
+  input.addEventListener("input", () => {
+    if (isAttackControl) {
+      setAttackControlDraft(moduleId, control.id, input.value);
+    }
+    markTouched();
+  });
   wrap.appendChild(input);
   return wrap;
 }
@@ -1047,6 +1149,7 @@ function createDeauthFlowPanel(task) {
           button.classList.add("active");
         }
         button.addEventListener("click", async () => {
+          markAttackUiInteraction();
           await sendTaskInput(task.task_id, String(entry.index), `Target: ${entry.ssid}`);
           setDeauthState(task.task_id, {
             networkSelected: true,
@@ -1069,6 +1172,7 @@ function createDeauthFlowPanel(task) {
       rescanBtn.type = "button";
       rescanBtn.textContent = "Rescan";
       rescanBtn.addEventListener("click", () => {
+        markAttackUiInteraction();
         sendTaskInput(task.task_id, "r", "Rescan requested");
       });
       wrap.appendChild(rescanBtn);
@@ -1084,12 +1188,18 @@ function createDeauthFlowPanel(task) {
     const yesBtn = document.createElement("button");
     yesBtn.type = "button";
     yesBtn.textContent = "Rescan";
-    yesBtn.addEventListener("click", () => sendTaskInput(task.task_id, "y", "Rescan confirmed"));
+    yesBtn.addEventListener("click", () => {
+      markAttackUiInteraction();
+      sendTaskInput(task.task_id, "y", "Rescan confirmed");
+    });
     const noBtn = document.createElement("button");
     noBtn.type = "button";
     noBtn.className = "danger";
     noBtn.textContent = "Cancel";
-    noBtn.addEventListener("click", () => sendTaskInput(task.task_id, "n", "Rescan canceled"));
+    noBtn.addEventListener("click", () => {
+      markAttackUiInteraction();
+      sendTaskInput(task.task_id, "n", "Rescan canceled");
+    });
     actions.appendChild(yesBtn);
     actions.appendChild(noBtn);
     wrap.appendChild(actions);
@@ -1129,6 +1239,7 @@ function createAttackRuntimePanel(item) {
     stop.className = "danger";
     stop.textContent = "Stop";
     stop.addEventListener("click", () => {
+      markAttackUiInteraction();
       stopTaskById(task.task_id);
     });
     head.appendChild(stop);
@@ -1167,7 +1278,12 @@ function appendCardBody(contentWrap, item, sectionId, card, controls, availabili
     const controlsWrap = document.createElement("div");
     controlsWrap.className = "control-grid";
     controls.forEach((control) => {
-      controlsWrap.appendChild(createControlField(control));
+      controlsWrap.appendChild(
+        createControlField(control, {
+          sectionId,
+          moduleId: item.module_id || "",
+        }),
+      );
     });
     contentWrap.appendChild(controlsWrap);
   }
@@ -1186,6 +1302,9 @@ function appendCardBody(contentWrap, item, sectionId, card, controls, availabili
     button.addEventListener("click", async () => {
       if (button.disabled) {
         return;
+      }
+      if (sectionId === "attacks") {
+        markAttackUiInteraction(9000);
       }
       try {
         const args = collectModuleArgs(item, card);
@@ -1259,6 +1378,7 @@ function createAttackQuickButton(item) {
   button.appendChild(subtitle);
 
   button.addEventListener("click", () => {
+    markAttackUiInteraction(4000);
     state.expandedAttackId = item.id;
     renderSection();
   });
@@ -2438,7 +2558,7 @@ async function loadTasks() {
       state.activeTaskId = null;
       renderTasks();
       renderResultView();
-      if (state.selectedSectionId === "attacks") {
+      if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
         renderSection();
       }
       return;
@@ -2454,7 +2574,7 @@ async function loadTasks() {
       loadTaskLogs(state.activeTaskId, true),
     ]);
     renderResultView();
-    if (state.selectedSectionId === "attacks") {
+    if (state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
       renderSection();
     }
   } catch (error) {
