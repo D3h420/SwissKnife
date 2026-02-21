@@ -9,7 +9,6 @@ import json
 import logging
 import os
 import secrets
-import shlex
 import signal
 import subprocess
 import sys
@@ -248,6 +247,14 @@ MENU_SCHEMA = {
                             "default": 25,
                             "suffix": "s",
                         },
+                        {
+                            "id": "portal_file",
+                            "label": "Portal",
+                            "kind": "select",
+                            "source": "portal_templates",
+                            "options": [{"value": "portal.html", "label": "portal.html"}],
+                            "default": "portal.html",
+                        },
                     ],
                 },
                 {
@@ -438,7 +445,6 @@ def collect_interface_payload() -> dict:
 class StartTaskRequest(BaseModel):
     module_id: str
     args: List[str] = Field(default_factory=list)
-    raw_args: str = ""
 
 
 class TaskInputRequest(BaseModel):
@@ -784,11 +790,6 @@ def create_app(
     @app.post("/api/tasks/start", dependencies=[Depends(_require_access)])
     async def api_start_task(payload: StartTaskRequest):
         args = list(payload.args)
-        if payload.raw_args.strip():
-            try:
-                args.extend(shlex.split(payload.raw_args))
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=f"Invalid args string: {exc}") from exc
 
         try:
             task = manager.start_task(payload.module_id, args=args)

@@ -474,10 +474,6 @@ body {
   justify-content: flex-end;
 }
 
-#centerPanel > .panel-head .panel-actions #globalArgsInput {
-  width: min(220px, 26vw);
-}
-
 .second-head {
   border-top: 1px solid var(--stroke);
   border-top-left-radius: 0;
@@ -1535,10 +1531,6 @@ button.danger {
     width: 100%;
     justify-content: flex-start;
     gap: 6px;
-  }
-
-  #centerPanel > .panel-head .panel-actions #globalArgsInput {
-    width: min(185px, 44vw);
   }
 
   .sub-menu {

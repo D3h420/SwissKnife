@@ -187,6 +187,14 @@ const FALLBACK_MENU = {
               default: 25,
               suffix: "s",
             },
+            {
+              id: "portal_file",
+              label: "Portal",
+              kind: "select",
+              source: "portal_templates",
+              options: [{ value: "portal.html", label: "portal.html" }],
+              default: "portal.html",
+            },
           ],
         },
         {
@@ -349,7 +357,6 @@ const dom = {
   centerPanel: document.getElementById("centerPanel"),
   sectionTitle: document.getElementById("sectionTitle"),
   sectionBody: document.getElementById("sectionBody"),
-  globalArgsInput: document.getElementById("globalArgsInput"),
   tasksHead: document.getElementById("tasksHead"),
   refreshTasksBtn: document.getElementById("refreshTasksBtn"),
   tasksList: document.getElementById("tasksList"),
@@ -1215,6 +1222,7 @@ function collectAutomationPreset(item, card) {
       attackInterface,
       apInterface: resolveSecondaryAttackInterface(readControlValue(card, "ap_interface", "auto"), attackInterface),
       scanDuration: normalizePositiveInt(readControlValue(card, "scan_duration", 25), 25, 1),
+      portalFile: String(readControlValue(card, "portal_file", "portal.html")).trim() || "portal.html",
       selectedNetworkIndex: null,
     };
   }
@@ -1290,12 +1298,16 @@ function applyAutomationPreset(taskId, moduleId, preset) {
       attackInterface,
       apInterface: resolveSecondaryAttackInterface(preset.apInterface || "auto", attackInterface),
       scanDuration: normalizePositiveInt(preset.scanDuration, 25, 1),
+      portalFile: String(preset.portalFile || "portal.html").trim() || "portal.html",
       interfaceSent: false,
       monitorEnterSent: false,
       scanDurationSent: false,
       scanEnterSent: false,
+      scanStartedAt: 0,
       networkSent: false,
       selectedNetworkIndex: preset.selectedNetworkIndex || null,
+      selectedNetworkIndexes: [],
+      pendingNetworkIndexes: [],
       rescanAttempts: 0,
       apInterfaceSent: false,
       apNameSent: false,
@@ -1303,6 +1315,9 @@ function applyAutomationPreset(taskId, moduleId, preset) {
       portalSent: false,
       startSent: false,
       finishChoiceSent: false,
+      lastPromptLine: "",
+      lastNetworkCount: 0,
+      renderPending: false,
       autoLock: false,
       lastActionByKey: {},
     });
@@ -1595,6 +1610,27 @@ function createPortalFlowPanel(task) {
   return wrap;
 }
 
+function getTwinsScanRemainingSeconds(task, twins) {
+  if (!task?.running) {
+    return 0;
+  }
+  const startedAt = Number(twins?.scanStartedAt || 0);
+  if (!Number.isFinite(startedAt) || startedAt <= 0) {
+    return 0;
+  }
+  const duration = normalizePositiveInt(twins?.scanDuration, 25, 1);
+  const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  return Math.max(0, duration - elapsed);
+}
+
+function normalizeTwinsSelection(rawIndexes) {
+  const rows = Array.isArray(rawIndexes) ? rawIndexes : [];
+  const indexes = rows
+    .map((value) => normalizePositiveInt(value, 0, 0))
+    .filter((value) => value > 0);
+  return Array.from(new Set(indexes)).sort((left, right) => left - right);
+}
+
 function createTwinsFlowPanel(task) {
   const wrap = document.createElement("div");
   wrap.className = "attack-runtime-body";
@@ -1607,27 +1643,169 @@ function createTwinsFlowPanel(task) {
     wrap.appendChild(promptBar);
   }
 
-  if (hasPrompt(task.task_id, /Select network\(s\).*R to rescan/i)) {
-    const networks = parseTwinsNetworks(task.task_id);
+  const networks = parseTwinsNetworks(task.task_id);
+  const waitingTargets = task.running && !twins.networkSent && (
+    hasPrompt(task.task_id, /Select network\(s\).*R to rescan/i, 220)
+    || (task.running && twins.scanEnterSent && networks.length > 0)
+  );
+  const waitingRescan = task.running && !twins.networkSent
+    && hasPrompt(task.task_id, /Rescan\? \(Y\/N\)/i, 140)
+    && networks.length === 0;
+
+  if (waitingTargets) {
     if (networks.length) {
-      wrap.appendChild(
-        createIndexedChoiceGrid(task, networks, twins.selectedNetworkIndex, (entry) => ({
-          label: `Evil Twin target: ${entry.ssid}`,
-          onSelected: () => setTwinsState(task.task_id, { selectedNetworkIndex: entry.index, networkSent: true }),
-        })),
+      const picked = normalizeTwinsSelection(
+        twins.pendingNetworkIndexes?.length ? twins.pendingNetworkIndexes : twins.selectedNetworkIndexes,
       );
+      const grid = document.createElement("div");
+      grid.className = "attack-network-grid";
+      networks.forEach((entry) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "attack-network-btn";
+        if (picked.includes(entry.index)) {
+          button.classList.add("active");
+        }
+        button.addEventListener("click", () => {
+          markAttackUiInteraction();
+          const current = new Set(picked);
+          if (current.has(entry.index)) {
+            current.delete(entry.index);
+          } else {
+            current.add(entry.index);
+          }
+          setTwinsState(task.task_id, {
+            pendingNetworkIndexes: Array.from(current).sort((left, right) => left - right),
+          });
+          renderSection();
+        });
+
+        const title = document.createElement("strong");
+        title.textContent = `${entry.index}) ${entry.ssid || "<hidden>"}`;
+        button.appendChild(title);
+        const meta = document.createElement("span");
+        meta.className = "attack-network-meta";
+        meta.textContent = `${entry.bssid} | ch ${entry.channel || "?"} | ${entry.signal || entry.meta || "-"}`;
+        button.appendChild(meta);
+        grid.appendChild(button);
+      });
+      wrap.appendChild(grid);
+
+      const actions = document.createElement("div");
+      actions.className = "panel-actions";
+
+      const start = document.createElement("button");
+      start.type = "button";
+      start.className = "primary";
+      start.textContent = "Start Evil Twin";
+      start.disabled = picked.length === 0;
+      start.addEventListener("click", async () => {
+        const selected = normalizeTwinsSelection(picked);
+        if (!selected.length) {
+          return;
+        }
+        markAttackUiInteraction(7000);
+        const payload = selected.join(",");
+        const sent = await sendTaskInput(task.task_id, payload, `Evil Twin targets: ${payload}`);
+        if (!sent) {
+          return;
+        }
+        setTwinsState(task.task_id, {
+          networkSent: true,
+          selectedNetworkIndex: selected[0] || null,
+          selectedNetworkIndexes: selected,
+          pendingNetworkIndexes: selected,
+          scanStartedAt: 0,
+        });
+        await loadTaskLogs(task.task_id, true);
+        renderSection();
+      });
+      actions.appendChild(start);
+
+      const rescan = document.createElement("button");
+      rescan.type = "button";
+      rescan.textContent = "Rescan";
+      rescan.addEventListener("click", async () => {
+        markAttackUiInteraction();
+        setTwinsState(task.task_id, {
+          networkSent: false,
+          selectedNetworkIndex: null,
+          selectedNetworkIndexes: [],
+          pendingNetworkIndexes: [],
+          scanStartedAt: Date.now(),
+        });
+        await sendTaskInput(task.task_id, "r", "Evil Twin rescan requested");
+      });
+      actions.appendChild(rescan);
+      wrap.appendChild(actions);
+    } else {
+      const waiting = document.createElement("div");
+      waiting.className = "attack-runtime-state";
+      waiting.textContent = "Scanning... waiting for target list.";
+      wrap.appendChild(waiting);
     }
+    return wrap;
+  }
+
+  if (waitingRescan) {
     const actions = document.createElement("div");
     actions.className = "panel-actions";
-    const rescan = document.createElement("button");
-    rescan.type = "button";
-    rescan.textContent = "Rescan";
-    rescan.addEventListener("click", () => {
+    const yesBtn = document.createElement("button");
+    yesBtn.type = "button";
+    yesBtn.textContent = "Rescan";
+    yesBtn.addEventListener("click", async () => {
       markAttackUiInteraction();
-      sendTaskInput(task.task_id, "r", "Evil Twin rescan requested");
+      setTwinsState(task.task_id, { scanStartedAt: Date.now() });
+      await sendTaskInput(task.task_id, "y", "Rescan confirmed");
     });
-    actions.appendChild(rescan);
+    actions.appendChild(yesBtn);
+    const noBtn = document.createElement("button");
+    noBtn.type = "button";
+    noBtn.className = "danger";
+    noBtn.textContent = "Cancel";
+    noBtn.addEventListener("click", async () => {
+      markAttackUiInteraction();
+      await sendTaskInput(task.task_id, "n", "Rescan canceled");
+    });
+    actions.appendChild(noBtn);
     wrap.appendChild(actions);
+    return wrap;
+  }
+
+  if (task.running && twins.scanEnterSent && !twins.networkSent) {
+    const remaining = getTwinsScanRemainingSeconds(task, twins);
+    const scanning = document.createElement("div");
+    scanning.className = "attack-runtime-state";
+    scanning.textContent = remaining > 0
+      ? `Recon scan in progress... ${remaining}s left`
+      : "Recon scan in progress...";
+    wrap.appendChild(scanning);
+    return wrap;
+  }
+
+  if (task.running && twins.networkSent && !twins.startSent) {
+    const selected = normalizeTwinsSelection(
+      twins.selectedNetworkIndexes?.length ? twins.selectedNetworkIndexes : [twins.selectedNetworkIndex],
+    );
+    const preparing = document.createElement("div");
+    preparing.className = "attack-runtime-state";
+    preparing.textContent = selected.length
+      ? `Targets locked: ${selected.join(", ")}. Preparing Evil Twin...`
+      : "Target selected. Preparing Evil Twin...";
+    wrap.appendChild(preparing);
+    return wrap;
+  }
+
+  if (task.running && twins.startSent) {
+    const selected = normalizeTwinsSelection(
+      twins.selectedNetworkIndexes?.length ? twins.selectedNetworkIndexes : [twins.selectedNetworkIndex],
+    );
+    const active = document.createElement("div");
+    active.className = "attack-runtime-state";
+    active.textContent = selected.length
+      ? `Evil Twin active | targets ${selected.join(", ")}`
+      : "Evil Twin active";
+    wrap.appendChild(active);
     return wrap;
   }
 
@@ -2720,12 +2898,16 @@ function getTwinsState(taskId) {
       attackInterface,
       apInterface: resolveSecondaryAttackInterface("auto", attackInterface),
       scanDuration: 25,
+      portalFile: "portal.html",
       interfaceSent: false,
       monitorEnterSent: false,
       scanDurationSent: false,
       scanEnterSent: false,
+      scanStartedAt: 0,
       networkSent: false,
       selectedNetworkIndex: null,
+      selectedNetworkIndexes: [],
+      pendingNetworkIndexes: [],
       rescanAttempts: 0,
       apInterfaceSent: false,
       apNameSent: false,
@@ -2733,6 +2915,9 @@ function getTwinsState(taskId) {
       portalSent: false,
       startSent: false,
       finishChoiceSent: false,
+      lastPromptLine: "",
+      lastNetworkCount: 0,
+      renderPending: false,
       autoLock: false,
       lastActionByKey: {},
     };
@@ -3167,9 +3352,36 @@ async function maybeDriveTwins(task) {
     return;
   }
   const taskId = task.task_id;
-  const twins = getTwinsState(taskId);
+  let twins = getTwinsState(taskId);
 
-  if (hasPrompt(taskId, /Select attack interface.*number or name/i) && !twins.interfaceSent) {
+  if (twins.renderPending && state.selectedSectionId === "attacks" && !shouldPauseAttackRefresh()) {
+    setTwinsState(taskId, { renderPending: false });
+    renderSection();
+    twins = getTwinsState(taskId);
+  }
+
+  const promptLine = latestPromptLine(taskId, 100);
+  const networkCount = parseTwinsNetworks(taskId).length;
+  if (promptLine !== twins.lastPromptLine || networkCount !== twins.lastNetworkCount) {
+    const patch = {
+      lastPromptLine: promptLine,
+      lastNetworkCount: networkCount,
+    };
+    if (state.selectedSectionId === "attacks") {
+      if (!shouldPauseAttackRefresh()) {
+        patch.renderPending = false;
+        setTwinsState(taskId, patch);
+        renderSection();
+      } else {
+        patch.renderPending = true;
+        setTwinsState(taskId, patch);
+      }
+    } else {
+      setTwinsState(taskId, patch);
+    }
+  }
+
+  if (isLatestPrompt(taskId, /Select attack interface.*number or name/i) && !twins.interfaceSent) {
     const iface = resolvePreferredAttackInterface(twins.attackInterface);
     if (
       iface
@@ -3187,7 +3399,7 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Press Enter.*switch .*monitor mode/i) && !twins.monitorEnterSent) {
+  if (isLatestPrompt(taskId, /Press Enter.*switch .*monitor mode/i) && !twins.monitorEnterSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-monitor-enter", "", {
         cooldownMs: 1400,
@@ -3199,7 +3411,7 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Scan duration.*seconds/i) && !twins.scanDurationSent) {
+  if (isLatestPrompt(taskId, /Scan duration.*seconds/i) && !twins.scanDurationSent) {
     const duration = normalizePositiveInt(twins.scanDuration, 25, 1);
     if (
       await autoSendTaskInput(taskId, twins, "twins-scan-duration", String(duration), {
@@ -3211,52 +3423,34 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Press Enter.*scan networks/i) && !twins.scanEnterSent) {
+  if (isLatestPrompt(taskId, /Press Enter.*scan networks/i) && !twins.scanEnterSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-scan-enter", "", {
         cooldownMs: 1400,
         silentError: true,
       })
     ) {
-      setTwinsState(taskId, { scanEnterSent: true });
+      setTwinsState(taskId, {
+        scanEnterSent: true,
+        scanStartedAt: Date.now(),
+        networkSent: false,
+        selectedNetworkIndex: null,
+        selectedNetworkIndexes: [],
+        pendingNetworkIndexes: [],
+      });
     }
     return;
   }
 
-  if (hasPrompt(taskId, /Select network\(s\).*R to rescan/i) && !twins.networkSent) {
-    const networks = parseTwinsNetworks(taskId);
-    let selected = normalizePositiveInt(twins.selectedNetworkIndex, 0, 0);
-    if (!selected && networks.length) {
-      selected = networks[0].index;
-    }
-    if (selected > 0) {
-      if (
-        await autoSendTaskInput(taskId, twins, "twins-select-network", String(selected), {
-          successHint: `Evil Twin: selected network ${selected}.`,
-          silentError: true,
-        })
-      ) {
-        setTwinsState(taskId, { selectedNetworkIndex: selected, networkSent: true });
-      }
-    }
+  if (hasPrompt(taskId, /Select network\(s\).*R to rescan/i, 220) && !twins.networkSent) {
     return;
   }
 
-  if (hasPrompt(taskId, /Rescan\? \(Y\/N\)/i) && !twins.networkSent) {
-    const retries = normalizePositiveInt(twins.rescanAttempts, 0, 0);
-    const payload = retries < 2 ? "y" : "n";
-    if (
-      await autoSendTaskInput(taskId, twins, "twins-rescan-answer", payload, {
-        cooldownMs: 1400,
-        silentError: true,
-      })
-    ) {
-      setTwinsState(taskId, { rescanAttempts: retries + 1 });
-    }
+  if (isLatestPrompt(taskId, /Rescan\? \(Y\/N\)/i) && !twins.networkSent) {
     return;
   }
 
-  if (hasPrompt(taskId, /Select AP interface.*number or name/i) && !twins.apInterfaceSent) {
+  if (twins.networkSent && isLatestPrompt(taskId, /Select AP interface.*number or name/i) && !twins.apInterfaceSent) {
     const iface = resolveSecondaryAttackInterface(twins.apInterface, twins.attackInterface);
     if (
       iface
@@ -3264,12 +3458,12 @@ async function maybeDriveTwins(task) {
         silentError: true,
       })
     ) {
-      setTwinsState(taskId, { apInterface: iface, apInterfaceSent: true });
+      setTwinsState(taskId, { apInterface: iface, apInterfaceSent: true, scanStartedAt: 0 });
     }
     return;
   }
 
-  if (hasPrompt(taskId, /Select AP name.*number/i) && !twins.apNameSent) {
+  if (twins.networkSent && isLatestPrompt(taskId, /Select AP name.*number/i) && !twins.apNameSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-ap-name", "1", {
         silentError: true,
@@ -3280,7 +3474,7 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Proceed.*\(Y\/N\)/i) && !twins.proceedSent) {
+  if (twins.networkSent && isLatestPrompt(taskId, /Proceed.*\(Y\/N\)/i) && !twins.proceedSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-proceed", "y", {
         silentError: true,
@@ -3291,9 +3485,10 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Select portal HTML.*number/i) && !twins.portalSent) {
+  if (twins.networkSent && isLatestPrompt(taskId, /Select portal HTML.*number/i) && !twins.portalSent) {
+    const index = resolvePortalTemplateIndex(twins.portalFile);
     if (
-      await autoSendTaskInput(taskId, twins, "twins-portal-template", "1", {
+      await autoSendTaskInput(taskId, twins, "twins-portal-template", String(index), {
         silentError: true,
       })
     ) {
@@ -3302,7 +3497,7 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Press Enter.*start Evil Twin/i) && !twins.startSent) {
+  if (twins.networkSent && isLatestPrompt(taskId, /Press Enter.*start Evil Twin/i) && !twins.startSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-start-enter", "", {
         cooldownMs: 1400,
@@ -3314,7 +3509,7 @@ async function maybeDriveTwins(task) {
     return;
   }
 
-  if (hasPrompt(taskId, /Back to main menu.*restart/i) && !twins.finishChoiceSent) {
+  if (isLatestPrompt(taskId, /Back to main menu.*restart/i) && !twins.finishChoiceSent) {
     if (
       await autoSendTaskInput(taskId, twins, "twins-finish-choice", "b", {
         silentError: true,
@@ -3717,14 +3912,27 @@ function renderReconLiveStatus(task) {
   dom.resultsView.appendChild(waiting);
 }
 
+function getResultTaskForCurrentSection() {
+  const activeTask = getTaskById(state.activeTaskId);
+  if (state.selectedSectionId === "recon") {
+    if (activeTask && isReconModule(activeTask.module_id)) {
+      return activeTask;
+    }
+    return state.tasks.find((task) => isReconModule(task.module_id)) || null;
+  }
+  return activeTask;
+}
+
 function renderResultView() {
   dom.resultsView.innerHTML = "";
 
-  const task = getTaskById(state.activeTaskId);
+  const task = getResultTaskForCurrentSection();
   if (!task) {
     const empty = document.createElement("div");
     empty.className = "muted-block";
-    empty.textContent = "Select task to see module output.";
+    empty.textContent = state.selectedSectionId === "recon"
+      ? "Run scanner or sniffer to see recon output."
+      : "Select task to see module output.";
     dom.resultsView.appendChild(empty);
     return;
   }
@@ -4161,10 +4369,22 @@ async function loadTasks() {
     }
 
     renderTasks();
-    await Promise.all([
-      loadTaskResult(state.activeTaskId, true),
-      loadTaskLogs(state.activeTaskId, true),
-    ]);
+    const refreshTaskIds = new Set();
+    if (state.activeTaskId) {
+      refreshTaskIds.add(state.activeTaskId);
+    }
+    const sectionTask = getResultTaskForCurrentSection();
+    if (sectionTask?.task_id) {
+      refreshTaskIds.add(sectionTask.task_id);
+    }
+    await Promise.all(
+      Array.from(refreshTaskIds).map(async (taskId) => {
+        await Promise.all([
+          loadTaskResult(taskId, true),
+          loadTaskLogs(taskId, true),
+        ]);
+      }),
+    );
     renderResultView();
     if (state.selectedSectionId === "attacks") {
       if (state.attackTaskSig !== attackSig && !shouldPauseSectionRefresh()) {
@@ -4192,7 +4412,6 @@ async function startModule(moduleId, args = []) {
       body: {
         module_id: moduleId,
         args,
-        raw_args: dom.globalArgsInput.value.trim(),
       },
     });
     const task = data.task;
