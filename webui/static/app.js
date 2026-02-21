@@ -275,10 +275,10 @@ const FALLBACK_MENU = {
 };
 
 const MENU_ICON_FILES = {
-  recon: "recon_icon.jpg",
-  attacks: "attack_icon.jpg",
-  bluetooth: "bluetooth_icon.jpg",
-  loot: "loot_icon.jpg",
+  recon: "recon_icon.PNG",
+  attacks: "attack_icon.PNG",
+  bluetooth: "bluetooth_icon.PNG",
+  loot: "loot_icon.PNG",
 };
 
 const state = {
