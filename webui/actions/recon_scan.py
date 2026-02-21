@@ -8,6 +8,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_scan_result_payload(
+    interface: str,
+    duration: int,
+    aps: dict,
+    running: bool,
+    remaining: int,
+    vendors: dict,
+    timestamp: Optional[int] = None,
+) -> dict:
+    return {
+        "kind": "recon_scan",
+        "interface": interface,
+        "duration": duration,
+        "timestamp": int(timestamp if timestamp is not None else time.time()),
+        "running": bool(running),
+        "remaining": max(0, int(remaining)),
+        "network_count": len(aps),
+        "networks": serialize_access_points(aps, vendors),
+    }
+
+
 def main() -> None:
     args = parse_args()
     if args.duration <= 0:
@@ -69,13 +91,25 @@ def main() -> None:
     mode_changed = False
     try:
         original_mode, mode_changed = enable_monitor_mode(interface)
+        last_emit = 0.0
 
-        update_cb = lambda snapshot, remaining: recon.display_scan_live_update(
-            snapshot,
-            vendors,
-            remaining,
-            interface,
-        )
+        def update_cb(snapshot, remaining):
+            nonlocal last_emit
+            now = time.time()
+            if (now - last_emit) < 1.0 and remaining > 0:
+                return
+            last_emit = now
+            payload = build_scan_result_payload(
+                interface=interface,
+                duration=args.duration,
+                aps=snapshot,
+                running=True,
+                remaining=remaining,
+                vendors=vendors,
+                timestamp=int(now),
+            )
+            print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
         aps = recon.scan_wireless_networks_aircrack(
             interface=interface,
             duration_seconds=args.duration,
@@ -85,15 +119,16 @@ def main() -> None:
             on_update=update_cb,
         )
         recon.display_scan_results(aps, vendors)
-        result_payload = {
-            "kind": "recon_scan",
-            "interface": interface,
-            "duration": args.duration,
-            "timestamp": int(time.time()),
-            "network_count": len(aps),
-            "networks": serialize_access_points(aps, vendors),
-        }
-        print(f"[webui-result] {json.dumps(result_payload, ensure_ascii=False)}")
+        result_payload = build_scan_result_payload(
+            interface=interface,
+            duration=args.duration,
+            aps=aps,
+            running=False,
+            remaining=0,
+            vendors=vendors,
+            timestamp=int(time.time()),
+        )
+        print(f"[webui-result] {json.dumps(result_payload, ensure_ascii=False)}", flush=True)
         logging.info("[webui] Recon scan finished.")
     except KeyboardInterrupt:
         logging.warning("[webui] Recon scan interrupted by operator.")

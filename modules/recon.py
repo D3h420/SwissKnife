@@ -662,7 +662,8 @@ class SnifferState:
     probe_counts: Dict[str, int] = field(default_factory=dict)
     packet_count: int = 0
     probe_total: int = 0
-    seen_probe_pairs: Set[Tuple[str, str]] = field(default_factory=set)
+    probe_pair_counts: Dict[Tuple[str, str], int] = field(default_factory=dict)
+    probe_pair_last_seen: Dict[Tuple[str, str], float] = field(default_factory=dict)
 
 
 @dataclass
@@ -1013,13 +1014,14 @@ def display_sniffer_live(
     probe_unique: int,
     interface: str,
     status: str,
+    control_hint: str = "Press Enter to stop.",
 ) -> None:
     lines = [
         f"Sniffer on {interface}",
         f"Packets: {packet_count}",
         f"Probes:  {probe_total} (SSID: {probe_unique})",
         f"Status:  {status.upper()}",
-        "Press Enter to stop.",
+        control_hint,
     ]
     output = build_box(lines)
     if COLOR_ENABLED:
@@ -1070,7 +1072,13 @@ def format_probe_lines(probe_counts: Dict[str, int], probe_total: int) -> List[s
     return lines
 
 
-def merge_snapshot_into_state(state: SnifferState, snapshot: AirodumpSnapshot, packet_offset: int) -> None:
+def merge_snapshot_into_state(
+    state: SnifferState,
+    snapshot: AirodumpSnapshot,
+    packet_offset: int,
+    now_ts: Optional[float] = None,
+) -> None:
+    now_value = now_ts or time.time()
     for bssid, ap in snapshot.aps.items():
         existing = state.aps.get(bssid)
         if existing is None:
@@ -1083,9 +1091,11 @@ def merge_snapshot_into_state(state: SnifferState, snapshot: AirodumpSnapshot, p
     for station, probes in snapshot.probes_by_station.items():
         for ssid in probes:
             key = (station, ssid)
-            if key in state.seen_probe_pairs:
+            last_seen = state.probe_pair_last_seen.get(key, 0.0)
+            state.probe_pair_last_seen[key] = now_value
+            if now_value - last_seen < 1.2:
                 continue
-            state.seen_probe_pairs.add(key)
+            state.probe_pair_counts[key] = state.probe_pair_counts.get(key, 0) + 1
             state.probe_counts[ssid] = state.probe_counts.get(ssid, 0) + 1
             state.probe_total += 1
 
@@ -1097,6 +1107,9 @@ def run_sniffer(
     channels: Optional[List[int]] = None,
     hop_interval: float = DEFAULT_HOP_INTERVAL,
     update_interval: float = 1.0,
+    display_live: bool = True,
+    control_hint: str = "Press Enter to stop.",
+    on_update: Optional[Callable[[SnifferState, str], None]] = None,
 ) -> None:
     _ = hop_interval
     capture_dir = tempfile.mkdtemp(prefix="swissknife_recon_sniffer_")
@@ -1119,14 +1132,18 @@ def run_sniffer(
                 break
 
             snapshot = parse_airodump_csv(csv_path)
-            merge_snapshot_into_state(state, snapshot, packet_offset)
-            display_sniffer_live(
-                state.packet_count,
-                state.probe_total,
-                len(state.probe_counts),
-                interface,
-                status,
-            )
+            merge_snapshot_into_state(state, snapshot, packet_offset, now_ts=time.time())
+            if display_live:
+                display_sniffer_live(
+                    state.packet_count,
+                    state.probe_total,
+                    len(state.probe_counts),
+                    interface,
+                    status,
+                    control_hint=control_hint,
+                )
+            if on_update:
+                on_update(state, status)
             time.sleep(max(0.2, update_interval))
 
     except FileNotFoundError:
@@ -1139,7 +1156,9 @@ def run_sniffer(
         if process is not None:
             stop_airodump_process(process)
         final_snapshot = parse_airodump_csv(csv_path)
-        merge_snapshot_into_state(state, final_snapshot, packet_offset)
+        merge_snapshot_into_state(state, final_snapshot, packet_offset, now_ts=time.time())
+        if on_update:
+            on_update(state, status)
         cleanup_capture_dir(capture_dir)
     stop_event.set()
 

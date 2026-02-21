@@ -2103,9 +2103,15 @@ function renderTasks() {
     const row = document.createElement("div");
     row.className = "task-row";
 
-    const title = document.createElement("strong");
-    title.textContent = `${task.module_name} (${task.task_id})`;
+    const title = document.createElement("span");
+    title.className = "task-name";
+    title.textContent = `${task.module_name} · ${task.task_id}`;
     row.appendChild(title);
+
+    const meta = document.createElement("span");
+    meta.className = "task-meta";
+    meta.textContent = `${parseTime(task.started_at)} · rc ${task.returncode ?? "-"}`;
+    row.appendChild(meta);
 
     const status = document.createElement("span");
     status.className = `task-state ${task.running ? "running" : "stopped"}`;
@@ -2113,11 +2119,6 @@ function renderTasks() {
     row.appendChild(status);
 
     item.appendChild(row);
-
-    const detail = document.createElement("div");
-    detail.className = "task-detail";
-    detail.textContent = `Started ${parseTime(task.started_at)} | Return code ${task.returncode ?? "-"}`;
-    item.appendChild(detail);
 
     dom.tasksList.appendChild(item);
   });
@@ -2184,6 +2185,82 @@ function buildNetworkTable(networks) {
   return table;
 }
 
+function buildProbePairsTable(probePairs) {
+  const table = document.createElement("table");
+  table.className = "result-table";
+
+  const head = document.createElement("thead");
+  head.innerHTML = "<tr><th>Probe SSID</th><th>Station MAC</th><th>Hits</th></tr>";
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  const rows = Array.isArray(probePairs) ? probePairs : [];
+  if (!rows.length) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="3" class="cell-muted">No probe requests observed yet.</td>';
+    body.appendChild(empty);
+    table.appendChild(body);
+    return table;
+  }
+
+  rows.slice(0, 120).forEach((entry) => {
+    const tr = document.createElement("tr");
+    const ssid = entry.ssid || "<hidden>";
+    const station = entry.station || "-";
+    const count = entry.count ?? 0;
+    [ssid, station, String(count)].forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+
+  table.appendChild(body);
+  return table;
+}
+
+function getCommandArgNumber(task, flag, fallback = 0) {
+  const command = Array.isArray(task?.command) ? task.command : [];
+  const idx = command.findIndex((part) => part === flag);
+  if (idx < 0 || idx + 1 >= command.length) {
+    return fallback;
+  }
+  const parsed = Number(command[idx + 1]);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function getReconDurationSeconds(task, result) {
+  const resultDuration = Number(result?.duration);
+  if (Number.isFinite(resultDuration) && resultDuration > 0) {
+    return Math.round(resultDuration);
+  }
+  const fromCommand = getCommandArgNumber(task, "--duration", 0);
+  if (Number.isFinite(fromCommand) && fromCommand > 0) {
+    return Math.round(fromCommand);
+  }
+  return 0;
+}
+
+function getReconRemainingSeconds(task, result) {
+  if (!task?.running) {
+    return 0;
+  }
+  const resultRemaining = Number(result?.remaining);
+  if (Number.isFinite(resultRemaining) && resultRemaining >= 0) {
+    return Math.max(0, Math.round(resultRemaining));
+  }
+  const duration = getReconDurationSeconds(task, result);
+  if (duration <= 0) {
+    return 0;
+  }
+  const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - Number(task.started_at || 0)));
+  return Math.max(0, duration - elapsed);
+}
+
 function renderLogFeed(taskId) {
   const lines = Array.isArray(state.recentLogsByTask[taskId]) ? state.recentLogsByTask[taskId] : [];
   const wrap = document.createElement("div");
@@ -2212,6 +2289,14 @@ function renderReconScanResult(result, task) {
   summary.appendChild(createSummaryPill("Mode", "Scanner"));
   summary.appendChild(createSummaryPill("Interface", getInterfaceLabel(result.interface) || "-"));
   summary.appendChild(createSummaryPill("Networks", result.network_count ?? 0));
+  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  const remaining = getReconRemainingSeconds(task, result);
+  const duration = getReconDurationSeconds(task, result);
+  if (task.running && duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${remaining}s left`));
+  } else if (duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${duration}s`));
+  }
   summary.appendChild(createSummaryPill("Task", task.task_id));
   dom.resultsView.appendChild(summary);
   dom.resultsView.appendChild(buildNetworkTable(result.networks));
@@ -2226,22 +2311,19 @@ function renderReconSniffResult(result, task) {
   summary.appendChild(createSummaryPill("Interface", getInterfaceLabel(result.interface) || "-"));
   summary.appendChild(createSummaryPill("Packets", result.packet_count ?? 0));
   summary.appendChild(createSummaryPill("Probes", result.probe_total ?? 0));
+  summary.appendChild(createSummaryPill("Pairs", result.probe_pairs_total ?? 0));
+  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  const remaining = getReconRemainingSeconds(task, result);
+  const duration = getReconDurationSeconds(task, result);
+  if (task.running && duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${remaining}s left`));
+  } else if (duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${duration}s`));
+  }
   summary.appendChild(createSummaryPill("Task", task.task_id));
   dom.resultsView.appendChild(summary);
   dom.resultsView.appendChild(buildNetworkTable(result.networks));
-
-  const probes = document.createElement("div");
-  probes.className = "probe-list";
-  const entries = Array.isArray(result.probes) ? result.probes : [];
-  if (!entries.length) {
-    probes.textContent = "No probe requests observed.";
-  } else {
-    probes.textContent = entries
-      .slice(0, 18)
-      .map((entry) => `${entry.ssid || "<hidden>"} (${entry.count || 0})`)
-      .join(" • ");
-  }
-  dom.resultsView.appendChild(probes);
+  dom.resultsView.appendChild(buildProbePairsTable(result.probe_pairs));
 }
 
 async function sendTaskInput(taskId, text, successLabel = "Command sent") {
@@ -3499,10 +3581,20 @@ function renderReconLiveStatus(task) {
   const summary = document.createElement("div");
   summary.className = "result-summary";
   summary.appendChild(createSummaryPill("Mode", task.module_name));
-  summary.appendChild(createSummaryPill("Task", task.task_id));
   summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  const duration = getReconDurationSeconds(task, null);
+  if (task.running && duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${getReconRemainingSeconds(task, null)}s left`));
+  } else if (duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${duration}s`));
+  }
+  summary.appendChild(createSummaryPill("Task", task.task_id));
   dom.resultsView.appendChild(summary);
-  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+
+  const waiting = document.createElement("div");
+  waiting.className = "muted-block";
+  waiting.textContent = "Collecting recon data...";
+  dom.resultsView.appendChild(waiting);
 }
 
 function renderResultView() {

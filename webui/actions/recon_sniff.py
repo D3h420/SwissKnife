@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,6 +55,48 @@ def parse_args() -> argparse.Namespace:
         help="Allow using the built-in AP interface (not recommended).",
     )
     return parser.parse_args()
+
+
+def build_sniffer_result_payload(
+    interface: str,
+    duration: int,
+    state: recon.SnifferState,
+    running: bool,
+    remaining: Optional[int],
+    timestamp: Optional[int] = None,
+) -> dict:
+    probes = [
+        {"ssid": ssid, "count": count}
+        for ssid, count in sorted(
+            state.probe_counts.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+    probe_pairs = [
+        {"station": station, "ssid": ssid, "count": count}
+        for (station, ssid), count in sorted(
+            state.probe_pair_counts.items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+    ]
+    return {
+        "kind": "recon_sniff",
+        "interface": interface,
+        "duration": duration,
+        "timestamp": int(timestamp if timestamp is not None else time.time()),
+        "running": bool(running),
+        "remaining": remaining if remaining is None else max(0, int(remaining)),
+        "packet_count": state.packet_count,
+        "probe_total": state.probe_total,
+        "probe_unique": len(state.probe_counts),
+        "probe_pairs_total": len(state.probe_pair_counts),
+        "probes": probes,
+        "probe_pairs": probe_pairs,
+        "network_count": len(state.aps),
+        "networks": serialize_access_points(state.aps, {}),
+    }
 
 
 def main() -> None:
@@ -103,8 +146,29 @@ def main() -> None:
     original_mode = None
     mode_changed = False
     state = recon.SnifferState()
+    started_at = time.time()
+    last_emit = 0.0
     try:
         original_mode, mode_changed = enable_monitor_mode(interface)
+        def emit_snapshot(running: bool) -> None:
+            nonlocal last_emit
+            now = time.time()
+            if running and (now - last_emit) < 1.0:
+                return
+            last_emit = now
+            remaining = None
+            if args.duration > 0:
+                remaining = max(0, int(args.duration - (now - started_at)))
+            payload = build_sniffer_result_payload(
+                interface=interface,
+                duration=args.duration,
+                state=state,
+                running=running,
+                remaining=remaining,
+                timestamp=int(now),
+            )
+            print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
         recon.run_sniffer(
             interface=interface,
             stop_event=stop_event,
@@ -112,7 +176,11 @@ def main() -> None:
             channels=channels,
             hop_interval=args.hop_interval,
             update_interval=max(0.2, args.update_interval),
+            display_live=False,
+            control_hint="Use WebUI Stop to end capture.",
+            on_update=lambda _state, _status: emit_snapshot(True),
         )
+        emit_snapshot(False)
         logging.info("")
         logging.info(recon.style(f"Total packets captured: {state.packet_count}", recon.STYLE_BOLD))
         for line in recon.format_sniffer_networks_lines(state.aps, vendors):
@@ -121,27 +189,16 @@ def main() -> None:
         for line in recon.format_probe_lines(state.probe_counts, state.probe_total):
             logging.info("%s", line)
         logging.info("")
-        probes = [
-            {"ssid": ssid, "count": count}
-            for ssid, count in sorted(
-                state.probe_counts.items(),
-                key=lambda item: item[1],
-                reverse=True,
-            )
-        ]
-        result_payload = {
-            "kind": "recon_sniff",
-            "interface": interface,
-            "duration": args.duration,
-            "timestamp": int(time.time()),
-            "packet_count": state.packet_count,
-            "probe_total": state.probe_total,
-            "probe_unique": len(state.probe_counts),
-            "probes": probes,
-            "network_count": len(state.aps),
-            "networks": serialize_access_points(state.aps, vendors),
-        }
-        print(f"[webui-result] {json.dumps(result_payload, ensure_ascii=False)}")
+        final_payload = build_sniffer_result_payload(
+            interface=interface,
+            duration=args.duration,
+            state=state,
+            running=False,
+            remaining=0 if args.duration > 0 else None,
+            timestamp=int(time.time()),
+        )
+        final_payload["networks"] = serialize_access_points(state.aps, vendors)
+        print(f"[webui-result] {json.dumps(final_payload, ensure_ascii=False)}", flush=True)
         logging.info("[webui] Recon sniffer finished.")
     finally:
         signal.signal(signal.SIGINT, previous_sigint)
