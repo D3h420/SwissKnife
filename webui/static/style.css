@@ -398,7 +398,7 @@ body {
   min-height: 0;
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(150px, 27vh) auto auto auto minmax(120px, 1fr);
+  grid-template-rows: auto minmax(150px, 27vh) auto auto auto minmax(120px, 1fr);
   overflow: hidden;
 }
 
@@ -463,6 +463,16 @@ body {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+#centerPanel > .panel-head .panel-actions {
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
+
+#centerPanel > .panel-head .panel-actions #globalArgsInput {
+  width: min(220px, 26vw);
 }
 
 .second-head {
@@ -550,17 +560,22 @@ body {
 }
 
 .sub-menu {
-  border-bottom: 1px solid var(--stroke);
-  padding: 6px 10px 8px;
+  border: 0;
+  padding: 0;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
+  flex: 1 1 auto;
+  min-width: 120px;
+  max-width: min(56vw, 760px);
+  white-space: nowrap;
 }
 
 .sub-menu-btn {
-  height: 30px;
-  min-width: 112px;
+  height: 28px;
+  min-width: 98px;
   border-radius: 10px;
   font-size: var(--content-size-sm);
   letter-spacing: 0.02em;
@@ -1424,7 +1439,21 @@ button.danger {
   }
 
   .center-panel {
-    grid-template-rows: auto auto minmax(160px, 33vh) auto auto auto minmax(120px, 1fr);
+    grid-template-rows: auto minmax(160px, 33vh) auto auto auto minmax(120px, 1fr);
+  }
+
+  #centerPanel > .panel-head .panel-actions {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  #centerPanel > .panel-head .panel-actions #globalArgsInput {
+    width: min(185px, 44vw);
+  }
+
+  .sub-menu {
+    max-width: 100%;
   }
 
   .section-body {
