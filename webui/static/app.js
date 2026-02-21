@@ -275,12 +275,13 @@ const FALLBACK_MENU = {
 };
 
 const MENU_ICON_FILES = {
-  recon: "recon_icon.PNG",
-  attacks: "attack_icon.PNG",
-  bluetooth: "bluetooth_icon.PNG",
-  loot: "loot_icon.PNG",
+  recon: "recon_icon",
+  attacks: "attack_icon",
+  bluetooth: "bluetooth_icon",
+  loot: "loot_icon",
 };
-const MENU_ICON_REV = "20260221j";
+const MENU_ICON_REV = "20260221m";
+const MENU_ICON_EXT_ORDER = ["PNG", "png", "jpg", "JPG", "jpeg", "JPEG"];
 
 const state = {
   token: localStorage.getItem("swissknife.webui.token") || "",
@@ -2264,19 +2265,47 @@ function renderMenu() {
       const icon = document.createElement("img");
       icon.className = "tag-img";
       icon.alt = "";
-      icon.loading = "lazy";
-      icon.decoding = "async";
+      icon.loading = "eager";
+      icon.decoding = "sync";
+      const iconCandidates = MENU_ICON_EXT_ORDER.map(
+        (ext) => `/static/assets/menu_icons/${iconFile}.${ext}?v=${MENU_ICON_REV}`
+      );
+
+      const showFallbackText = () => {
+        tag.classList.remove("with-image");
+        tagText.style.display = "inline-flex";
+        icon.remove();
+      };
+
+      const tryLoadIcon = (index) => {
+        if (index >= iconCandidates.length) {
+          showFallbackText();
+          return;
+        }
+        icon.src = iconCandidates[index];
+      };
+
+      let candidateIndex = 0;
+      tag.classList.add("with-image");
+      tagText.style.display = "none";
+      icon.style.display = "block";
+
       icon.addEventListener("load", () => {
         tag.classList.add("with-image");
+        tagText.style.display = "none";
+        icon.style.display = "block";
       });
       icon.addEventListener("error", () => {
-        icon.remove();
+        candidateIndex += 1;
+        if (candidateIndex < iconCandidates.length) {
+          tryLoadIcon(candidateIndex);
+          return;
+        }
+        showFallbackText();
       });
-      icon.src = `/static/assets/menu_icons/${iconFile}?v=${MENU_ICON_REV}`;
+
       tag.appendChild(icon);
-      if (icon.complete && icon.naturalWidth > 0) {
-        tag.classList.add("with-image");
-      }
+      tryLoadIcon(candidateIndex);
     }
 
     const label = document.createElement("span");
