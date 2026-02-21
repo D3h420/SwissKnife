@@ -274,6 +274,7 @@ const state = {
   unlocked: false,
   menu: FALLBACK_MENU.main,
   selectedSectionId: null,
+  selectedItemBySection: {},
   moduleById: {},
   interfaces: {
     builtin_interface: "",
@@ -336,6 +337,7 @@ const dom = {
   authHint: document.getElementById("authHint"),
   refreshMenuBtn: document.getElementById("refreshMenuBtn"),
   mainMenu: document.getElementById("mainMenu"),
+  subMenu: document.getElementById("subMenu"),
   sectionTitle: document.getElementById("sectionTitle"),
   sectionDescription: document.getElementById("sectionDescription"),
   sectionBody: document.getElementById("sectionBody"),
@@ -567,6 +569,30 @@ function formatBytes(bytes) {
 
 function getSectionById(sectionId) {
   return state.menu.find((item) => item.id === sectionId) || null;
+}
+
+function getSectionItems(section) {
+  if (!section || !Array.isArray(section.items)) {
+    return [];
+  }
+  return section.items;
+}
+
+function getSelectedSectionItem(section) {
+  const items = getSectionItems(section);
+  if (!items.length) {
+    return null;
+  }
+  const sectionId = section.id || "";
+  const currentId = state.selectedItemBySection[sectionId];
+  if (currentId && items.some((item) => item.id === currentId)) {
+    return items.find((item) => item.id === currentId) || null;
+  }
+  const fallback = items[0] || null;
+  if (fallback && sectionId) {
+    state.selectedItemBySection[sectionId] = fallback.id;
+  }
+  return fallback;
 }
 
 function getTaskById(taskId) {
@@ -1837,6 +1863,7 @@ function renderSection() {
     return;
   }
 
+  renderSubMenu(section);
   setAttackPanelsHidden(section.id === "attacks");
 
   dom.sectionTitle.textContent = section.label;
@@ -1891,7 +1918,7 @@ function renderSection() {
   }
 
   if (section.type === "group") {
-    const items = Array.isArray(section.items) ? section.items : [];
+    const items = getSectionItems(section);
     if (!items.length) {
       const muted = document.createElement("div");
       muted.className = "muted-block";
@@ -1900,14 +1927,18 @@ function renderSection() {
       return;
     }
 
-    if (section.id === "attacks") {
-      renderAttacksSection(items);
+    const selected = getSelectedSectionItem(section);
+    if (!selected) {
+      const muted = document.createElement("div");
+      muted.className = "muted-block";
+      muted.textContent = "No module selected.";
+      dom.sectionBody.appendChild(muted);
       return;
     }
 
     const grid = document.createElement("div");
     grid.className = "action-grid";
-    items.forEach((item) => grid.appendChild(createActionCard(item, section.id)));
+    grid.appendChild(createActionCard(selected, section.id));
     dom.sectionBody.appendChild(grid);
     return;
   }
@@ -2070,6 +2101,12 @@ function renderMenu() {
     button.appendChild(label);
     button.addEventListener("click", () => {
       state.selectedSectionId = section.id;
+      if (section.type === "group") {
+        const selected = getSelectedSectionItem(section);
+        if (selected?.id) {
+          state.selectedItemBySection[section.id] = selected.id;
+        }
+      }
       renderMenu();
       renderSection();
       if (section.id === "attacks") {
@@ -2080,6 +2117,45 @@ function renderMenu() {
       }
     });
     dom.mainMenu.appendChild(button);
+  });
+}
+
+function renderSubMenu(section) {
+  if (!dom.subMenu) {
+    return;
+  }
+  const items = getSectionItems(section);
+  if (section?.type !== "group" || !items.length) {
+    dom.subMenu.innerHTML = "";
+    dom.subMenu.hidden = true;
+    return;
+  }
+
+  const selected = getSelectedSectionItem(section);
+  dom.subMenu.innerHTML = "";
+  dom.subMenu.hidden = false;
+
+  items.forEach((item) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `sub-menu-btn${selected?.id === item.id ? " active" : ""}`;
+    button.textContent = item.label || item.id || "Item";
+    button.addEventListener("click", () => {
+      state.selectedItemBySection[section.id] = item.id;
+      if (section.id === "attacks") {
+        state.expandedAttackId = item.id;
+      }
+
+      if (item.module_id) {
+        const moduleTask = getRunningTaskForModule(item.module_id) || getLatestTaskForModule(item.module_id);
+        if (moduleTask?.task_id) {
+          selectTask(moduleTask.task_id);
+        }
+      }
+      renderSubMenu(section);
+      renderSection();
+    });
+    dom.subMenu.appendChild(button);
   });
 }
 
@@ -2140,6 +2216,13 @@ function clientText(clients) {
   return `${clients.slice(0, 4).join(", ")} +${clients.length - 4}`;
 }
 
+function normalizedClients(network) {
+  const rows = Array.isArray(network?.clients) ? network.clients : [];
+  return rows
+    .map((client) => String(client || "").trim().toLowerCase())
+    .filter((client) => client.length > 0);
+}
+
 function createSummaryPill(label, value) {
   const pill = document.createElement("span");
   pill.className = "pill";
@@ -2152,14 +2235,14 @@ function buildNetworkTable(networks) {
   table.className = "result-table";
 
   const head = document.createElement("thead");
-  head.innerHTML = "<tr><th>SSID</th><th>BSSID</th><th>Ch</th><th>Enc</th><th>RSSI</th><th>Clients</th></tr>";
+  head.innerHTML = "<tr><th>SSID</th><th>BSSID</th><th>Ch</th><th>Enc</th><th>RSSI</th></tr>";
   table.appendChild(head);
 
   const body = document.createElement("tbody");
   const rows = Array.isArray(networks) ? networks : [];
   if (!rows.length) {
     const empty = document.createElement("tr");
-    empty.innerHTML = '<td colspan="6" class="cell-muted">No networks found.</td>';
+    empty.innerHTML = '<td colspan="5" class="cell-muted">No networks found.</td>';
     body.appendChild(empty);
     table.appendChild(body);
     return table;
@@ -2167,18 +2250,50 @@ function buildNetworkTable(networks) {
 
   rows.forEach((network) => {
     const tr = document.createElement("tr");
+    tr.className = "result-net-row";
     const ssid = network.ssid || "<hidden>";
     const bssid = network.bssid || "-";
     const channel = network.channel ?? "?";
     const encryption = network.encryption || "UNKNOWN";
     const rssi = network.rssi !== null && network.rssi !== undefined ? `${network.rssi} dBm` : "?";
-    const clients = clientText(network.clients);
-    [ssid, bssid, String(channel), encryption, rssi, clients].forEach((value) => {
+    [ssid, bssid, String(channel), encryption, rssi].forEach((value) => {
       const cell = document.createElement("td");
       cell.textContent = value;
       tr.appendChild(cell);
     });
     body.appendChild(tr);
+
+    const clients = normalizedClients(network);
+    if (clients.length) {
+      const clientsRow = document.createElement("tr");
+      clientsRow.className = "result-clients-row";
+      const clientsCell = document.createElement("td");
+      clientsCell.colSpan = 5;
+
+      const clientsWrap = document.createElement("div");
+      clientsWrap.className = "client-list";
+      const prefix = document.createElement("span");
+      prefix.className = "client-prefix";
+      prefix.textContent = `Clients (${clients.length}):`;
+      clientsWrap.appendChild(prefix);
+
+      clients.slice(0, 18).forEach((client) => {
+        const chip = document.createElement("span");
+        chip.className = "client-chip";
+        chip.textContent = client;
+        clientsWrap.appendChild(chip);
+      });
+      if (clients.length > 18) {
+        const more = document.createElement("span");
+        more.className = "client-chip more";
+        more.textContent = `+${clients.length - 18}`;
+        clientsWrap.appendChild(more);
+      }
+
+      clientsCell.appendChild(clientsWrap);
+      clientsRow.appendChild(clientsCell);
+      body.appendChild(clientsRow);
+    }
   });
 
   table.appendChild(body);
@@ -3764,6 +3879,17 @@ async function loadMenu() {
   if (!state.selectedSectionId || !getSectionById(state.selectedSectionId)) {
     state.selectedSectionId = state.menu[0]?.id || null;
   }
+
+  state.menu.forEach((section) => {
+    if (section?.type !== "group") {
+      return;
+    }
+    const selected = getSelectedSectionItem(section);
+    if (selected?.id) {
+      state.selectedItemBySection[section.id] = selected.id;
+    }
+  });
+
   renderMenu();
   renderSection();
 }
