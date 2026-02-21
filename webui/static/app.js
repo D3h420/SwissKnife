@@ -335,11 +335,12 @@ const dom = {
   changePasswordBtn: document.getElementById("changePasswordBtn"),
   turnOffBtn: document.getElementById("turnOffBtn"),
   authHint: document.getElementById("authHint"),
+  interfaceSummary: document.getElementById("interfaceSummary"),
   refreshMenuBtn: document.getElementById("refreshMenuBtn"),
   mainMenu: document.getElementById("mainMenu"),
   subMenu: document.getElementById("subMenu"),
+  centerPanel: document.getElementById("centerPanel"),
   sectionTitle: document.getElementById("sectionTitle"),
-  sectionDescription: document.getElementById("sectionDescription"),
   sectionBody: document.getElementById("sectionBody"),
   globalArgsInput: document.getElementById("globalArgsInput"),
   tasksHead: document.getElementById("tasksHead"),
@@ -930,23 +931,45 @@ function getInterfaceLabel(name) {
   return entry.label || `${entry.name}${entry.driver ? ` · ${entry.driver}` : ""}` || targetName;
 }
 
-function buildInterfaceLegend(includeBuiltin = false) {
-  const entries = normalizeInterfaceList(state.interfaces.all_interfaces);
-  const filtered = includeBuiltin ? entries : entries.filter((entry) => !entry?.is_builtin);
-  if (!filtered.length) {
-    return null;
+function shortDriverLabel(entry) {
+  const raw = String(entry?.driver || "").trim();
+  if (!raw) {
+    return "unknown";
+  }
+  return raw.split(/\s|,|\/|;/)[0] || raw;
+}
+
+function renderInterfaceSummary() {
+  if (!dom.interfaceSummary) {
+    return;
   }
 
-  const wrap = document.createElement("div");
-  wrap.className = "adapter-strip";
-  filtered.forEach((entry) => {
+  const entries = normalizeInterfaceList(state.interfaces.all_interfaces);
+  if (!entries.length) {
+    dom.interfaceSummary.innerHTML = "";
+    dom.interfaceSummary.hidden = true;
+    return;
+  }
+
+  dom.interfaceSummary.hidden = false;
+  dom.interfaceSummary.innerHTML = "";
+
+  const icon = document.createElement("span");
+  icon.className = "iface-icon";
+  icon.textContent = "\u25C9";
+  dom.interfaceSummary.appendChild(icon);
+
+  const chips = document.createElement("div");
+  chips.className = "iface-chip-list";
+  entries.forEach((entry) => {
     const chip = document.createElement("span");
-    chip.className = "adapter-chip";
-    const label = entry?.label || entry?.name || "";
-    chip.textContent = entry?.is_builtin ? `${label} (builtin/AP)` : label;
-    wrap.appendChild(chip);
+    chip.className = `iface-chip${entry?.is_builtin ? " builtin" : ""}`;
+    const name = entry?.name || "iface";
+    const prefix = entry?.is_builtin ? "AP " : "";
+    chip.textContent = `${prefix}${name}: ${shortDriverLabel(entry)}`;
+    chips.appendChild(chip);
   });
-  return wrap;
+  dom.interfaceSummary.appendChild(chips);
 }
 
 function createControlField(control, context = {}) {
@@ -1008,17 +1031,6 @@ function createControlField(control, context = {}) {
       markTouched();
     });
     wrap.appendChild(select);
-    if (control.source === "tool_interfaces" || control.source === "all_interfaces") {
-      const note = document.createElement("span");
-      note.className = "control-note";
-      const refreshNote = () => {
-        const selected = options.find((entry) => entry.value === select.value);
-        note.textContent = selected ? selected.label : "";
-      };
-      select.addEventListener("change", refreshNote);
-      refreshNote();
-      wrap.appendChild(note);
-    }
     return wrap;
   }
 
@@ -1714,10 +1726,6 @@ function createAttackRuntimePanel(item) {
 }
 
 function appendCardBody(contentWrap, item, sectionId, card, controls, availability) {
-  const description = document.createElement("p");
-  description.textContent = item.description || "";
-  contentWrap.appendChild(description);
-
   if (controls.length) {
     const controlsWrap = document.createElement("div");
     controlsWrap.className = "control-grid";
@@ -1818,11 +1826,6 @@ function createAttackQuickButton(item) {
   status.textContent = availability.statusText;
   button.appendChild(status);
 
-  const subtitle = document.createElement("span");
-  subtitle.className = "attack-quick-desc";
-  subtitle.textContent = item.description || "";
-  button.appendChild(subtitle);
-
   button.addEventListener("click", () => {
     markAttackUiInteraction(4000);
     state.expandedAttackId = item.id;
@@ -1867,38 +1870,10 @@ function renderSection() {
   setAttackPanelsHidden(section.id === "attacks");
 
   dom.sectionTitle.textContent = section.label;
-  dom.sectionDescription.textContent = section.description || "";
   dom.sectionBody.innerHTML = "";
   dom.sectionBody.dataset.sectionId = section.id || "";
-
-  if (section.id === "recon") {
-    if (state.interfaces.builtin_interface) {
-      const notice = document.createElement("div");
-      notice.className = "muted-block";
-      notice.textContent = `AP/WebUI uses ${getInterfaceLabel(state.interfaces.builtin_interface)}. Recon controls target external adapters.`;
-      dom.sectionBody.appendChild(notice);
-    }
-    const adapterLegend = buildInterfaceLegend(false);
-    if (adapterLegend) {
-      dom.sectionBody.appendChild(adapterLegend);
-    } else {
-      const missing = document.createElement("div");
-      missing.className = "muted-block";
-      missing.textContent = "No external wireless adapters detected for Recon.";
-      dom.sectionBody.appendChild(missing);
-    }
-  }
-
-  if (section.id === "attacks") {
-    const adapterLegend = buildInterfaceLegend(true);
-    if (adapterLegend) {
-      dom.sectionBody.appendChild(adapterLegend);
-    } else {
-      const missing = document.createElement("div");
-      missing.className = "muted-block";
-      missing.textContent = "No wireless interfaces detected.";
-      dom.sectionBody.appendChild(missing);
-    }
+  if (dom.centerPanel) {
+    dom.centerPanel.dataset.section = section.id || "";
   }
 
   if (section.id === "loot") {
@@ -3950,12 +3925,14 @@ async function loadInterfaces() {
       tool_interfaces: toolInterfaces,
       tool_interface_names: toolInterfaces.map((entry) => entry.name),
     };
+    renderInterfaceSummary();
     renderSection();
   } catch (error) {
     if (isUnauthorizedError(error)) {
       lockPanel("Session expired. Enter password again.");
       return;
     }
+    renderInterfaceSummary();
     setHint(`Failed to load interfaces: ${error.message}`, "error");
   }
 }
