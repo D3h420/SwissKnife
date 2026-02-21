@@ -413,6 +413,7 @@ body {
 
 .center-panel[data-section="attacks"] {
   border-color: rgba(255, 194, 90, 0.42);
+  grid-template-rows: auto minmax(0, 1fr);
   box-shadow:
     var(--shadow),
     inset 0 0 0 1px rgba(255, 255, 255, 0.03),
@@ -522,6 +523,8 @@ body {
   height: 22px;
   border-radius: 9px;
   display: inline-flex;
+  position: relative;
+  overflow: hidden;
   align-items: center;
   justify-content: center;
   font-size: var(--content-size-xs);
@@ -529,6 +532,31 @@ body {
   background: linear-gradient(140deg, rgba(76, 255, 159, 0.22), rgba(20, 78, 49, 0.38));
   border: 1px solid rgba(110, 255, 180, 0.52);
   color: #b8ffd6;
+}
+
+.menu-btn .tag .tag-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+
+.menu-btn .tag .tag-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: none;
+}
+
+.menu-btn .tag.with-image .tag-img {
+  display: block;
+}
+
+.menu-btn .tag.with-image .tag-text {
+  display: none;
 }
 
 .menu-btn.active {
@@ -590,6 +618,61 @@ body {
   border-color: var(--stroke-strong);
   box-shadow: 0 0 16px rgba(70, 231, 146, 0.28);
   color: #e2ffe9;
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="deauth"] {
+  border-color: rgba(80, 240, 224, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(80, 240, 224, 0.16);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="portal"] {
+  border-color: rgba(255, 198, 98, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 198, 98, 0.15);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="twins"] {
+  border-color: rgba(255, 116, 142, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(255, 116, 142, 0.15);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="handshaker"] {
+  border-color: rgba(103, 245, 164, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(103, 245, 164, 0.14);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="karma"] {
+  border-color: rgba(174, 153, 255, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(174, 153, 255, 0.14);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="deauth"].active {
+  box-shadow:
+    0 0 16px rgba(72, 221, 208, 0.35),
+    0 0 0 1px rgba(80, 240, 224, 0.44);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="portal"].active {
+  box-shadow:
+    0 0 16px rgba(255, 198, 98, 0.34),
+    0 0 0 1px rgba(255, 198, 98, 0.45);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="twins"].active {
+  box-shadow:
+    0 0 16px rgba(255, 116, 142, 0.35),
+    0 0 0 1px rgba(255, 116, 142, 0.46);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="handshaker"].active {
+  box-shadow:
+    0 0 16px rgba(103, 245, 164, 0.35),
+    0 0 0 1px rgba(103, 245, 164, 0.46);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="karma"].active {
+  box-shadow:
+    0 0 16px rgba(174, 153, 255, 0.35),
+    0 0 0 1px rgba(174, 153, 255, 0.45);
 }
 
 .section-body {
@@ -1440,6 +1523,10 @@ button.danger {
 
   .center-panel {
     grid-template-rows: auto minmax(160px, 33vh) auto auto auto minmax(120px, 1fr);
+  }
+
+  .center-panel[data-section="attacks"] {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   #centerPanel > .panel-head .panel-actions {

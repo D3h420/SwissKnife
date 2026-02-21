@@ -266,6 +266,13 @@ const FALLBACK_MENU = {
   ],
 };
 
+const MENU_ICON_FILES = {
+  recon: "recon_icon.jpg",
+  attacks: "attack_icon.jpg",
+  bluetooth: "bluetooth_icon.jpg",
+  loot: "loot_icon.jpg",
+};
+
 const state = {
   token: localStorage.getItem("swissknife.webui.token") || "",
   panelSession: localStorage.getItem("swissknife.webui.panel_session") || "",
@@ -2067,7 +2074,28 @@ function renderMenu() {
 
     const tag = document.createElement("span");
     tag.className = "tag";
-    tag.textContent = section.icon || section.label.slice(0, 3).toUpperCase();
+
+    const tagText = document.createElement("span");
+    tagText.className = "tag-text";
+    tagText.textContent = section.icon || section.label.slice(0, 3).toUpperCase();
+    tag.appendChild(tagText);
+
+    const iconFile = MENU_ICON_FILES[section.id];
+    if (iconFile) {
+      const icon = document.createElement("img");
+      icon.className = "tag-img";
+      icon.alt = "";
+      icon.loading = "lazy";
+      icon.decoding = "async";
+      icon.src = `/static/assets/menu_icons/${iconFile}`;
+      icon.addEventListener("load", () => {
+        tag.classList.add("with-image");
+      });
+      icon.addEventListener("error", () => {
+        icon.remove();
+      });
+      tag.appendChild(icon);
+    }
 
     const label = document.createElement("span");
     label.textContent = section.label;
@@ -2114,6 +2142,8 @@ function renderSubMenu(section) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `sub-menu-btn${selected?.id === item.id ? " active" : ""}`;
+    button.dataset.section = section.id || "";
+    button.dataset.itemId = item.id || "";
     button.textContent = item.label || item.id || "Item";
     button.addEventListener("click", () => {
       state.selectedItemBySection[section.id] = item.id;
