@@ -280,6 +280,7 @@ const MENU_ICON_FILES = {
   bluetooth: "bluetooth_icon.PNG",
   loot: "loot_icon.PNG",
 };
+const MENU_ICON_REV = "20260221i";
 
 const state = {
   token: localStorage.getItem("swissknife.webui.token") || "",
@@ -2265,7 +2266,7 @@ function renderMenu() {
       icon.alt = "";
       icon.loading = "lazy";
       icon.decoding = "async";
-      icon.src = `/static/assets/menu_icons/${iconFile}`;
+      icon.src = `/static/assets/menu_icons/${iconFile}?v=${MENU_ICON_REV}`;
       icon.addEventListener("load", () => {
         tag.classList.add("with-image");
       });
