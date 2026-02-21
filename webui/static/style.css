@@ -557,6 +557,20 @@ body {
   display: none;
 }
 
+.menu-btn .tag.with-image {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  overflow: visible;
+}
+
+.menu-btn .tag.with-image .tag-img {
+  object-fit: contain;
+  filter: drop-shadow(0 0 8px rgba(104, 255, 166, 0.4));
+}
+
 .menu-btn.active {
   border-color: var(--stroke-strong);
   box-shadow:
