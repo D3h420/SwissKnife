@@ -202,8 +202,7 @@ const FALLBACK_MENU = {
           label: "Handshaker",
           type: "module",
           module_id: "handshaker",
-          description: "Under construction module.",
-          under_construction: true,
+          description: "4-way handshake capture and EAPOL validation.",
           controls: [
             {
               id: "interface",
@@ -220,6 +219,16 @@ const FALLBACK_MENU = {
               max: 120,
               step: 5,
               default: 25,
+              suffix: "s",
+            },
+            {
+              id: "capture_duration",
+              label: "Capture Time",
+              kind: "range",
+              min: 20,
+              max: 180,
+              step: 5,
+              default: 45,
               suffix: "s",
             },
           ],
@@ -1232,7 +1241,7 @@ function collectAutomationPreset(item, card) {
     return {
       interfaceName: resolvePreferredAttackInterface(readControlValue(card, "interface", "auto")),
       scanDuration: normalizePositiveInt(readControlValue(card, "scan_duration", 25), 25, 1),
-      captureDuration: 45,
+      captureDuration: normalizePositiveInt(readControlValue(card, "capture_duration", 45), 45, 20),
       selectedTargetIndex: null,
     };
   }
@@ -2657,6 +2666,49 @@ function renderReconSniffResult(result, task) {
   dom.resultsView.appendChild(buildProbePairsTable(result.probe_pairs));
 }
 
+function renderHandshakerResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summaryData = result && typeof result.summary === "object" ? result.summary : {};
+  const messages = summaryData && typeof summaryData.eapol_messages === "object"
+    ? summaryData.eapol_messages
+    : {};
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "Handshaker"));
+  summary.appendChild(createSummaryPill("Interface", getInterfaceLabel(result.interface) || "-"));
+  summary.appendChild(createSummaryPill("AP", result.ssid || "<hidden>"));
+  summary.appendChild(createSummaryPill("Handshakes", summaryData.detected_handshakes ?? 0));
+  summary.appendChild(createSummaryPill("EAPOL", summaryData.eapol_packets ?? 0));
+  summary.appendChild(createSummaryPill("State", result.ok ? "DONE" : "FAILED"));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+
+  const details = document.createElement("div");
+  details.className = "log-feed";
+  const list = document.createElement("ul");
+  list.className = "status-list";
+
+  const rows = [
+    `BSSID: ${result.bssid || "-"}`,
+    `Capture file: ${summaryData.path || "-"}`,
+    `Packets: ${summaryData.total_packets ?? 0}`,
+    `Clients with EAPOL: ${summaryData.clients_with_eapol ?? 0}`,
+    `M1/M2/M3/M4: ${messages.m1 ?? 0}/${messages.m2 ?? 0}/${messages.m3 ?? 0}/${messages.m4 ?? 0}`,
+  ];
+
+  rows.forEach((line) => {
+    const li = document.createElement("li");
+    li.textContent = line;
+    list.appendChild(li);
+  });
+
+  details.appendChild(list);
+  dom.resultsView.appendChild(details);
+  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+}
+
 async function sendTaskInput(taskId, text, successLabel = "Command sent") {
   try {
     await postTaskInput(taskId, text);
@@ -3982,6 +4034,11 @@ function renderResultView() {
       return;
     }
     renderReconLiveStatus(task);
+    return;
+  }
+
+  if (task.module_id === "handshaker" && !task.running && result?.kind === "handshaker_capture") {
+    renderHandshakerResult(result, task);
     return;
   }
 

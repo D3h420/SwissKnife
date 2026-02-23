@@ -60,7 +60,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Deauth", "file": os.path.join("modules", "deauth.py")},
     "2": {"name": "Portal", "file": os.path.join("modules", "portal.py")},
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
-    "4": {"name": "Handshaker (under construction)", "file": os.path.join("modules", "handshaker.py")},
+    "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "Karma (under construction)", "file": "", "disabled": True},
     "spacer": {"name": "", "separator": True},
     "6": {"name": "Back", "file": ""},

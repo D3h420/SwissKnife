@@ -9,8 +9,9 @@ import time
 import subprocess
 import threading
 import logging
+import json
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
@@ -81,6 +82,13 @@ try:
     SCAPY_AVAILABLE = True
 except Exception:
     SCAPY_AVAILABLE = False
+    AsyncSniffer = None  # type: ignore[assignment]
+    Dot11 = None  # type: ignore[assignment]
+    Dot11Beacon = None  # type: ignore[assignment]
+    Dot11Elt = None  # type: ignore[assignment]
+    Dot11ProbeResp = None  # type: ignore[assignment]
+    EAPOL = None  # type: ignore[assignment]
+    PcapWriter = None  # type: ignore[assignment]
     Scapy_Exception = Exception  # type: ignore
 
 # Optional local module: modules/deauth.py
@@ -711,6 +719,8 @@ def set_interface_channel(interface: str, channel: int) -> bool:
 
 
 def packet_matches_bssid(packet, bssid: str) -> bool:
+    if Dot11 is None:
+        return False
     if not packet.haslayer(Dot11):
         return False
     needle = normalize_mac(bssid)
@@ -722,6 +732,196 @@ def packet_matches_bssid(packet, bssid: str) -> bool:
         normalize_mac(dot11.addr2),
         normalize_mac(dot11.addr3),
     }
+
+
+def emit_webui_result(payload: Dict) -> None:
+    """Emit a structured payload consumed by WebUI task result endpoint."""
+    print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+
+KEY_INFO_PAIRWISE = 1 << 3
+KEY_INFO_INSTALL = 1 << 4
+KEY_INFO_ACK = 1 << 5
+KEY_INFO_MIC = 1 << 6
+KEY_INFO_SECURE = 1 << 7
+EAPOL_TYPE_KEY = 3
+EAPOL_KEY_MIN_LEN = 95
+HANDSHAKE_IDLE_TIMEOUT_SEC = 8.0
+
+
+@dataclass
+class EapolKeyFrame:
+    client: str
+    from_ap: bool
+    replay_counter: int
+    key_info: int
+    key_data_length: int
+    descriptor_type: int
+    pairwise: bool
+    install: bool
+    ack: bool
+    mic: bool
+    secure: bool
+
+
+@dataclass
+class HandshakeProgress:
+    stage: int = 0
+    replay_counter: int = 0
+    last_seen: float = 0.0
+
+
+def extract_eapol_client(dot11, bssid: str) -> Optional[Tuple[str, bool]]:
+    """Resolve station MAC and direction for EAPOL key frames.
+
+    Returns (client_mac, from_ap), where from_ap indicates AP -> client direction.
+    """
+    bssid_norm = normalize_mac(bssid)
+    if not bssid_norm:
+        return None
+
+    addr1 = normalize_mac(getattr(dot11, "addr1", None))
+    addr2 = normalize_mac(getattr(dot11, "addr2", None))
+
+    if addr2 == bssid_norm and addr1 and addr1 != bssid_norm and is_unicast(addr1):
+        return addr1, True
+    if addr1 == bssid_norm and addr2 and addr2 != bssid_norm and is_unicast(addr2):
+        return addr2, False
+
+    try:
+        fcfield = int(getattr(dot11, "FCfield", 0))
+    except Exception:
+        fcfield = 0
+    to_ds = bool(fcfield & 0x1)
+    from_ds = bool(fcfield & 0x2)
+
+    if from_ds and not to_ds and addr1 and addr1 != bssid_norm and is_unicast(addr1):
+        return addr1, True
+    if to_ds and not from_ds and addr2 and addr2 != bssid_norm and is_unicast(addr2):
+        return addr2, False
+    return None
+
+
+def parse_eapol_key_frame(packet, bssid: str) -> Optional[EapolKeyFrame]:
+    """Parse an EAPOL-Key frame from a packet and return key fields for validation."""
+    if Dot11 is None or EAPOL is None:
+        return None
+    if not packet.haslayer(Dot11) or not packet.haslayer(EAPOL):
+        return None
+    if not packet_matches_bssid(packet, bssid):
+        return None
+
+    dot11 = packet[Dot11]
+    client_info = extract_eapol_client(dot11, bssid)
+    if not client_info:
+        return None
+    client, from_ap = client_info
+
+    try:
+        eapol_raw = bytes(packet[EAPOL])
+    except Exception:
+        return None
+
+    if len(eapol_raw) < 4:
+        return None
+    if eapol_raw[1] != EAPOL_TYPE_KEY:
+        return None
+
+    payload_len = int.from_bytes(eapol_raw[2:4], "big")
+    if payload_len < EAPOL_KEY_MIN_LEN:
+        return None
+    if len(eapol_raw) < 4 + payload_len:
+        return None
+
+    key_payload = eapol_raw[4 : 4 + payload_len]
+    if len(key_payload) < EAPOL_KEY_MIN_LEN:
+        return None
+
+    descriptor_type = key_payload[0]
+    if descriptor_type not in (2, 254):
+        return None
+
+    key_info = int.from_bytes(key_payload[1:3], "big")
+    replay_counter = int.from_bytes(key_payload[5:13], "big")
+    key_data_length = int.from_bytes(key_payload[93:95], "big")
+
+    return EapolKeyFrame(
+        client=client,
+        from_ap=from_ap,
+        replay_counter=replay_counter,
+        key_info=key_info,
+        key_data_length=key_data_length,
+        descriptor_type=descriptor_type,
+        pairwise=bool(key_info & KEY_INFO_PAIRWISE),
+        install=bool(key_info & KEY_INFO_INSTALL),
+        ack=bool(key_info & KEY_INFO_ACK),
+        mic=bool(key_info & KEY_INFO_MIC),
+        secure=bool(key_info & KEY_INFO_SECURE),
+    )
+
+
+def classify_4way_message(frame: EapolKeyFrame) -> Optional[int]:
+    """Classify frame as WPA(2) 4-way message number (1..4)."""
+    if not frame.pairwise:
+        return None
+    if frame.from_ap and frame.ack and not frame.mic:
+        return 1
+    if (not frame.from_ap) and (not frame.ack) and frame.mic and not frame.secure:
+        return 2
+    if frame.from_ap and frame.ack and frame.mic and frame.secure:
+        return 3
+    if (not frame.from_ap) and (not frame.ack) and frame.mic and frame.secure:
+        return 4
+    return None
+
+
+def update_handshake_progress(
+    states: Dict[str, HandshakeProgress],
+    frame: EapolKeyFrame,
+    *,
+    now: Optional[float] = None,
+    idle_timeout: float = HANDSHAKE_IDLE_TIMEOUT_SEC,
+) -> Tuple[bool, bool, int]:
+    """Advance per-client handshake state.
+
+    Returns: (stage_advanced, handshake_completed, message_number)
+    """
+    current_time = now if now is not None else time.time()
+    message_number = classify_4way_message(frame)
+    if message_number is None:
+        return False, False, 0
+
+    progress = states.get(frame.client, HandshakeProgress())
+    if progress.last_seen and idle_timeout > 0 and (current_time - progress.last_seen) > idle_timeout:
+        progress = HandshakeProgress()
+
+    stage_advanced = False
+    handshake_completed = False
+
+    if message_number == 1:
+        progress.stage = 1
+        progress.replay_counter = frame.replay_counter
+        stage_advanced = True
+    elif message_number == 2:
+        if progress.stage == 1 and frame.replay_counter == progress.replay_counter:
+            progress.stage = 2
+            stage_advanced = True
+    elif message_number == 3:
+        if progress.stage >= 2 and frame.replay_counter >= progress.replay_counter:
+            if progress.stage != 3 or frame.replay_counter != progress.replay_counter:
+                stage_advanced = True
+            progress.stage = 3
+            progress.replay_counter = frame.replay_counter
+    elif message_number == 4:
+        if progress.stage == 3 and frame.replay_counter == progress.replay_counter:
+            handshake_completed = True
+            stage_advanced = True
+            progress = HandshakeProgress()
+
+    progress.last_seen = current_time
+    states[frame.client] = progress
+    return stage_advanced, handshake_completed, message_number
+
 
 def sanitize_capture_basename(ssid: str, fallback: str = "hidden", max_len: int = 24) -> str:
     if not ssid or ssid in {"<hidden>", "<non-printable>"}:
@@ -764,8 +964,9 @@ def capture_full_handshakes(
     total_packets = 0
     eapol_count = 0
     clients_with_eapol = set()
+    message_counters: Dict[int, int] = {1: 0, 2: 0, 3: 0, 4: 0}
 
-    eapol_states: Dict[str, int] = {}  # client_mac -> number of EAPOL messages seen
+    eapol_states: Dict[str, HandshakeProgress] = {}
 
     start_time: Optional[float] = None
     started = False
@@ -816,34 +1017,34 @@ def capture_full_handshakes(
             if pkt.haslayer(EAPOL):
                 with stats_lock:
                     eapol_count += 1
-                if packet_matches_bssid(pkt, ap.bssid):
-                    dot11 = pkt[Dot11]
-                    bssid = normalize_mac(ap.bssid)
-                    addr1 = normalize_mac(dot11.addr1)
-                    addr2 = normalize_mac(dot11.addr2)
+                frame = parse_eapol_key_frame(pkt, ap.bssid)
+                if not frame:
+                    return
 
-                    client = None
-                    for candidate in (addr1, addr2):
-                        if candidate and candidate != bssid and is_unicast(candidate):
-                            client = candidate
-                            break
-                    if not client:
-                        return
-
-                    with stats_lock:
-                        clients_with_eapol.add(client)
-                        eapol_states[client] = eapol_states.get(client, 0) + 1
-
-                        # Very simple heuristic: 4 consecutive EAPOL messages -> likely full 4-way handshake.
-                        if eapol_states[client] >= 4:
-                            handshake_count += 1
-                            eapol_states[client] = 0  # Reset counter after a likely complete handshake.
-                            events.put(
-                                (
-                                    COLOR_SUCCESS,
-                                    f"[+] Possible complete 4-way handshake detected (client: {client})",
-                                )
+                with stats_lock:
+                    clients_with_eapol.add(frame.client)
+                    advanced, completed, message_number = update_handshake_progress(
+                        eapol_states,
+                        frame,
+                    )
+                    if message_number in message_counters:
+                        message_counters[message_number] += 1
+                    if advanced:
+                        events.put(
+                            (
+                                COLOR_DIM,
+                                f"[EAPOL] {frame.client} -> M{message_number} "
+                                f"(replay={frame.replay_counter})",
                             )
+                        )
+                    if completed:
+                        handshake_count += 1
+                        events.put(
+                            (
+                                COLOR_SUCCESS,
+                                f"[+] Validated full 4-way handshake (client: {frame.client})",
+                            )
+                        )
 
         sniffer = AsyncSniffer(iface=interface, prn=packet_handler, store=False)
         sniffer.start()
@@ -905,10 +1106,16 @@ def capture_full_handshakes(
             with stats_lock:
                 eapol_snapshot = eapol_count
                 handshake_snapshot = handshake_count
+                m1_snapshot = message_counters[1]
+                m2_snapshot = message_counters[2]
+                m3_snapshot = message_counters[3]
+                m4_snapshot = message_counters[4]
 
             status = (
                 f"Capture: {elapsed}s / {total_duration_sec}s   "
-                f"EAPOL: {eapol_snapshot}   Handshakes: {handshake_snapshot}"
+                f"EAPOL: {eapol_snapshot}   "
+                f"M1/M2/M3/M4: {m1_snapshot}/{m2_snapshot}/{m3_snapshot}/{m4_snapshot}   "
+                f"Handshakes: {handshake_snapshot}"
             )
             render_status_line(status)
             time.sleep(1)
@@ -952,6 +1159,13 @@ def capture_full_handshakes(
         logging.info("  Duration:         %s seconds", duration_sec)
         logging.info("  Total packets:    %s", total_packets)
         logging.info("  EAPOL packets:    %s", eapol_count)
+        logging.info(
+            "  M1/M2/M3/M4:      %s/%s/%s/%s",
+            message_counters[1],
+            message_counters[2],
+            message_counters[3],
+            message_counters[4],
+        )
         logging.info("  Handshakes:       %s", handshake_count)
         logging.info("  Clients w/ EAPOL: %s", len(clients_with_eapol))
         logging.info("=" * 70)
@@ -960,6 +1174,12 @@ def capture_full_handshakes(
         "path": pcap_path,
         "total_packets": total_packets,
         "eapol_packets": eapol_count,
+        "eapol_messages": {
+            "m1": message_counters[1],
+            "m2": message_counters[2],
+            "m3": message_counters[3],
+            "m4": message_counters[4],
+        },
         "detected_handshakes": handshake_count,
         "clients_with_eapol": len(clients_with_eapol)
     }
@@ -1078,6 +1298,23 @@ def main() -> None:
             logging.info(f"  → {summary['path']}")
             logging.info("  Detected full handshakes: %s", summary["detected_handshakes"])
             logging.info("Open in Wireshark and filter: eapol")
+
+        if os.environ.get("SWISSKNIFE_WEBUI_TASK") == "1":
+            emit_webui_result(
+                {
+                    "kind": "handshaker_capture",
+                    "running": False,
+                    "timestamp": int(time.time()),
+                    "interface": interface,
+                    "ssid": target_ap.ssid,
+                    "bssid": target_ap.bssid,
+                    "channel": target_ap.channel,
+                    "capture_duration": capture_total_sec,
+                    "deauth_duration": deauth_sec,
+                    "ok": bool(summary),
+                    "summary": summary or {},
+                }
+            )
 
     finally:
         if changed_to_monitor:

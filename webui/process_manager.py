@@ -72,7 +72,7 @@ DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
         module_id="handshaker",
         name="Handshaker",
         script="modules/handshaker.py",
-        description="Under-construction handshaker module.",
+        description="4-way handshake capture and validation workflow.",
     ),
 )
 
@@ -393,6 +393,7 @@ class ProcessManager:
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
             env.setdefault("TERM", "xterm-256color")
+            env["SWISSKNIFE_WEBUI_TASK"] = "1"
 
             try:
                 proc = subprocess.Popen(

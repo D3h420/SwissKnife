@@ -262,8 +262,7 @@ MENU_SCHEMA = {
                     "label": "Handshaker",
                     "type": "module",
                     "module_id": "handshaker",
-                    "description": "Under construction module.",
-                    "under_construction": True,
+                    "description": "4-way handshake capture and EAPOL validation.",
                     "controls": [
                         {
                             "id": "interface",
@@ -280,6 +279,16 @@ MENU_SCHEMA = {
                             "max": 120,
                             "step": 5,
                             "default": 25,
+                            "suffix": "s",
+                        },
+                        {
+                            "id": "capture_duration",
+                            "label": "Capture Time",
+                            "kind": "range",
+                            "min": 20,
+                            "max": 180,
+                            "step": 5,
+                            "default": 45,
                             "suffix": "s",
                         },
                     ],
