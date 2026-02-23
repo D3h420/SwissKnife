@@ -8,6 +8,10 @@ Recon has dedicated non-interactive Web UI actions:
 - `recon_scan` (`webui/actions/recon_scan.py`)
 - `recon_sniff` (`webui/actions/recon_sniff.py`)
 
+Bluetooth now also uses dedicated Web UI actions:
+- `bluetooth_scan` (`webui/actions/bluetooth_scan.py`)
+- `bluetooth_poet` (`webui/actions/bluetooth_poet.py`)
+
 These are designed for click-through control (no numeric menu prompts).
 Recon results are exposed as structured payloads and displayed in a fixed UI panel.
 

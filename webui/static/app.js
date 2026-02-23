@@ -247,29 +247,48 @@ const FALLBACK_MENU = {
       id: "bluetooth",
       label: "Bluetooth",
       icon: "BT",
-      type: "module",
-      module_id: "bluetooth",
+      type: "group",
       description: "Bluetooth and BLE workflows.",
-      controls: [
+      items: [
         {
-          id: "scan_mode",
-          label: "Mode",
-          kind: "select",
-          options: [
-            { value: "bt", label: "Bluetooth" },
-            { value: "ble", label: "BLE" },
+          id: "bluetooth_scan",
+          label: "Scan BT",
+          type: "module",
+          module_id: "bluetooth_scan",
+          description: "Live Bluetooth discovery scan.",
+          controls: [
+            {
+              id: "timeout",
+              label: "Timeout",
+              kind: "range",
+              arg: "--timeout",
+              min: 10,
+              max: 180,
+              step: 5,
+              default: 30,
+              suffix: "s",
+            },
           ],
-          default: "bt",
         },
         {
-          id: "timeout",
-          label: "Timeout",
-          kind: "range",
-          min: 10,
-          max: 180,
-          step: 5,
-          default: 30,
-          suffix: "s",
+          id: "bluetooth_poet",
+          label: "BLE Poet",
+          type: "module",
+          module_id: "bluetooth_poet",
+          description: "BLE Poet advertiser workflow.",
+          controls: [
+            {
+              id: "timeout",
+              label: "Timeout",
+              kind: "range",
+              arg: "--timeout",
+              min: 10,
+              max: 180,
+              step: 5,
+              default: 30,
+              suffix: "s",
+            },
+          ],
         },
       ],
     },
@@ -726,6 +745,10 @@ function resolveModuleInfo(moduleId) {
 
 function isReconModule(moduleId) {
   return moduleId === "recon_scan" || moduleId === "recon_sniff";
+}
+
+function isBluetoothModule(moduleId) {
+  return moduleId === "bluetooth_scan" || moduleId === "bluetooth_poet";
 }
 
 function stripAnsi(text) {
@@ -1245,12 +1268,8 @@ function collectAutomationPreset(item, card) {
       selectedTargetIndex: null,
     };
   }
-  if (item.module_id === "bluetooth") {
-    const modeRaw = String(readControlValue(card, "scan_mode", "bt")).trim().toLowerCase();
-    return {
-      mode: modeRaw === "ble" ? "ble" : "bt",
-      timeout: normalizePositiveInt(readControlValue(card, "timeout", 30), 30, 5),
-    };
+  if (item.module_id === "bluetooth_scan" || item.module_id === "bluetooth_poet") {
+    return null;
   }
   return null;
 }
@@ -2666,6 +2685,74 @@ function renderReconSniffResult(result, task) {
   dom.resultsView.appendChild(buildProbePairsTable(result.probe_pairs));
 }
 
+function buildBluetoothDevicesTable(devices) {
+  const table = document.createElement("table");
+  table.className = "result-table";
+
+  const head = document.createElement("thead");
+  head.innerHTML = "<tr><th>Name</th><th>MAC</th><th>RSSI</th></tr>";
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  const rows = Array.isArray(devices) ? devices : [];
+  if (!rows.length) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="3" class="cell-muted">No devices found.</td>';
+    body.appendChild(empty);
+    table.appendChild(body);
+    return table;
+  }
+
+  rows.slice(0, 200).forEach((entry) => {
+    const tr = document.createElement("tr");
+    const values = [
+      entry?.name || "<unknown>",
+      entry?.mac || "-",
+      entry?.rssi !== null && entry?.rssi !== undefined ? `${entry.rssi} dBm` : "?",
+    ];
+    values.forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = String(value);
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+
+  table.appendChild(body);
+  return table;
+}
+
+function renderBluetoothScanResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "Scan BT"));
+  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Devices", result.device_count ?? 0));
+  summary.appendChild(createSummaryPill("Duration", `${result.duration ?? 0}s`));
+  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+  dom.resultsView.appendChild(buildBluetoothDevicesTable(result.devices));
+  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+}
+
+function renderBluetoothPoetResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "BLE Poet"));
+  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Advertised Name", result.identity_name || "BLE Poet"));
+  summary.appendChild(createSummaryPill("Duration", `${result.duration ?? 0}s`));
+  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+}
+
 function renderHandshakerResult(result, task) {
   dom.resultsView.innerHTML = "";
 
@@ -3997,6 +4084,53 @@ function renderReconLiveStatus(task) {
   dom.resultsView.appendChild(waiting);
 }
 
+function getBluetoothDurationSeconds(task, result) {
+  const resultDuration = Number(result?.timeout);
+  if (Number.isFinite(resultDuration) && resultDuration > 0) {
+    return Math.round(resultDuration);
+  }
+  const fromCommand = getCommandArgNumber(task, "--timeout", 0);
+  if (Number.isFinite(fromCommand) && fromCommand > 0) {
+    return Math.round(fromCommand);
+  }
+  return 0;
+}
+
+function getBluetoothRemainingSeconds(task, result) {
+  if (!task?.running) {
+    return 0;
+  }
+  const duration = getBluetoothDurationSeconds(task, result);
+  if (duration <= 0) {
+    return 0;
+  }
+  const elapsed = Math.max(0, Math.floor(Date.now() / 1000 - Number(task.started_at || 0)));
+  return Math.max(0, duration - elapsed);
+}
+
+function renderBluetoothLiveStatus(task, result) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", task.module_name || "Bluetooth"));
+  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
+  const duration = getBluetoothDurationSeconds(task, result);
+  if (task.running && duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${getBluetoothRemainingSeconds(task, result)}s left`));
+  } else if (duration > 0) {
+    summary.appendChild(createSummaryPill("Timeout", `${duration}s`));
+  }
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+
+  const waiting = document.createElement("div");
+  waiting.className = "muted-block";
+  waiting.textContent = "Bluetooth workflow running...";
+  dom.resultsView.appendChild(waiting);
+  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+}
+
 function getResultTaskForCurrentSection() {
   const activeTask = getTaskById(state.activeTaskId);
   if (state.selectedSectionId === "recon") {
@@ -4004,6 +4138,25 @@ function getResultTaskForCurrentSection() {
       return activeTask;
     }
     return state.tasks.find((task) => isReconModule(task.module_id)) || null;
+  }
+  if (state.selectedSectionId === "bluetooth") {
+    const section = getSectionById("bluetooth");
+    const selectedItem = section ? getSelectedSectionItem(section) : null;
+    const selectedModuleId = selectedItem?.module_id || "";
+    if (selectedModuleId) {
+      if (activeTask && activeTask.module_id === selectedModuleId) {
+        return activeTask;
+      }
+      return (
+        getRunningTaskForModule(selectedModuleId)
+        || getLatestTaskForModule(selectedModuleId)
+        || null
+      );
+    }
+    if (activeTask && isBluetoothModule(activeTask.module_id)) {
+      return activeTask;
+    }
+    return state.tasks.find((task) => isBluetoothModule(task.module_id)) || null;
   }
   return activeTask;
 }
@@ -4017,6 +4170,8 @@ function renderResultView() {
     empty.className = "muted-block";
     empty.textContent = state.selectedSectionId === "recon"
       ? "Run scanner or sniffer to see recon output."
+      : state.selectedSectionId === "bluetooth"
+      ? "Run Scan BT or BLE Poet to see Bluetooth output."
       : "Select task to see module output.";
     dom.resultsView.appendChild(empty);
     return;
@@ -4034,6 +4189,19 @@ function renderResultView() {
       return;
     }
     renderReconLiveStatus(task);
+    return;
+  }
+
+  if (isBluetoothModule(task.module_id)) {
+    if (result?.kind === "bluetooth_scan") {
+      renderBluetoothScanResult(result, task);
+      return;
+    }
+    if (result?.kind === "bluetooth_poet") {
+      renderBluetoothPoetResult(result, task);
+      return;
+    }
+    renderBluetoothLiveStatus(task, result);
     return;
   }
 

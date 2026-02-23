@@ -63,10 +63,16 @@ DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
         description="Evil Twin workflow.",
     ),
     ModuleSpec(
-        module_id="bluetooth",
-        name="Bluetooth",
-        script="modules/bluetooth.py",
-        description="Bluetooth and BLE workflows.",
+        module_id="bluetooth_scan",
+        name="Bluetooth Scan",
+        script="webui/actions/bluetooth_scan.py",
+        description="Live Bluetooth discovery scan.",
+    ),
+    ModuleSpec(
+        module_id="bluetooth_poet",
+        name="BLE Poet",
+        script="webui/actions/bluetooth_poet.py",
+        description="BLE advertiser workflow.",
     ),
     ModuleSpec(
         module_id="handshaker",
