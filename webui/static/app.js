@@ -234,8 +234,37 @@ const FALLBACK_MENU = {
           ],
         },
         {
+          id: "sea_overflow",
+          label: "SEA Overflow (Jan nedded here).",
+          type: "module",
+          description: "Jan nedded here.",
+          disabled: true,
+          under_construction: true,
+        },
+        {
           id: "karma",
           label: "Karma",
+          type: "module",
+          description: "Under construction module.",
+          disabled: true,
+          under_construction: true,
+        },
+        {
+          id: "inside_label",
+          label: "INSIDE",
+          type: "separator",
+        },
+        {
+          id: "arp_scan",
+          label: "ARP scan",
+          type: "module",
+          description: "Under construction module.",
+          disabled: true,
+          under_construction: true,
+        },
+        {
+          id: "ip_cam",
+          label: "IP.CAM",
           type: "module",
           description: "Under construction module.",
           disabled: true,
@@ -623,17 +652,29 @@ function getSectionItems(section) {
   return section.items;
 }
 
+function isSeparatorItem(item) {
+  if (!item || typeof item !== "object") {
+    return false;
+  }
+  if (item.separator) {
+    return true;
+  }
+  const itemType = String(item.type || "").toLowerCase();
+  return itemType === "separator";
+}
+
 function getSelectedSectionItem(section) {
   const items = getSectionItems(section);
-  if (!items.length) {
+  const selectable = items.filter((item) => !isSeparatorItem(item));
+  if (!selectable.length) {
     return null;
   }
   const sectionId = section.id || "";
   const currentId = state.selectedItemBySection[sectionId];
-  if (currentId && items.some((item) => item.id === currentId)) {
-    return items.find((item) => item.id === currentId) || null;
+  if (currentId && selectable.some((item) => item.id === currentId)) {
+    return selectable.find((item) => item.id === currentId) || null;
   }
-  const fallback = items[0] || null;
+  const fallback = selectable[0] || null;
   if (fallback && sectionId) {
     state.selectedItemBySection[sectionId] = fallback.id;
   }
@@ -2378,6 +2419,14 @@ function renderSubMenu(section) {
   dom.subMenu.hidden = false;
 
   items.forEach((item) => {
+    if (isSeparatorItem(item)) {
+      const separator = document.createElement("span");
+      separator.className = "sub-menu-separator";
+      separator.textContent = item.label || item.name || "---";
+      dom.subMenu.appendChild(separator);
+      return;
+    }
+
     const button = document.createElement("button");
     button.type = "button";
     button.className = `sub-menu-btn${selected?.id === item.id ? " active" : ""}`;

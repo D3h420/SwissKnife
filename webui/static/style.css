@@ -613,6 +613,18 @@ body {
   white-space: nowrap;
 }
 
+.sub-menu-separator {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--text-muted);
+  font-size: var(--content-size-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
 .sub-menu-btn {
   height: 28px;
   min-width: 98px;
@@ -652,9 +664,24 @@ body {
   box-shadow: inset 0 0 0 1px rgba(103, 245, 164, 0.14);
 }
 
+.sub-menu-btn[data-section="attacks"][data-item-id="sea_overflow"] {
+  border-color: rgba(112, 196, 255, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(112, 196, 255, 0.14);
+}
+
 .sub-menu-btn[data-section="attacks"][data-item-id="karma"] {
   border-color: rgba(174, 153, 255, 0.58);
   box-shadow: inset 0 0 0 1px rgba(174, 153, 255, 0.14);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="arp_scan"] {
+  border-color: rgba(132, 164, 184, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(132, 164, 184, 0.14);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="ip_cam"] {
+  border-color: rgba(152, 172, 192, 0.58);
+  box-shadow: inset 0 0 0 1px rgba(152, 172, 192, 0.14);
 }
 
 .sub-menu-btn[data-section="attacks"][data-item-id="deauth"].active {
@@ -681,10 +708,28 @@ body {
     0 0 0 1px rgba(103, 245, 164, 0.46);
 }
 
+.sub-menu-btn[data-section="attacks"][data-item-id="sea_overflow"].active {
+  box-shadow:
+    0 0 16px rgba(112, 196, 255, 0.35),
+    0 0 0 1px rgba(112, 196, 255, 0.46);
+}
+
 .sub-menu-btn[data-section="attacks"][data-item-id="karma"].active {
   box-shadow:
     0 0 16px rgba(174, 153, 255, 0.35),
     0 0 0 1px rgba(174, 153, 255, 0.45);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="arp_scan"].active {
+  box-shadow:
+    0 0 16px rgba(132, 164, 184, 0.35),
+    0 0 0 1px rgba(132, 164, 184, 0.45);
+}
+
+.sub-menu-btn[data-section="attacks"][data-item-id="ip_cam"].active {
+  box-shadow:
+    0 0 16px rgba(152, 172, 192, 0.35),
+    0 0 0 1px rgba(152, 172, 192, 0.45);
 }
 
 .section-body {
