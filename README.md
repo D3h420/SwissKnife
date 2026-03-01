@@ -99,6 +99,7 @@ System tools used by launcher/modules:
 - `ethtool`
 - `aireplay-ng` (Aircrack-ng suite)
 - `airodump-ng` (Aircrack-ng suite)
+- `mdk4`
 - `hostapd`
 - `dnsmasq`
 - `iptables`
@@ -114,7 +115,6 @@ Extra tools used by specific paths/fallbacks:
 - `systemctl` (Bluetooth service control on systemd hosts)
 
 Optional tools:
-- `mdk4`
 - `bully`
 - `avahi-daemon` (for `<hostname>.local` discovery in local network)
 

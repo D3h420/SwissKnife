@@ -95,6 +95,7 @@ REQUIRED_TOOLS: List[str] = [
     "ethtool",
     "aireplay-ng",
     "airodump-ng",
+    "mdk4",
     "bluetoothctl",
     "btmgmt",
     "hostapd",

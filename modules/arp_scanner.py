@@ -160,6 +160,15 @@ class ArpDevice:
     source: str = "ARP"
 
 
+@dataclass
+class InterfaceProfile:
+    name: str
+    role: str
+    chipset: str
+    mode: str
+    state: str
+
+
 def run_command(args: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(
@@ -246,6 +255,7 @@ class ArpScanner(Module):
         self._stop_event = threading.Event()
         self._signal_handlers: Dict[int, object] = {}
         self._selected_interface: str = ""
+        self._interface_profiles: Dict[str, InterfaceProfile] = {}
         self._target_network: Optional[WiFiNetwork] = None
         self._connected_subnet: str = ""
         self._devices_by_ip: Dict[str, ArpDevice] = {}
@@ -279,7 +289,7 @@ class ArpScanner(Module):
             password = self._resolve_password_for_network(target)
             self._connect_to_network(interface, target, password)
 
-            subnet = self._get_interface_subnet(interface)
+            subnet = self._wait_for_ipv4(interface, timeout=18.0) or self._get_interface_subnet(interface)
             if not subnet:
                 raise RuntimeError(
                     "Connected, but no IPv4 subnet detected. Check DHCP or static IP settings."
@@ -287,9 +297,9 @@ class ArpScanner(Module):
             self._connected_subnet = str(subnet)
 
             self.console.print(
-                "[bold cyan]Skanowanie tabeli ARP w toku... (Ctrl+C aby zatrzymac)[/bold cyan]\n"
-                f"[dim]Interfejs:[/dim] {interface}  "
-                f"[dim]Siec:[/dim] {target.ssid or '<hidden>'}  "
+                "[bold cyan]ARP table scan in progress... (Ctrl+C to stop)[/bold cyan]\n"
+                f"[dim]Interface:[/dim] {interface}  "
+                f"[dim]Network:[/dim] {target.ssid or '<hidden>'}  "
                 f"[dim]Subnet:[/dim] {subnet}"
             )
 
@@ -368,10 +378,83 @@ class ArpScanner(Module):
                     interfaces.append(name)
         return sorted(set(interfaces))
 
+    def _get_interface_chipset(self, interface: str) -> str:
+        if not tool_exists("ethtool"):
+            return "unknown"
+        result = run_command(["ethtool", "-i", interface], timeout=3.0)
+        if result.returncode != 0:
+            return "unknown"
+
+        driver = ""
+        bus_info = ""
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("driver:"):
+                driver = line.split(":", 1)[1].strip()
+            elif line.startswith("bus-info:"):
+                bus_info = line.split(":", 1)[1].strip()
+
+        if driver and bus_info:
+            return f"{driver} ({bus_info})"
+        if driver:
+            return driver
+        return "unknown"
+
+    def _get_interface_mode(self, interface: str) -> str:
+        result = run_command(["iw", "dev", interface, "info"], timeout=3.0)
+        if result.returncode != 0:
+            return "unknown"
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("type "):
+                return line.split("type", 1)[1].strip()
+        return "unknown"
+
+    def _is_interface_up(self, interface: str) -> bool:
+        result = run_command(["ip", "link", "show", "dev", interface], timeout=3.0)
+        if result.returncode != 0:
+            return False
+        output = result.stdout
+        if "state UP" in output:
+            return True
+        if "<" in output and ">" in output:
+            flags = output.split("<", 1)[1].split(">", 1)[0]
+            return "UP" in flags.split(",")
+        return False
+
+    def _classify_interface_role(self, interface: str, chipset: str) -> str:
+        probe = f"{interface} {chipset}".lower()
+        if "usb" in probe:
+            return "External USB"
+        if "platform" in probe or "sdio" in probe:
+            return "Built-in"
+        if "pci" in probe:
+            return "Internal PCIe"
+        if interface == "wlan0":
+            return "Built-in"
+        return "Unknown"
+
+    def _build_interface_profiles(self, interfaces: List[str]) -> Dict[str, InterfaceProfile]:
+        profiles: Dict[str, InterfaceProfile] = {}
+        for iface in interfaces:
+            chipset = self._get_interface_chipset(iface)
+            mode = self._get_interface_mode(iface)
+            state = "UP" if self._is_interface_up(iface) else "DOWN"
+            role = self._classify_interface_role(iface, chipset)
+            profiles[iface] = InterfaceProfile(
+                name=iface,
+                role=role,
+                chipset=chipset,
+                mode=mode,
+                state=state,
+            )
+        return profiles
+
     def _select_interface(self) -> str:
         interfaces = self._list_wifi_interfaces()
         if not interfaces:
             raise RuntimeError("No Wi-Fi interfaces found.")
+        self._interface_profiles = self._build_interface_profiles(interfaces)
 
         if self.interface and self.interface != "auto":
             if self.interface not in interfaces:
@@ -379,14 +462,36 @@ class ArpScanner(Module):
             return self.interface
 
         if len(interfaces) == 1:
-            self.console.print(f"[green]Selected interface:[/green] {interfaces[0]}")
+            profile = self._interface_profiles.get(interfaces[0])
+            if profile:
+                self.console.print(
+                    f"[green]Selected interface:[/green] {profile.name} "
+                    f"([dim]{profile.role} | {profile.chipset}[/dim])"
+                )
+            else:
+                self.console.print(f"[green]Selected interface:[/green] {interfaces[0]}")
             return interfaces[0]
 
         table = Table(title="Available Wi-Fi Interfaces", box=box.SIMPLE_HEAVY)
         table.add_column("#", justify="right", style="cyan", no_wrap=True)
         table.add_column("Interface", style="bold")
+        table.add_column("Role")
+        table.add_column("Driver/Bus")
+        table.add_column("Mode")
+        table.add_column("State")
         for idx, iface in enumerate(interfaces, start=1):
-            table.add_row(str(idx), iface)
+            profile = self._interface_profiles.get(iface)
+            if not profile:
+                table.add_row(str(idx), iface, "-", "-", "-", "-")
+                continue
+            table.add_row(
+                str(idx),
+                profile.name,
+                profile.role,
+                profile.chipset,
+                profile.mode,
+                profile.state,
+            )
         self.console.print(table)
 
         while self.running:
@@ -559,6 +664,7 @@ class ArpScanner(Module):
 
     def _connect_to_network(self, interface: str, network: WiFiNetwork, password: str) -> None:
         self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
+        self._prepare_network_manager(interface)
 
         ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
         attempts: List[List[str]] = []
@@ -570,13 +676,26 @@ class ArpScanner(Module):
             cmd += ["bssid", network.bssid]
             attempts.append(cmd)
 
+            cmd_no_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
+            if password:
+                cmd_no_bssid += ["password", password]
+            attempts.append(cmd_no_bssid)
+
         cmd_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", network.bssid, "ifname", interface]
         if password:
             cmd_bssid += ["password", password]
         attempts.append(cmd_bssid)
 
+        if ssid_target:
+            generic = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target]
+            if password:
+                generic += ["password", password]
+            attempts.append(generic)
+
         last_error = ""
         for cmd in attempts:
+            run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=8.0)
+            time.sleep(0.8)
             result = run_command(cmd, timeout=35.0)
             if result.returncode == 0:
                 self.console.print("[green]Wi-Fi connected.[/green]")
@@ -605,6 +724,20 @@ class ArpScanner(Module):
             if isinstance(iface.ip, ipaddress.IPv4Address):
                 return iface.network
         return None
+
+    def _wait_for_ipv4(self, interface: str, timeout: float = 15.0) -> Optional[ipaddress.IPv4Network]:
+        end = time.time() + max(1.0, timeout)
+        while time.time() < end and self.running:
+            subnet = self._get_interface_subnet(interface)
+            if subnet:
+                return subnet
+            time.sleep(1.0)
+        return None
+
+    def _prepare_network_manager(self, interface: str) -> None:
+        run_command(["nmcli", "radio", "wifi", "on"], timeout=8.0)
+        run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
+        run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
 
     def _collect_arp_entries(self, interface: str, subnet: ipaddress.IPv4Network) -> None:
         hosts = [str(host) for host in subnet.hosts()]
