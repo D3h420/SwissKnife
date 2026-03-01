@@ -2793,10 +2793,16 @@ function renderBluetoothPoetResult(result, task) {
   summary.appendChild(createSummaryPill("Mode", "BLE Poet"));
   summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
   summary.appendChild(createSummaryPill("Advertised Name", result.identity_name || "BLE Poet"));
+  if (result.device_count !== null && result.device_count !== undefined) {
+    summary.appendChild(createSummaryPill("Devices", result.device_count));
+  }
   summary.appendChild(createSummaryPill("Duration", `${result.duration ?? 0}s`));
   summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
   summary.appendChild(createSummaryPill("Task", task.task_id));
   dom.resultsView.appendChild(summary);
+  if (Array.isArray(result.devices) && result.devices.length > 0) {
+    dom.resultsView.appendChild(buildBluetoothDevicesTable(result.devices));
+  }
   dom.resultsView.appendChild(renderLogFeed(task.task_id));
 }
 
