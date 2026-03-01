@@ -93,6 +93,7 @@ REQUIRED_TOOLS: List[str] = [
     "iw",
     "ip",
     "ethtool",
+    "arp-scan",
     "aireplay-ng",
     "airodump-ng",
     "mdk4",

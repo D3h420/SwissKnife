@@ -140,6 +140,11 @@ IP_NEIGH_RE = re.compile(
     r"(?P<mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+"
     r"(?P<state>\S+)"
 )
+ARP_SCAN_RE = re.compile(
+    r"^(?P<ip>\d+\.\d+\.\d+\.\d+)\s+"
+    r"(?P<mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})"
+    r"(?:\s+(?P<vendor>.*))?$"
+)
 
 
 @dataclass
@@ -362,7 +367,7 @@ class ArpScanner(Module):
     def _ensure_runtime_requirements(self) -> None:
         if os.geteuid() != 0:
             raise RuntimeError("ARP scanner must run as root.")
-        required = ["iw", "ip", "nmcli", "ping"]
+        required = ["iw", "ip", "nmcli", "ping", "arp-scan"]
         missing = [tool for tool in required if not tool_exists(tool)]
         if missing:
             raise RuntimeError(f"Missing required tools: {', '.join(missing)}")
@@ -717,6 +722,7 @@ class ArpScanner(Module):
     def _connect_to_network(self, interface: str, network: WiFiNetwork, password: str) -> None:
         self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
         self._prepare_network_manager(interface)
+        run_command(["nmcli", "device", "disconnect", interface], timeout=8.0)
 
         ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
         attempts: List[List[str]] = []
@@ -759,6 +765,15 @@ class ArpScanner(Module):
             if last_error:
                 errors.append(last_error)
 
+        if ssid_target:
+            run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=8.0)
+            time.sleep(1.2)
+            profile_error = self._connect_via_temp_profile(interface, ssid_target, password, network.bssid if bssid_visible else "")
+            if not profile_error:
+                self.console.print("[green]Wi-Fi connected.[/green]")
+                return
+            errors.append(profile_error)
+
         if errors:
             deduped = []
             for item in errors:
@@ -766,6 +781,32 @@ class ArpScanner(Module):
                     deduped.append(item)
             raise RuntimeError(deduped[0])
         raise RuntimeError(last_error or "Failed to connect to selected Wi-Fi network.")
+
+    def _connect_via_temp_profile(self, interface: str, ssid: str, password: str, bssid: str) -> str:
+        profile = f"swissknife-{interface}-arp"
+        run_command(["nmcli", "connection", "delete", profile], timeout=6.0)
+
+        add_cmd = ["nmcli", "connection", "add", "type", "wifi", "ifname", interface, "con-name", profile, "ssid", ssid]
+        add_result = run_command(add_cmd, timeout=12.0)
+        if add_result.returncode != 0:
+            return (add_result.stderr or add_result.stdout or "Failed to create temporary NetworkManager profile.").strip()
+
+        run_command(["nmcli", "connection", "modify", profile, "connection.autoconnect", "no"], timeout=8.0)
+        if bssid:
+            run_command(["nmcli", "connection", "modify", profile, "802-11-wireless.bssid", bssid], timeout=8.0)
+
+        if password:
+            sec_result = run_command(
+                ["nmcli", "connection", "modify", profile, "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password],
+                timeout=10.0,
+            )
+            if sec_result.returncode != 0:
+                return (sec_result.stderr or sec_result.stdout or "Failed to configure Wi-Fi password.").strip()
+
+        up_result = run_command(["nmcli", "--wait", "30", "connection", "up", profile, "ifname", interface], timeout=35.0)
+        if up_result.returncode == 0:
+            return ""
+        return (up_result.stderr or up_result.stdout or "Failed to activate temporary Wi-Fi profile.").strip()
 
     def _is_bssid_visible(self, interface: str, bssid: str) -> bool:
         target = normalize_mac(bssid)
@@ -790,23 +831,37 @@ class ArpScanner(Module):
 
     def _get_interface_subnet(self, interface: str) -> Optional[ipaddress.IPv4Network]:
         result = run_command(["ip", "-o", "-f", "inet", "addr", "show", "dev", interface], timeout=3.0)
-        if result.returncode != 0:
-            return None
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if "inet" not in parts:
+                    continue
+                idx = parts.index("inet")
+                if idx + 1 >= len(parts):
+                    continue
+                cidr = parts[idx + 1]
+                try:
+                    iface = ipaddress.ip_interface(cidr)
+                except ValueError:
+                    continue
+                if isinstance(iface.ip, ipaddress.IPv4Address):
+                    return iface.network
 
-        for line in result.stdout.splitlines():
+        route_result = run_command(["ip", "-o", "-4", "route", "show", "dev", interface], timeout=3.0)
+        if route_result.returncode != 0:
+            return None
+        for line in route_result.stdout.splitlines():
             parts = line.split()
-            if "inet" not in parts:
+            if not parts:
                 continue
-            idx = parts.index("inet")
-            if idx + 1 >= len(parts):
+            if parts[0] == "default":
                 continue
-            cidr = parts[idx + 1]
             try:
-                iface = ipaddress.ip_interface(cidr)
+                network = ipaddress.ip_network(parts[0], strict=False)
             except ValueError:
                 continue
-            if isinstance(iface.ip, ipaddress.IPv4Address):
-                return iface.network
+            if isinstance(network, ipaddress.IPv4Network):
+                return network
         return None
 
     def _get_interface_ipv4(self, interface: str) -> Optional[ipaddress.IPv4Address]:
@@ -939,21 +994,82 @@ class ArpScanner(Module):
 
     def _collect_arp_entries(self, interface: str, subnet: ipaddress.IPv4Network) -> None:
         hosts = self._hosts_for_sweep(interface, subnet)
+        arp_scan_error_shown = False
 
         for round_no in range(1, self.rounds + 1):
             if not self.running:
                 break
 
             self.console.print(f"[dim]ARP scan round {round_no}/{self.rounds} ({len(hosts)} hosts)[/dim]")
-            if tool_exists("nmap"):
-                run_command(["nmap", "-sn", "-n", str(subnet)], timeout=35.0)
-            else:
-                self._ping_sweep(interface, hosts, workers=64)
+
+            scan_rows, scan_error = self._run_arp_scan(interface, subnet)
+            for row in scan_rows:
+                self._remember_device(row)
+
+            if scan_rows:
+                time.sleep(0.4)
+                continue
+
+            if scan_error and not arp_scan_error_shown:
+                self.console.print(f"[yellow]arp-scan fallback activated:[/yellow] {scan_error}")
+                arp_scan_error_shown = True
+
+            self._ping_sweep(interface, hosts, workers=64)
 
             entries = self._read_ip_neighbors(interface)
             for entry in entries:
                 self._remember_device(entry)
             time.sleep(0.5)
+
+    def _run_arp_scan(self, interface: str, subnet: ipaddress.IPv4Network) -> Tuple[List[ArpDevice], str]:
+        commands = [
+            ["arp-scan", "-I", interface, "--numeric", str(subnet)],
+            ["arp-scan", "-I", interface, "--numeric", "--localnet"],
+        ]
+        errors: List[str] = []
+
+        for cmd in commands:
+            result = run_command(cmd, timeout=50.0)
+            if result.returncode == 0:
+                rows = self._parse_arp_scan_output(result.stdout)
+                if rows:
+                    return rows, ""
+            error = (result.stderr or "").strip()
+            if error:
+                errors.append(error)
+
+        return [], errors[0] if errors else ""
+
+    def _parse_arp_scan_output(self, output: str) -> List[ArpDevice]:
+        rows: List[ArpDevice] = []
+        seen_ips: set[str] = set()
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            match = ARP_SCAN_RE.match(line)
+            if not match:
+                continue
+
+            ip_addr = match.group("ip")
+            mac = normalize_mac(match.group("mac"))
+            if ip_addr in seen_ips:
+                continue
+            seen_ips.add(ip_addr)
+
+            vendor = (match.group("vendor") or "").strip()
+            if not vendor:
+                vendor = self._lookup_vendor(mac)
+            rows.append(
+                ArpDevice(
+                    ip=ip_addr,
+                    mac=mac,
+                    vendor=vendor or "Unknown",
+                    state="REACHABLE",
+                    source="arp-scan",
+                )
+            )
+        return rows
 
     def _hosts_for_sweep(self, interface: str, subnet: ipaddress.IPv4Network) -> List[str]:
         all_hosts = list(subnet.hosts())

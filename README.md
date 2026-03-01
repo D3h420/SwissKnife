@@ -97,6 +97,7 @@ System tools used by launcher/modules:
 - `iw`
 - `ip` (from `iproute2`)
 - `ethtool`
+- `arp-scan`
 - `aireplay-ng` (Aircrack-ng suite)
 - `airodump-ng` (Aircrack-ng suite)
 - `mdk4`
@@ -123,6 +124,12 @@ Optional for Handshaker:
 
 Optional for IP.CAM finder:
 - `rich`
+
+ARP module dependency install (Debian/Ubuntu):
+```bash
+sudo apt update
+sudo apt install -y arp-scan
+```
 
 ## Recon vendor lookup (optional)
 
