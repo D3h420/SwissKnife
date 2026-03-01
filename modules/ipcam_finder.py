@@ -245,6 +245,44 @@ def normalize_mac(mac: str) -> str:
     return mac.strip().upper()
 
 
+def nmcli_unescape(value: str) -> str:
+    buf: List[str] = []
+    escape = False
+    for char in value:
+        if escape:
+            buf.append(char)
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        buf.append(char)
+    return "".join(buf)
+
+
+def split_nmcli_escaped(line: str, expected: int) -> List[str]:
+    fields: List[str] = []
+    current: List[str] = []
+    escape = False
+    for char in line:
+        if escape:
+            current.append(char)
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        if char == ":" and len(fields) < expected - 1:
+            fields.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    fields.append("".join(current))
+    if len(fields) < expected:
+        fields.extend([""] * (expected - len(fields)))
+    return fields[:expected]
+
+
 def oui_prefix(mac: str) -> str:
     parts = normalize_mac(mac).split(":")
     if len(parts) < 3:
@@ -624,6 +662,84 @@ class IpCamFinder(Module):
 
     def _scan_wifi_networks(self, interface: str) -> List[WiFiNetwork]:
         self.console.print(f"[cyan]Scanning nearby Wi-Fi on {interface}...[/cyan]")
+        nmcli_rows = self._scan_wifi_networks_nmcli(interface)
+        if nmcli_rows:
+            return nmcli_rows
+        return self._scan_wifi_networks_iw(interface)
+
+    def _scan_wifi_networks_nmcli(self, interface: str) -> List[WiFiNetwork]:
+        run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=10.0)
+        time.sleep(1.0)
+        result = run_command(
+            [
+                "nmcli",
+                "-t",
+                "--escape",
+                "yes",
+                "-f",
+                "SSID,BSSID,SIGNAL,CHAN,SECURITY",
+                "device",
+                "wifi",
+                "list",
+                "ifname",
+                interface,
+            ],
+            timeout=12.0,
+        )
+        if result.returncode != 0:
+            return []
+
+        rows: Dict[str, WiFiNetwork] = {}
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            ssid_raw, bssid_raw, signal_raw, channel_raw, security_raw = split_nmcli_escaped(line, 5)
+            bssid = normalize_mac(nmcli_unescape(bssid_raw))
+            if not MAC_RE.fullmatch(bssid):
+                continue
+
+            ssid_value = nmcli_unescape(ssid_raw)
+            security_value = nmcli_unescape(security_raw).strip() or "OPEN"
+            if security_value in {"--", "(none)"}:
+                security_value = "OPEN"
+            elif "WPA" in security_value.upper():
+                security_value = "WPA/WPA2"
+
+            signal: Optional[int] = None
+            channel: Optional[int] = None
+            try:
+                if signal_raw:
+                    signal = int(float(nmcli_unescape(signal_raw)))
+            except ValueError:
+                signal = None
+            try:
+                if channel_raw:
+                    channel = int(float(nmcli_unescape(channel_raw)))
+            except ValueError:
+                channel = None
+
+            entry = WiFiNetwork(
+                ssid=ssid_value if ssid_value else "<hidden>",
+                bssid=bssid,
+                signal=signal,
+                channel=channel,
+                security=security_value,
+            )
+            existing = rows.get(bssid)
+            if not existing:
+                rows[bssid] = entry
+                continue
+            old_signal = existing.signal if existing.signal is not None else -999
+            new_signal = entry.signal if entry.signal is not None else -999
+            if new_signal > old_signal:
+                rows[bssid] = entry
+
+        ordered = list(rows.values())
+        ordered.sort(key=lambda item: item.signal if item.signal is not None else -999, reverse=True)
+        return ordered
+
+    def _scan_wifi_networks_iw(self, interface: str) -> List[WiFiNetwork]:
         result = run_command(["iw", "dev", interface, "scan"], timeout=25.0)
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
@@ -671,7 +787,7 @@ class IpCamFinder(Module):
                 continue
 
             if line.startswith("SSID:"):
-                ssid = line.split("SSID:", 1)[1].strip()
+                ssid = line.split("SSID:", 1)[1]
                 current["ssid"] = ssid if ssid else "<hidden>"
                 continue
 
@@ -791,6 +907,7 @@ class IpCamFinder(Module):
             cmd_no_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
             if password:
                 cmd_no_bssid += ["password", password]
+            cmd_no_bssid += ["hidden", "yes"]
             attempts.append(cmd_no_bssid)
 
             if bssid_visible:
@@ -798,6 +915,7 @@ class IpCamFinder(Module):
                 if password:
                     cmd_with_bssid += ["password", password]
                 cmd_with_bssid += ["bssid", network.bssid]
+                cmd_with_bssid += ["hidden", "yes"]
                 attempts.append(cmd_with_bssid)
 
         if bssid_visible:
@@ -838,7 +956,11 @@ class IpCamFinder(Module):
             for item in errors:
                 if item not in deduped:
                     deduped.append(item)
-            raise RuntimeError(deduped[0])
+            hint = self._build_visibility_hint(interface, ssid_target, network.bssid)
+            message = deduped[0]
+            if hint:
+                message = f"{message} ({hint})"
+            raise RuntimeError(message)
         raise RuntimeError(last_error or "Failed to connect to selected Wi-Fi network.")
 
     def _connect_via_temp_profile(self, interface: str, ssid: str, password: str, bssid: str) -> str:
@@ -851,6 +973,7 @@ class IpCamFinder(Module):
             return (add_result.stderr or add_result.stdout or "Failed to create temporary NetworkManager profile.").strip()
 
         run_command(["nmcli", "connection", "modify", profile, "connection.autoconnect", "no"], timeout=8.0)
+        run_command(["nmcli", "connection", "modify", profile, "802-11-wireless.hidden", "yes"], timeout=8.0)
         if bssid:
             run_command(["nmcli", "connection", "modify", profile, "802-11-wireless.bssid", bssid], timeout=8.0)
 
@@ -877,6 +1000,45 @@ class IpCamFinder(Module):
             return False
         visible = {normalize_mac(line.strip()) for line in result.stdout.splitlines() if line.strip()}
         return target in visible
+
+    def _build_visibility_hint(self, interface: str, ssid: str, bssid: str) -> str:
+        result = run_command(
+            ["nmcli", "-t", "--escape", "yes", "-f", "SSID,BSSID", "device", "wifi", "list", "ifname", interface],
+            timeout=8.0,
+        )
+        if result.returncode != 0:
+            return ""
+
+        wanted_ssid = ssid or ""
+        wanted_bssid = normalize_mac(bssid)
+        seen_ssids: List[str] = []
+        ssid_match = False
+        bssid_match = False
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            ssid_raw, bssid_raw = split_nmcli_escaped(line, 2)
+            current_ssid = nmcli_unescape(ssid_raw)
+            current_bssid = normalize_mac(nmcli_unescape(bssid_raw))
+            if current_ssid and current_ssid not in seen_ssids:
+                seen_ssids.append(current_ssid)
+            if wanted_ssid and current_ssid == wanted_ssid:
+                ssid_match = True
+            if wanted_bssid and current_bssid == wanted_bssid:
+                bssid_match = True
+
+        if wanted_ssid and wanted_bssid:
+            if ssid_match and bssid_match:
+                return "SSID/BSSID visible in nmcli list, verify password/security mode"
+            if ssid_match and not bssid_match:
+                return "SSID visible, chosen BSSID not currently visible"
+            if not ssid_match and bssid_match:
+                return "BSSID visible, SSID text mismatch (possible hidden/escaped name)"
+            if seen_ssids:
+                return f"nmcli cannot see chosen SSID now; visible: {', '.join(seen_ssids[:4])}"
+            return "nmcli sees no nearby SSIDs on selected interface"
+        return ""
 
     def _ensure_client_mode(self, interface: str) -> None:
         mode = self._get_interface_mode(interface).lower()
