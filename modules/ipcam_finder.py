@@ -317,6 +317,7 @@ class IpCamFinder(Module):
         self._camera_hits: Dict[str, CameraHit] = {}
         self._target_network: Optional[WiFiNetwork] = None
         self._selected_interface: str = ""
+        self._connected_interface: str = ""
         self._interface_profiles: Dict[str, InterfaceProfile] = {}
         self._connected_subnet: str = ""
         self._error: Optional[str] = None
@@ -335,6 +336,7 @@ class IpCamFinder(Module):
 
             iface = self._select_interface()
             self._selected_interface = iface
+            self._ensure_client_mode(iface)
 
             networks = self._scan_wifi_networks(iface)
             if not networks:
@@ -347,11 +349,22 @@ class IpCamFinder(Module):
             password = self._resolve_password_for_network(target)
             self._connect_to_network(iface, target, password)
 
-            subnet = self._wait_for_ipv4(iface, timeout=18.0) or self._get_interface_subnet(iface)
+            connected_interface, subnet = self._resolve_connected_interface_and_subnet(
+                iface,
+                target,
+                timeout=28.0,
+            )
             if not subnet:
                 raise RuntimeError(
                     "Connected, but no IPv4 subnet detected. Check DHCP or static IP settings."
                 )
+            if connected_interface != iface:
+                self.console.print(
+                    f"[yellow]Connection moved to {connected_interface}; continuing on that interface.[/yellow]"
+                )
+            iface = connected_interface
+            self._selected_interface = iface
+            self._connected_interface = iface
             self._connected_subnet = str(subnet)
 
             wifi_hits = self._collect_camera_candidates_from_wifi(networks)
@@ -511,27 +524,55 @@ class IpCamFinder(Module):
             )
         return profiles
 
+    @staticmethod
+    def _is_client_capable_mode(mode: str) -> bool:
+        return (mode or "").strip().lower() in {"managed", "unknown"}
+
+    def _interface_sort_key(self, iface: str) -> Tuple[int, str]:
+        profile = self._interface_profiles.get(iface)
+        mode = (profile.mode if profile else "").strip().lower()
+        if mode == "managed":
+            rank = 0
+        elif mode == "unknown":
+            rank = 1
+        elif mode in {"ap", "master"}:
+            rank = 3
+        elif mode == "monitor":
+            rank = 4
+        else:
+            rank = 2
+        return rank, iface
+
     def _select_interface(self) -> str:
         interfaces = self._list_wifi_interfaces()
         if not interfaces:
             raise RuntimeError("No Wi-Fi interfaces found.")
         self._interface_profiles = self._build_interface_profiles(interfaces)
 
+        ordered = sorted(interfaces, key=self._interface_sort_key)
+
         if self.interface and self.interface != "auto":
-            if self.interface not in interfaces:
+            if self.interface not in ordered:
                 raise RuntimeError(f"Interface '{self.interface}' is not available.")
+            profile = self._interface_profiles.get(self.interface)
+            mode = profile.mode if profile else self._get_interface_mode(self.interface)
+            if not self._is_client_capable_mode(mode):
+                raise RuntimeError(
+                    f"Interface '{self.interface}' is in {mode.upper()} mode. "
+                    "Select a managed client interface for IP.CAM finder."
+                )
             return self.interface
 
-        if len(interfaces) == 1:
-            profile = self._interface_profiles.get(interfaces[0])
+        if len(ordered) == 1:
+            profile = self._interface_profiles.get(ordered[0])
             if profile:
                 self.console.print(
                     f"[green]Selected interface:[/green] {profile.name} "
                     f"([dim]{profile.role} | {profile.chipset}[/dim])"
                 )
             else:
-                self.console.print(f"[green]Selected interface:[/green] {interfaces[0]}")
-            return interfaces[0]
+                self.console.print(f"[green]Selected interface:[/green] {ordered[0]}")
+            return ordered[0]
 
         table = Table(title="Available Wi-Fi Interfaces", box=box.SIMPLE_HEAVY)
         table.add_column("#", justify="right", style="cyan", no_wrap=True)
@@ -540,7 +581,7 @@ class IpCamFinder(Module):
         table.add_column("Driver/Bus")
         table.add_column("Mode")
         table.add_column("State")
-        for idx, iface in enumerate(interfaces, start=1):
+        for idx, iface in enumerate(ordered, start=1):
             profile = self._interface_profiles.get(iface)
             if not profile:
                 table.add_row(str(idx), iface, "-", "-", "-", "-")
@@ -562,8 +603,16 @@ class IpCamFinder(Module):
             except ValueError:
                 self.console.print("[yellow]Enter a numeric interface index.[/yellow]")
                 continue
-            if 1 <= picked <= len(interfaces):
-                return interfaces[picked - 1]
+            if 1 <= picked <= len(ordered):
+                chosen = ordered[picked - 1]
+                profile = self._interface_profiles.get(chosen)
+                mode = profile.mode if profile else self._get_interface_mode(chosen)
+                if not self._is_client_capable_mode(mode):
+                    self.console.print(
+                        f"[red]Interface {chosen} is in {mode.upper()} mode and cannot join Wi-Fi as client.[/red]"
+                    )
+                    continue
+                return chosen
             self.console.print("[yellow]Invalid index.[/yellow]")
 
         raise KeyboardInterrupt
@@ -748,12 +797,6 @@ class IpCamFinder(Module):
             cmd_bssid += ["password", password]
         attempts.append(cmd_bssid)
 
-        if ssid_target:
-            generic = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target]
-            if password:
-                generic += ["password", password]
-            attempts.append(generic)
-
         last_error = ""
         for cmd in attempts:
             run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=8.0)
@@ -765,6 +808,17 @@ class IpCamFinder(Module):
             last_error = (result.stderr or result.stdout or "").strip()
 
         raise RuntimeError(last_error or "Failed to connect to selected Wi-Fi network.")
+
+    def _ensure_client_mode(self, interface: str) -> None:
+        mode = self._get_interface_mode(interface).lower()
+        if self._is_client_capable_mode(mode):
+            return
+        if mode in {"ap", "master", "monitor"}:
+            raise RuntimeError(
+                f"Interface '{interface}' is in {mode.upper()} mode. "
+                "Select a managed client interface for IP.CAM finder."
+            )
+        raise RuntimeError(f"Interface '{interface}' is not in client mode.")
 
     def _get_interface_subnet(self, interface: str) -> Optional[ipaddress.IPv4Network]:
         result = run_command(["ip", "-o", "-f", "inet", "addr", "show", "dev", interface], timeout=3.0)
@@ -787,6 +841,26 @@ class IpCamFinder(Module):
                 return iface.network
         return None
 
+    def _get_interface_ipv4(self, interface: str) -> Optional[ipaddress.IPv4Address]:
+        result = run_command(["ip", "-o", "-f", "inet", "addr", "show", "dev", interface], timeout=3.0)
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if "inet" not in parts:
+                continue
+            idx = parts.index("inet")
+            if idx + 1 >= len(parts):
+                continue
+            cidr = parts[idx + 1]
+            try:
+                iface = ipaddress.ip_interface(cidr)
+            except ValueError:
+                continue
+            if isinstance(iface.ip, ipaddress.IPv4Address):
+                return iface.ip
+        return None
+
     def _wait_for_ipv4(self, interface: str, timeout: float = 15.0) -> Optional[ipaddress.IPv4Network]:
         end = time.time() + max(1.0, timeout)
         while time.time() < end and self.running:
@@ -795,6 +869,101 @@ class IpCamFinder(Module):
                 return subnet
             time.sleep(1.0)
         return None
+
+    def _read_iw_link(self, interface: str) -> Tuple[str, str]:
+        result = run_command(["iw", "dev", interface, "link"], timeout=3.0)
+        if result.returncode != 0:
+            return "", ""
+        if "Not connected." in result.stdout:
+            return "", ""
+
+        bssid = ""
+        ssid = ""
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("Connected to "):
+                bssid = line.split("Connected to ", 1)[1].split(" ", 1)[0].strip().upper()
+            elif line.startswith("SSID:"):
+                ssid = line.split("SSID:", 1)[1].strip()
+        return bssid, ssid
+
+    def _default_route_interface(self) -> str:
+        result = run_command(["ip", "route", "show", "default"], timeout=3.0)
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if "dev" in parts:
+                idx = parts.index("dev")
+                if idx + 1 < len(parts):
+                    return parts[idx + 1].strip()
+        return ""
+
+    def _find_interface_for_target(self, target: WiFiNetwork, preferred: str) -> str:
+        interfaces = [preferred] + [iface for iface in self._list_wifi_interfaces() if iface != preferred]
+        target_bssid = normalize_mac(target.bssid)
+        target_ssid = target.ssid or ""
+
+        fallback_iface = ""
+        for iface in interfaces:
+            mode = (
+                self._interface_profiles.get(iface).mode
+                if iface in self._interface_profiles
+                else self._get_interface_mode(iface)
+            )
+            if not self._is_client_capable_mode(mode):
+                continue
+
+            bssid, ssid = self._read_iw_link(iface)
+            if not bssid and not ssid:
+                continue
+            if not fallback_iface:
+                fallback_iface = iface
+            if bssid and normalize_mac(bssid) == target_bssid:
+                return iface
+            if target_ssid and ssid == target_ssid:
+                return iface
+        return fallback_iface
+
+    def _resolve_connected_interface_and_subnet(
+        self,
+        preferred_interface: str,
+        target: WiFiNetwork,
+        timeout: float = 25.0,
+    ) -> Tuple[str, Optional[ipaddress.IPv4Network]]:
+        end = time.time() + max(3.0, timeout)
+        last_interface = preferred_interface
+
+        while time.time() < end and self.running:
+            linked_iface = self._find_interface_for_target(target, preferred_interface)
+            if linked_iface:
+                last_interface = linked_iface
+                subnet = self._get_interface_subnet(linked_iface)
+                if subnet:
+                    return linked_iface, subnet
+
+            default_iface = self._default_route_interface()
+            if default_iface and default_iface in self._list_wifi_interfaces():
+                mode = (
+                    self._interface_profiles.get(default_iface).mode
+                    if default_iface in self._interface_profiles
+                    else self._get_interface_mode(default_iface)
+                )
+                if not self._is_client_capable_mode(mode):
+                    default_iface = ""
+
+            if default_iface:
+                last_interface = default_iface
+                subnet = self._get_interface_subnet(default_iface)
+                if subnet:
+                    return default_iface, subnet
+
+            subnet = self._get_interface_subnet(preferred_interface)
+            if subnet:
+                return preferred_interface, subnet
+            time.sleep(1.0)
+
+        return last_interface, None
 
     def _prepare_network_manager(self, interface: str) -> None:
         run_command(["nmcli", "radio", "wifi", "on"], timeout=8.0)
@@ -820,9 +989,7 @@ class IpCamFinder(Module):
         return hits
 
     def _scan_lan_for_cameras(self, interface: str, subnet: ipaddress.IPv4Network) -> None:
-        hosts = [str(host) for host in subnet.hosts()]
-        if len(hosts) > self.max_hosts:
-            hosts = hosts[: self.max_hosts]
+        hosts = self._hosts_for_sweep(interface, subnet)
 
         if tool_exists("nmap"):
             for _round in range(1, self.rounds + 1):
@@ -841,6 +1008,26 @@ class IpCamFinder(Module):
             self._ping_sweep(interface, hosts, workers=threads)
             self._ingest_neighbors(interface)
             time.sleep(0.5)
+
+    def _hosts_for_sweep(self, interface: str, subnet: ipaddress.IPv4Network) -> List[str]:
+        all_hosts = list(subnet.hosts())
+        if len(all_hosts) <= self.max_hosts:
+            return [str(host) for host in all_hosts]
+
+        local_ip = self._get_interface_ipv4(interface)
+        if local_ip and local_ip in subnet:
+            total = len(all_hosts)
+            local_index = max(0, min(total - 1, int(local_ip) - int(subnet.network_address) - 1))
+            half = self.max_hosts // 2
+            start = max(0, local_index - half)
+            end = min(total, start + self.max_hosts)
+            start = max(0, end - self.max_hosts)
+            selection = all_hosts[start:end]
+            return [str(host) for host in selection]
+
+        step = max(1, len(all_hosts) // self.max_hosts)
+        sampled = all_hosts[::step][: self.max_hosts]
+        return [str(host) for host in sampled]
 
     def _ping_sweep(self, interface: str, hosts: List[str], workers: int = 32) -> None:
         queue_lock = threading.Lock()
@@ -948,6 +1135,7 @@ class IpCamFinder(Module):
             f"Status: {self.status}",
             f"Elapsed: {elapsed_sec}s",
             f"Interface: {self._selected_interface or '-'}",
+            f"Connected IF: {self._connected_interface or self._selected_interface or '-'}",
             f"Target SSID: {(self._target_network.ssid if self._target_network else '-') or '<hidden>'}",
             f"Subnet: {self._connected_subnet or '-'}",
             f"Camera candidates: {len(hits)}",
@@ -967,6 +1155,7 @@ class IpCamFinder(Module):
             "timestamp": int(time.time()),
             "status": self.status,
             "interface": self._selected_interface,
+            "connected_interface": self._connected_interface or self._selected_interface,
             "target_ssid": self._target_network.ssid if self._target_network else "",
             "subnet": self._connected_subnet,
             "duration": int(elapsed_sec),
