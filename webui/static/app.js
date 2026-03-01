@@ -264,11 +264,10 @@ const FALLBACK_MENU = {
         },
         {
           id: "ip_cam",
-          label: "IP.CAM",
+          label: "IP.CAM finder",
           type: "module",
-          description: "Under construction module.",
-          disabled: true,
-          under_construction: true,
+          module_id: "ip_cam",
+          description: "IP camera discovery workflow (Wi-Fi + LAN OUI scan).",
         },
       ],
     },
@@ -2845,6 +2844,64 @@ function renderHandshakerResult(result, task) {
   dom.resultsView.appendChild(renderLogFeed(task.task_id));
 }
 
+function buildIpCamCandidatesTable(cameras) {
+  const table = document.createElement("table");
+  table.className = "result-table";
+
+  const head = document.createElement("thead");
+  head.innerHTML = "<tr><th>Source</th><th>IP</th><th>MAC</th><th>Vendor</th><th>RSSI</th><th>SSID</th></tr>";
+  table.appendChild(head);
+
+  const body = document.createElement("tbody");
+  const rows = Array.isArray(cameras) ? cameras : [];
+  if (!rows.length) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="6" class="cell-muted">No camera candidates detected.</td>';
+    body.appendChild(empty);
+    table.appendChild(body);
+    return table;
+  }
+
+  rows.slice(0, 300).forEach((entry) => {
+    const tr = document.createElement("tr");
+    const values = [
+      entry?.source || "-",
+      entry?.ip || "-",
+      entry?.mac || "-",
+      entry?.vendor || "-",
+      entry?.rssi !== null && entry?.rssi !== undefined ? `${entry.rssi} dBm` : "-",
+      entry?.ssid || "-",
+    ];
+    values.forEach((value) => {
+      const cell = document.createElement("td");
+      cell.textContent = String(value);
+      tr.appendChild(cell);
+    });
+    body.appendChild(tr);
+  });
+
+  table.appendChild(body);
+  return table;
+}
+
+function renderIpCamResult(result, task) {
+  dom.resultsView.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "result-summary";
+  summary.appendChild(createSummaryPill("Mode", "IP.CAM finder"));
+  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
+  summary.appendChild(createSummaryPill("Network", result.target_ssid || "<hidden>"));
+  summary.appendChild(createSummaryPill("Subnet", result.subnet || "-"));
+  summary.appendChild(createSummaryPill("Cameras", result.camera_count ?? 0));
+  summary.appendChild(createSummaryPill("Duration", `${result.duration ?? 0}s`));
+  summary.appendChild(createSummaryPill("State", result.status || (task.running ? "RUNNING" : "STOPPED")));
+  summary.appendChild(createSummaryPill("Task", task.task_id));
+  dom.resultsView.appendChild(summary);
+  dom.resultsView.appendChild(buildIpCamCandidatesTable(result.cameras));
+  dom.resultsView.appendChild(renderLogFeed(task.task_id));
+}
+
 async function sendTaskInput(taskId, text, successLabel = "Command sent") {
   try {
     await postTaskInput(taskId, text);
@@ -4256,6 +4313,11 @@ function renderResultView() {
 
   if (task.module_id === "handshaker" && !task.running && result?.kind === "handshaker_capture") {
     renderHandshakerResult(result, task);
+    return;
+  }
+
+  if (task.module_id === "ip_cam" && !task.running && result?.kind === "ip_cam_finder") {
+    renderIpCamResult(result, task);
     return;
   }
 

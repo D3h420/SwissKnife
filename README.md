@@ -14,6 +14,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Evil Twin - rogue AP + portal workflow
 - Bluetooth - BT scan + BLE Poet workflow
 - Handshaker - PCAP capture + 4-way EAPOL validation
+- IP.CAM finder - camera discovery by Wi-Fi OUI + LAN neighbor scan
 - ~~Karma - rogue AP auto-responder~~ (🚧 under construction 🚧)
 
 ## Quick start ⚡
@@ -118,6 +119,9 @@ Optional tools:
 
 Optional for Handshaker:
 - `scapy`
+
+Optional for IP.CAM finder:
+- `rich`
 
 ## Recon vendor lookup (optional)
 

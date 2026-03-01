@@ -1,0 +1,892 @@
+#!/usr/bin/env python3
+
+from __future__ import annotations
+
+import argparse
+import ipaddress
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+try:
+    from rich import box
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.prompt import Prompt
+    from rich.table import Table
+    RICH_AVAILABLE = True
+except ModuleNotFoundError:
+    # Lightweight fallback so the module remains usable even without rich.
+    RICH_AVAILABLE = False
+
+    class _FallbackStatus:
+        def __init__(self, message: str) -> None:
+            self.message = message
+
+        def __enter__(self) -> None:
+            if self.message:
+                print(self.message)
+            return None
+
+        def __exit__(self, _exc_type, _exc, _tb) -> bool:
+            return False
+
+    class Console:  # type: ignore[override]
+        def print(self, *objects: object, **_kwargs: object) -> None:
+            print(*objects)
+
+        def status(self, message: str):
+            return _FallbackStatus(message)
+
+    class _FallbackBox:
+        SIMPLE_HEAVY = None
+
+    box = _FallbackBox()  # type: ignore[assignment]
+
+    class Panel:  # type: ignore[override]
+        def __init__(self, renderable: object, title: str = "", subtitle: str = "", border_style: str = "") -> None:
+            self.renderable = renderable
+            self.title = title
+            self.subtitle = subtitle
+            self.border_style = border_style
+
+        @classmethod
+        def fit(cls, renderable: object, **kwargs: object):
+            return cls(renderable, **kwargs)
+
+        def __str__(self) -> str:
+            heading = self.title or self.subtitle
+            if heading:
+                return f"{heading}\n{self.renderable}"
+            return str(self.renderable)
+
+    class Table:  # type: ignore[override]
+        def __init__(self, title: str = "", box: object = None) -> None:
+            self.title = title
+            self.columns: List[str] = []
+            self.rows: List[List[str]] = []
+
+        def add_column(self, name: str, **_kwargs: object) -> None:
+            self.columns.append(name)
+
+        def add_row(self, *values: object) -> None:
+            self.rows.append([str(value) for value in values])
+
+        def __str__(self) -> str:
+            parts: List[str] = []
+            if self.title:
+                parts.append(self.title)
+            if self.columns:
+                parts.append(" | ".join(self.columns))
+            for row in self.rows:
+                parts.append(" | ".join(row))
+            return "\n".join(parts)
+
+    class Prompt:  # type: ignore[override]
+        @staticmethod
+        def ask(prompt: str, default: str = "", password: bool = False, console: Optional[Console] = None) -> str:
+            del console
+            if password:
+                try:
+                    import getpass
+
+                    value = getpass.getpass(f"{prompt}: ")
+                except Exception:
+                    value = ""
+                if value:
+                    return value
+                return default
+
+            sys.stdout.write(f"{prompt}")
+            if default:
+                sys.stdout.write(f" [{default}]")
+            sys.stdout.write(": ")
+            sys.stdout.flush()
+            raw = sys.stdin.readline()
+            value = (raw or "").strip()
+            return value or default
+
+try:
+    from core.module import Module  # type: ignore
+except Exception:
+    class Module:
+        """Minimal fallback base for current SwissKnife branch.
+
+        Current repository version runs module files directly and does not ship
+        `core.module`. This fallback keeps the requested Module-style API.
+        """
+
+        def __init__(self, name: str = "Module") -> None:
+            self.name = name
+            self.console = Console()
+            self.status = "idle"
+            self.running = False
+
+        def stop(self) -> None:
+            self.running = False
+            self.status = "stopped"
+
+
+CAMERA_OUIS: Dict[str, str] = {
+    # Flock Safety
+    "58:8E:81": "Flock Safety", "CC:CC:CC": "Flock Safety", "EC:1B:BD": "Flock Safety",
+    "90:35:EA": "Flock Safety", "04:0D:84": "Flock Safety", "F0:82:C0": "Flock Safety",
+    "1C:34:F1": "Flock Safety", "38:5B:44": "Flock Safety", "94:34:69": "Flock Safety",
+    "B4:E3:F9": "Flock Safety", "70:C9:4E": "Flock Safety", "3C:91:80": "Flock Safety",
+    "D8:F3:BC": "Flock Safety", "80:30:49": "Flock Safety", "14:5A:FC": "Flock Safety",
+    "74:4C:A1": "Flock Safety", "08:3A:88": "Flock Safety", "9C:2F:9D": "Flock Safety",
+    "94:08:53": "Flock Safety", "E4:AA:EA": "Flock Safety",
+    # Ring
+    "50:14:79": "Ring", "08:62:66": "Ring", "B4:79:A7": "Ring", "DC:4F:22": "Ring",
+    "FC:E9:98": "Ring", "74:42:7F": "Ring", "48:02:2A": "Ring", "AC:9F:C3": "Ring",
+    "64:9A:63": "Ring", "B0:72:BF": "Ring", "34:3E:A4": "Ring", "54:E0:19": "Ring",
+    "5C:47:5E": "Ring", "90:48:6C": "Ring", "CC:3B:FB": "Ring", "C4:DB:AD": "Ring",
+    "24:2B:D6": "Ring", "00:FC:8B": "Ring", "B0:09:DA": "Ring", "3C:24:F0": "Ring",
+    "D4:03:DC": "Ring", "A0:3E:6B": "Ring", "90:A6:2F": "Ring",
+    # Blink
+    "3C:A0:70": "Blink", "70:AD:43": "Blink", "74:AB:93": "Blink", "50:DC:E7": "Blink",
+    "68:37:E9": "Blink", "A0:02:DC": "Blink", "38:F7:3D": "Blink", "18:7F:88": "Blink",
+    "34:D2:70": "Blink", "74:C6:3B": "Blink", "18:74:2E": "Blink", "FC:65:DE": "Blink",
+    "B4:74:43": "Blink", "9C:76:13": "Blink",
+    # Amazon generic
+    "44:73:D6": "Amazon", "AC:63:BE": "Amazon", "E0:B9:4D": "Amazon", "FC:A1:83": "Amazon",
+    # Nest / Google
+    "00:24:E4": "Nest", "18:B4:30": "Nest", "30:8C:FB": "Nest", "64:16:66": "Nest",
+    "F4:F5:D8": "Nest", "F4:F5:E8": "Nest",
+    # Wyze
+    "78:8B:77": "Wyze", "2C:AA:8E": "Wyze", "D0:3F:27": "Wyze", "7C:78:B2": "Wyze",
+    # Arlo
+    "00:1F:7A": "Arlo", "00:0F:B5": "Arlo", "28:B3:71": "Arlo", "9C:34:26": "Arlo",
+    "CC:40:D0": "Arlo", "84:38:35": "Arlo",
+    # Eufy
+    "8C:85:80": "Eufy", "98:8E:79": "Eufy",
+    # Hikvision
+    "00:18:DD": "Hikvision", "C0:56:E3": "Hikvision", "4C:BD:8F": "Hikvision", "BC:AD:28": "Hikvision",
+    "44:19:B6": "Hikvision", "C4:2F:90": "Hikvision", "A4:CF:12": "Hikvision",
+    # Dahua
+    "3C:EF:8C": "Dahua", "A0:BD:1D": "Dahua", "E0:50:8B": "Dahua",
+    # Reolink
+    "8C:85:90": "Reolink", "EC:71:DB": "Reolink", "B8:A4:4F": "Reolink",
+    # Other camera vendors
+    "9C:8E:CD": "Amcrest", "7C:64:56": "SimpliSafe", "A0:63:91": "TP-Link", "B0:4E:26": "TP-Link",
+    "CC:32:E5": "TP-Link", "F4:F2:6D": "TP-Link", "60:32:B1": "TP-Link", "6C:5A:B0": "TP-Link",
+    "54:AF:97": "TP-Link", "5C:62:8B": "TP-Link", "74:83:C2": "UniFi", "04:18:D6": "UniFi",
+    "18:E8:29": "UniFi", "24:A4:3C": "UniFi", "44:D9:E7": "UniFi", "68:72:51": "UniFi",
+    "68:D7:9A": "UniFi", "78:45:58": "UniFi", "80:2A:A8": "UniFi", "9C:05:D6": "UniFi",
+    "AC:8B:A9": "UniFi", "B4:FB:E4": "UniFi", "DC:9F:DB": "UniFi", "E0:63:DA": "UniFi",
+    "F4:92:BF": "UniFi", "FC:EC:DA": "UniFi", "24:5A:4C": "UniFi", "78:8A:20": "UniFi",
+    "00:40:8C": "Axis", "AC:CC:8E": "Axis", "D0:03:9B": "Samsung", "00:40:7F": "FLIR",
+    "00:02:D1": "Vivotek", "7C:2E:BD": "Swann", "00:0E:8F": "Lorex", "C4:AD:34": "Logitech",
+    "C0:56:27": "Foscam",
+}
+
+CAMERA_SSID_PATTERNS: List[Tuple[str, str]] = [
+    ("Ring-", "Ring"), ("Ring_", "Ring"), ("Ring Setup", "Ring"),
+    ("Blink-", "Blink"), ("BlinkCam-", "Blink"), ("Blink_Up-", "Blink"),
+    ("Blink Setup", "Blink"), ("Arlo-", "Arlo"), ("Nest-", "Nest"),
+    ("Wyze-", "Wyze"), ("Camera-", "Camera"), ("CAM-", "Camera"),
+    ("Doorbell-", "Doorbell"), ("IPC-", "IP Camera"), ("WebCam-", "Camera"),
+    ("NVR-", "NVR"), ("DVR-", "DVR"), ("FlockCam-", "Flock Safety"),
+    ("flock", "Flock Safety"), ("FS Ext Battery", "Flock Safety"), ("FS_", "Flock Safety"),
+    ("Penguin", "Flock Safety"), ("Pigvision", "Flock Safety"), ("Amcrest-", "Amcrest"),
+    ("Reolink-", "Reolink"), ("Hikvision-", "Hikvision"), ("Dahua-", "Dahua"),
+    ("TP-Link-", "TP-Link"), ("Foscam-", "Foscam"), ("Swann-", "Swann"),
+    ("Lorex-", "Lorex"), ("QSee-", "QSee"), ("ANNKE-", "ANNKE"),
+    ("Uniview-", "Uniview"), ("Bosch-", "Bosch"), ("Pelco-", "Pelco"),
+    ("Axis-", "Axis"), ("Sony-", "Sony"), ("Panasonic-", "Panasonic"),
+    ("Samsung-", "Samsung"),
+]
+
+MAC_RE = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
+IP_NEIGH_RE = re.compile(r"^(?P<ip>\d+\.\d+\.\d+\.\d+)\s+dev\s+\S+\s+lladdr\s+(?P<mac>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})\s+(?P<state>\S+)")
+
+
+@dataclass
+class WiFiNetwork:
+    ssid: str
+    bssid: str
+    signal: Optional[int]
+    channel: Optional[int]
+    security: str
+
+
+@dataclass
+class CameraHit:
+    source: str
+    ip: str
+    mac: str
+    vendor: str
+    rssi: Optional[int] = None
+    ssid: str = ""
+
+
+def normalize_mac(mac: str) -> str:
+    return mac.strip().upper()
+
+
+def oui_prefix(mac: str) -> str:
+    parts = normalize_mac(mac).split(":")
+    if len(parts) < 3:
+        return ""
+    return ":".join(parts[:3])
+
+
+def camera_vendor_from_mac(mac: str) -> Optional[str]:
+    return CAMERA_OUIS.get(oui_prefix(mac))
+
+
+def camera_vendor_from_ssid(ssid: str) -> Optional[str]:
+    if not ssid:
+        return None
+    probe = ssid.strip()
+    lowered = probe.lower()
+    for pattern, label in CAMERA_SSID_PATTERNS:
+        if pattern.lower() in lowered:
+            return label
+    if "cam" in lowered:
+        return "Camera"
+    return None
+
+
+def tool_exists(tool: str) -> bool:
+    return subprocess.run(
+        ["which", tool],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).returncode == 0
+
+
+def run_command(args: List[str], timeout: Optional[float] = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=124,
+            stdout=exc.stdout or "",
+            stderr=exc.stderr or "",
+        )
+
+
+class IpCamFinder(Module):
+    def __init__(
+        self,
+        interface: str = "auto",
+        preferred_ssid: str = "",
+        password: str = "",
+        rounds: int = 2,
+        max_hosts: int = 384,
+        ping_timeout: float = 0.8,
+    ) -> None:
+        super().__init__(name="IP.CAM finder")
+        self.interface = (interface or "auto").strip()
+        self.preferred_ssid = preferred_ssid.strip()
+        self.password = password
+        self.rounds = max(1, int(rounds))
+        self.max_hosts = max(32, int(max_hosts))
+        self.ping_timeout = max(0.1, float(ping_timeout))
+
+        self.running = False
+        self.status = "idle"
+        self._stop_event = threading.Event()
+        self._signal_handlers: Dict[int, object] = {}
+        self._camera_hits: Dict[str, CameraHit] = {}
+        self._target_network: Optional[WiFiNetwork] = None
+        self._selected_interface: str = ""
+        self._connected_subnet: str = ""
+        self._error: Optional[str] = None
+
+    def run(self) -> None:
+        started = time.time()
+        self.running = True
+        self.status = "running"
+        self._stop_event.clear()
+        self._install_signal_handlers()
+
+        self.console.print(Panel.fit("IP.CAM finder", border_style="cyan", subtitle="SwissKnife"))
+
+        try:
+            self._ensure_runtime_requirements()
+
+            iface = self._select_interface()
+            self._selected_interface = iface
+
+            networks = self._scan_wifi_networks(iface)
+            if not networks:
+                raise RuntimeError("No Wi-Fi networks detected on selected interface.")
+
+            self._render_networks_table(networks)
+            target = self._choose_target_network(networks)
+            self._target_network = target
+
+            password = self._resolve_password_for_network(target)
+            self._connect_to_network(iface, target, password)
+
+            subnet = self._get_interface_subnet(iface)
+            if not subnet:
+                raise RuntimeError(
+                    "Connected, but no IPv4 subnet detected. Check DHCP or static IP settings."
+                )
+            self._connected_subnet = str(subnet)
+
+            wifi_hits = self._collect_camera_candidates_from_wifi(networks)
+            for hit in wifi_hits:
+                self._remember_hit(hit)
+
+            self.console.print(
+                f"[bold cyan]Skanowanie kamer IP w toku... (Ctrl+C aby zatrzymac)[/bold cyan]\n"
+                f"[dim]Interfejs:[/dim] {iface}  [dim]Siec:[/dim] {target.ssid or '<hidden>'}  [dim]Subnet:[/dim] {subnet}"
+            )
+
+            with self.console.status("[bold cyan]Discovering camera devices on LAN...[/bold cyan]"):
+                self._scan_lan_for_cameras(iface, subnet)
+
+            self.status = "completed"
+        except KeyboardInterrupt:
+            self.status = "stopped"
+            self.console.print("\n[yellow]Interrupted by user.[/yellow]")
+        except Exception as exc:
+            self._error = str(exc)
+            self.status = "error"
+            self.console.print(f"[red]IP.CAM finder error:[/red] {exc}")
+        finally:
+            self.running = False
+            self._stop_event.set()
+            elapsed = max(0, int(time.time() - started))
+            self._render_summary(elapsed)
+            self._emit_webui_result(elapsed)
+            self._restore_signal_handlers()
+
+    def stop(self) -> None:
+        self.running = False
+        self.status = "stopped"
+        self._stop_event.set()
+        self.console.print("[yellow]Stopping IP.CAM finder...[/yellow]")
+
+    def _install_signal_handlers(self) -> None:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                self._signal_handlers[sig] = signal.getsignal(sig)
+                signal.signal(sig, self._handle_signal)
+            except Exception:
+                continue
+
+    def _restore_signal_handlers(self) -> None:
+        for sig, handler in self._signal_handlers.items():
+            try:
+                signal.signal(sig, handler)
+            except Exception:
+                continue
+
+    def _handle_signal(self, _sig: int, _frame: object) -> None:
+        self.stop()
+
+    def _ensure_runtime_requirements(self) -> None:
+        if os.geteuid() != 0:
+            raise RuntimeError("IP.CAM finder must run as root.")
+        required = ["iw", "ip", "ping", "nmcli"]
+        missing = [tool for tool in required if not tool_exists(tool)]
+        if missing:
+            joined = ", ".join(missing)
+            raise RuntimeError(f"Missing required tools: {joined}")
+
+    def _list_wifi_interfaces(self) -> List[str]:
+        result = run_command(["iw", "dev"], timeout=3.0)
+        interfaces: List[str] = []
+        if result.returncode == 0:
+            for raw_line in result.stdout.splitlines():
+                line = raw_line.strip()
+                if line.startswith("Interface "):
+                    name = line.split("Interface", 1)[1].strip()
+                    if name and name != "lo":
+                        interfaces.append(name)
+        if interfaces:
+            return interfaces
+
+        # Fallback for limited systems.
+        fallback = run_command(["ip", "-o", "link", "show"], timeout=3.0)
+        if fallback.returncode == 0:
+            for raw_line in fallback.stdout.splitlines():
+                if ": " not in raw_line:
+                    continue
+                name = raw_line.split(": ", 1)[1].split(":", 1)[0]
+                if name.startswith("wl"):
+                    interfaces.append(name)
+        return sorted(set(interfaces))
+
+    def _select_interface(self) -> str:
+        interfaces = self._list_wifi_interfaces()
+        if not interfaces:
+            raise RuntimeError("No Wi-Fi interfaces found.")
+
+        if self.interface and self.interface != "auto":
+            if self.interface not in interfaces:
+                raise RuntimeError(f"Interface '{self.interface}' is not available.")
+            return self.interface
+
+        if len(interfaces) == 1:
+            self.console.print(f"[green]Selected interface:[/green] {interfaces[0]}")
+            return interfaces[0]
+
+        table = Table(title="Available Wi-Fi Interfaces", box=box.SIMPLE_HEAVY)
+        table.add_column("#", justify="right", style="cyan", no_wrap=True)
+        table.add_column("Interface", style="bold")
+        for idx, iface in enumerate(interfaces, start=1):
+            table.add_row(str(idx), iface)
+        self.console.print(table)
+
+        while self.running:
+            raw = Prompt.ask("Select interface number", default="1", console=self.console)
+            try:
+                picked = int(raw)
+            except ValueError:
+                self.console.print("[yellow]Enter a numeric interface index.[/yellow]")
+                continue
+            if 1 <= picked <= len(interfaces):
+                return interfaces[picked - 1]
+            self.console.print("[yellow]Invalid index.[/yellow]")
+
+        raise KeyboardInterrupt
+
+    def _scan_wifi_networks(self, interface: str) -> List[WiFiNetwork]:
+        self.console.print(f"[cyan]Scanning nearby Wi-Fi on {interface}...[/cyan]")
+        result = run_command(["iw", "dev", interface, "scan"], timeout=25.0)
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(stderr or "Wi-Fi scan failed.")
+
+        rows: Dict[str, WiFiNetwork] = {}
+        current: Dict[str, object] = {}
+
+        def flush_current() -> None:
+            bssid = str(current.get("bssid") or "").upper()
+            if not MAC_RE.fullmatch(bssid):
+                return
+            entry = WiFiNetwork(
+                ssid=str(current.get("ssid") or "<hidden>"),
+                bssid=bssid,
+                signal=current.get("signal") if isinstance(current.get("signal"), int) else None,
+                channel=current.get("channel") if isinstance(current.get("channel"), int) else None,
+                security=str(current.get("security") or "OPEN"),
+            )
+            existing = rows.get(bssid)
+            if not existing:
+                rows[bssid] = entry
+                return
+            old_signal = existing.signal if existing.signal is not None else -999
+            new_signal = entry.signal if entry.signal is not None else -999
+            if new_signal > old_signal:
+                rows[bssid] = entry
+
+        for raw_line in result.stdout.splitlines():
+            line = raw_line.strip()
+            if line.startswith("BSS "):
+                flush_current()
+                token = line.split()[1]
+                bssid = token.split("(", 1)[0].strip().upper()
+                current = {
+                    "bssid": bssid,
+                    "ssid": "<hidden>",
+                    "signal": None,
+                    "channel": None,
+                    "security": "OPEN",
+                }
+                continue
+
+            if not current:
+                continue
+
+            if line.startswith("SSID:"):
+                ssid = line.split("SSID:", 1)[1].strip()
+                current["ssid"] = ssid if ssid else "<hidden>"
+                continue
+
+            if line.startswith("signal:"):
+                signal_raw = line.split("signal:", 1)[1].strip().split()[0]
+                try:
+                    current["signal"] = int(float(signal_raw))
+                except ValueError:
+                    pass
+                continue
+
+            if line.startswith("DS Parameter set: channel"):
+                try:
+                    current["channel"] = int(line.rsplit(" ", 1)[1])
+                except ValueError:
+                    pass
+                continue
+
+            if line.startswith("freq:") and not current.get("channel"):
+                try:
+                    freq = int(line.split("freq:", 1)[1].strip())
+                except ValueError:
+                    continue
+                channel = self._freq_to_channel(freq)
+                if channel:
+                    current["channel"] = channel
+                continue
+
+            if line.startswith("RSN:") or line.startswith("WPA:"):
+                current["security"] = "WPA/WPA2"
+                continue
+
+            if line.startswith("capability:") and "Privacy" in line and current.get("security") == "OPEN":
+                current["security"] = "WEP/Protected"
+
+        flush_current()
+
+        ordered = list(rows.values())
+        ordered.sort(key=lambda item: item.signal if item.signal is not None else -999, reverse=True)
+        return ordered
+
+    def _render_networks_table(self, networks: List[WiFiNetwork]) -> None:
+        table = Table(title="Nearby Wi-Fi Networks", box=box.SIMPLE_HEAVY)
+        table.add_column("#", justify="right", style="cyan", no_wrap=True)
+        table.add_column("SSID", style="bold")
+        table.add_column("BSSID", style="magenta")
+        table.add_column("RSSI", justify="right")
+        table.add_column("CH", justify="right")
+        table.add_column("Sec")
+        table.add_column("Camera Hint")
+
+        for idx, net in enumerate(networks, start=1):
+            vendor = camera_vendor_from_mac(net.bssid) or camera_vendor_from_ssid(net.ssid) or "-"
+            rssi = f"{net.signal} dBm" if net.signal is not None else "?"
+            ch = str(net.channel) if net.channel is not None else "?"
+            table.add_row(
+                str(idx),
+                net.ssid or "<hidden>",
+                net.bssid,
+                rssi,
+                ch,
+                net.security,
+                vendor,
+            )
+
+        self.console.print(table)
+
+    def _choose_target_network(self, networks: List[WiFiNetwork]) -> WiFiNetwork:
+        if self.preferred_ssid:
+            for network in networks:
+                if network.ssid == self.preferred_ssid:
+                    self.console.print(f"[green]Selected preferred SSID:[/green] {self.preferred_ssid}")
+                    return network
+            self.console.print(
+                f"[yellow]Preferred SSID '{self.preferred_ssid}' not found. Falling back to manual selection.[/yellow]"
+            )
+
+        while self.running:
+            raw = Prompt.ask("Choose network number", default="1", console=self.console)
+            try:
+                idx = int(raw)
+            except ValueError:
+                self.console.print("[yellow]Enter a numeric network index.[/yellow]")
+                continue
+            if 1 <= idx <= len(networks):
+                network = networks[idx - 1]
+                self.console.print(
+                    f"[green]Target network:[/green] {network.ssid or '<hidden>'} ({network.bssid})"
+                )
+                return network
+            self.console.print("[yellow]Invalid index.[/yellow]")
+
+        raise KeyboardInterrupt
+
+    def _resolve_password_for_network(self, network: WiFiNetwork) -> str:
+        secure = network.security.upper() != "OPEN"
+        if not secure:
+            return ""
+        if self.password:
+            return self.password
+        return Prompt.ask(
+            f"Password for [bold]{network.ssid or network.bssid}[/bold]",
+            password=True,
+            console=self.console,
+        )
+
+    def _connect_to_network(self, interface: str, network: WiFiNetwork, password: str) -> None:
+        self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
+
+        ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
+        attempts: List[List[str]] = []
+
+        if ssid_target:
+            cmd = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
+            if password:
+                cmd += ["password", password]
+            cmd += ["bssid", network.bssid]
+            attempts.append(cmd)
+
+        cmd_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", network.bssid, "ifname", interface]
+        if password:
+            cmd_bssid += ["password", password]
+        attempts.append(cmd_bssid)
+
+        last_error = ""
+        for cmd in attempts:
+            result = run_command(cmd, timeout=35.0)
+            if result.returncode == 0:
+                self.console.print("[green]Wi-Fi connected.[/green]")
+                return
+            last_error = (result.stderr or result.stdout or "").strip()
+
+        raise RuntimeError(last_error or "Failed to connect to selected Wi-Fi network.")
+
+    def _get_interface_subnet(self, interface: str) -> Optional[ipaddress.IPv4Network]:
+        result = run_command(["ip", "-o", "-f", "inet", "addr", "show", "dev", interface], timeout=3.0)
+        if result.returncode != 0:
+            return None
+
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if "inet" not in parts:
+                continue
+            idx = parts.index("inet")
+            if idx + 1 >= len(parts):
+                continue
+            cidr = parts[idx + 1]
+            try:
+                iface = ipaddress.ip_interface(cidr)
+            except ValueError:
+                continue
+            if isinstance(iface.ip, ipaddress.IPv4Address):
+                return iface.network
+        return None
+
+    def _collect_camera_candidates_from_wifi(self, networks: List[WiFiNetwork]) -> List[CameraHit]:
+        hits: List[CameraHit] = []
+        for item in networks:
+            vendor = camera_vendor_from_mac(item.bssid) or camera_vendor_from_ssid(item.ssid)
+            if not vendor:
+                continue
+            hits.append(
+                CameraHit(
+                    source="WIFI",
+                    ip="-",
+                    mac=item.bssid,
+                    vendor=vendor,
+                    rssi=item.signal,
+                    ssid=item.ssid,
+                )
+            )
+        return hits
+
+    def _scan_lan_for_cameras(self, interface: str, subnet: ipaddress.IPv4Network) -> None:
+        hosts = [str(host) for host in subnet.hosts()]
+        if len(hosts) > self.max_hosts:
+            hosts = hosts[: self.max_hosts]
+
+        if tool_exists("nmap"):
+            for _round in range(1, self.rounds + 1):
+                if not self.running:
+                    break
+                run_command(["nmap", "-sn", "-n", str(subnet)], timeout=30.0)
+                self._ingest_neighbors(interface)
+                time.sleep(0.5)
+            return
+
+        threads = 64
+        for round_no in range(1, self.rounds + 1):
+            if not self.running:
+                break
+            self.console.print(f"[dim]LAN sweep round {round_no}/{self.rounds} ({len(hosts)} hosts)[/dim]")
+            self._ping_sweep(interface, hosts, workers=threads)
+            self._ingest_neighbors(interface)
+            time.sleep(0.5)
+
+    def _ping_sweep(self, interface: str, hosts: List[str], workers: int = 32) -> None:
+        queue_lock = threading.Lock()
+        index = {"value": 0}
+
+        def next_host() -> Optional[str]:
+            with queue_lock:
+                pos = index["value"]
+                if pos >= len(hosts):
+                    return None
+                index["value"] += 1
+                return hosts[pos]
+
+        def worker() -> None:
+            while self.running and not self._stop_event.is_set():
+                host = next_host()
+                if host is None:
+                    return
+                run_command(
+                    [
+                        "ping",
+                        "-c",
+                        "1",
+                        "-W",
+                        str(max(1, int(self.ping_timeout))),
+                        "-I",
+                        interface,
+                        host,
+                    ],
+                    timeout=max(2.0, self.ping_timeout + 1.2),
+                )
+
+        pool: List[threading.Thread] = []
+        for _ in range(max(1, workers)):
+            thread = threading.Thread(target=worker, daemon=True)
+            pool.append(thread)
+            thread.start()
+
+        for thread in pool:
+            thread.join()
+
+    def _ingest_neighbors(self, interface: str) -> None:
+        result = run_command(["ip", "neigh", "show", "dev", interface], timeout=4.0)
+        if result.returncode != 0:
+            return
+
+        for line in result.stdout.splitlines():
+            match = IP_NEIGH_RE.match(line.strip())
+            if not match:
+                continue
+            ip_address = match.group("ip")
+            mac = normalize_mac(match.group("mac"))
+            vendor = camera_vendor_from_mac(mac)
+            if not vendor:
+                continue
+            self._remember_hit(
+                CameraHit(source="LAN", ip=ip_address, mac=mac, vendor=vendor, rssi=None, ssid="")
+            )
+
+    def _remember_hit(self, hit: CameraHit) -> None:
+        key = normalize_mac(hit.mac)
+        existing = self._camera_hits.get(key)
+        if not existing:
+            self._camera_hits[key] = hit
+            return
+
+        # Merge richer fields while preserving first source.
+        if existing.ip == "-" and hit.ip != "-":
+            existing.ip = hit.ip
+        if existing.rssi is None and hit.rssi is not None:
+            existing.rssi = hit.rssi
+        if not existing.ssid and hit.ssid:
+            existing.ssid = hit.ssid
+        if existing.source == "WIFI" and hit.source == "LAN":
+            existing.source = "WIFI+LAN"
+
+    def _render_summary(self, elapsed_sec: int) -> None:
+        table = Table(title="IP Camera Candidates", box=box.SIMPLE_HEAVY)
+        table.add_column("Source", style="cyan", no_wrap=True)
+        table.add_column("IP", style="bold")
+        table.add_column("MAC", style="magenta")
+        table.add_column("Vendor")
+        table.add_column("RSSI", justify="right")
+        table.add_column("SSID")
+
+        hits = sorted(
+            self._camera_hits.values(),
+            key=lambda item: (
+                0 if item.source == "WIFI+LAN" else 1,
+                item.vendor,
+                item.mac,
+            ),
+        )
+
+        for item in hits:
+            rssi = f"{item.rssi} dBm" if item.rssi is not None else "-"
+            table.add_row(item.source, item.ip, item.mac, item.vendor, rssi, item.ssid or "-")
+
+        if hits:
+            self.console.print(table)
+        else:
+            self.console.print(Panel("No IP camera candidates detected in this run.", border_style="yellow"))
+
+        lines = [
+            f"Status: {self.status}",
+            f"Elapsed: {elapsed_sec}s",
+            f"Interface: {self._selected_interface or '-'}",
+            f"Target SSID: {(self._target_network.ssid if self._target_network else '-') or '<hidden>'}",
+            f"Subnet: {self._connected_subnet or '-'}",
+            f"Camera candidates: {len(hits)}",
+        ]
+        if self._error:
+            lines.append(f"Error: {self._error}")
+
+        self.console.print(Panel("\n".join(lines), title="Summary", border_style="green" if hits else "cyan"))
+
+    def _emit_webui_result(self, elapsed_sec: int) -> None:
+        if os.environ.get("SWISSKNIFE_WEBUI_TASK") != "1":
+            return
+
+        payload = {
+            "kind": "ip_cam_finder",
+            "running": False,
+            "timestamp": int(time.time()),
+            "status": self.status,
+            "interface": self._selected_interface,
+            "target_ssid": self._target_network.ssid if self._target_network else "",
+            "subnet": self._connected_subnet,
+            "duration": int(elapsed_sec),
+            "camera_count": len(self._camera_hits),
+            "cameras": [
+                {
+                    "source": item.source,
+                    "ip": item.ip,
+                    "mac": item.mac,
+                    "vendor": item.vendor,
+                    "rssi": item.rssi,
+                    "ssid": item.ssid,
+                }
+                for item in sorted(self._camera_hits.values(), key=lambda x: x.mac)
+            ],
+            "error": self._error,
+        }
+        print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
+
+    @staticmethod
+    def _freq_to_channel(freq_mhz: int) -> Optional[int]:
+        if 2412 <= freq_mhz <= 2472:
+            return int((freq_mhz - 2407) / 5)
+        if freq_mhz == 2484:
+            return 14
+        if 5000 <= freq_mhz <= 5900:
+            return int((freq_mhz - 5000) / 5)
+        return None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="SwissKnife IP camera finder")
+    parser.add_argument("--interface", default="auto", help="Wi-Fi interface to use (default: auto)")
+    parser.add_argument("--ssid", default="", help="Preferred SSID to join")
+    parser.add_argument("--password", default="", help="Wi-Fi password (optional)")
+    parser.add_argument("--rounds", type=int, default=2, help="Number of LAN sweep rounds (default: 2)")
+    parser.add_argument("--max-hosts", type=int, default=384, help="Max hosts per round (default: 384)")
+    parser.add_argument("--ping-timeout", type=float, default=0.8, help="Ping timeout seconds (default: 0.8)")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    module = IpCamFinder(
+        interface=args.interface,
+        preferred_ssid=args.ssid,
+        password=args.password,
+        rounds=args.rounds,
+        max_hosts=args.max_hosts,
+        ping_timeout=args.ping_timeout,
+    )
+    module.run()
+
+
+if __name__ == "__main__":
+    main()

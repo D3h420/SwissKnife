@@ -80,6 +80,12 @@ DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
         script="modules/handshaker.py",
         description="4-way handshake capture and validation workflow.",
     ),
+    ModuleSpec(
+        module_id="ip_cam",
+        name="IP.CAM finder",
+        script="modules/ipcam_finder.py",
+        description="IP camera discovery workflow (Wi-Fi + LAN OUI scan).",
+    ),
 )
 
 
