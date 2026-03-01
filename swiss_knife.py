@@ -61,14 +61,15 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "2": {"name": "Portal", "file": os.path.join("modules", "portal.py")},
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
     "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
-    "5": {"name": "SEA Overflow (Jan nedded here).", "file": "", "disabled": True},
-    "6": {"name": "Karma (under construction)", "file": "", "disabled": True},
+    "5": {"name": "WiFi Poet", "file": os.path.join("modules", "wifi_poet.py")},
+    "6": {"name": "SEA Overflow (Jan nedded here).", "file": "", "disabled": True},
+    "7": {"name": "Karma (under construction)", "file": "", "disabled": True},
     "spacer_after_basic": {"name": "", "separator": True},
     "inside": {"name": "-INSIDE-", "separator": True},
-    "7": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
-    "8": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
+    "8": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
+    "9": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
     "spacer": {"name": "", "separator": True},
-    "9": {"name": "Back", "file": ""},
+    "10": {"name": "Back", "file": ""},
 }
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
@@ -634,13 +635,13 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (1-9): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (1-10): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "9":
+        if choice == "10":
             break
 
         if ATTACKS_MENU[choice].get("disabled"):
