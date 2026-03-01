@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -365,6 +366,9 @@ class IpCamFinder(Module):
         self._interface_profiles: Dict[str, InterfaceProfile] = {}
         self._connected_subnet: str = ""
         self._error: Optional[str] = None
+        self._wpa_managed_interface: str = ""
+        self._wpa_pid_file: str = ""
+        self._wpa_ctrl_dir: str = ""
 
     def run(self) -> None:
         started = time.time()
@@ -435,6 +439,8 @@ class IpCamFinder(Module):
             self.running = False
             self._stop_event.set()
             elapsed = max(0, int(time.time() - started))
+            if self._wpa_managed_interface:
+                self._cleanup_wpa_runtime(self._wpa_managed_interface, restore_managed=True)
             self._render_summary(elapsed)
             self._emit_webui_result(elapsed)
             if self._selected_interface:
@@ -952,7 +958,6 @@ class IpCamFinder(Module):
                 return
             errors.append(profile_error)
 
-            self.console.print("[yellow]nmcli failed, trying wpa_supplicant fallback...[/yellow]")
             supp_error = self._connect_with_wpa_supplicant(interface, ssid_target, password, network.bssid if bssid_visible else "")
             if not supp_error:
                 self.console.print("[green]Wi-Fi connected via wpa_supplicant fallback.[/green]")
@@ -1001,19 +1006,26 @@ class IpCamFinder(Module):
         if not tool_exists("wpa_supplicant"):
             return "wpa_supplicant not available."
 
-        conf_content = self._build_wpa_supplicant_config(ssid, password, bssid)
+        self._cleanup_wpa_runtime(interface, restore_managed=False)
+
         temp_path = ""
+        ctrl_dir = ""
+        pid_file = f"/tmp/swissknife_wpa_{interface}.pid"
         success = False
         try:
+            ctrl_dir = tempfile.mkdtemp(prefix=f"swissknife_wpa_ctrl_{interface}_")
+            conf_content = self._build_wpa_supplicant_config(ssid, password, bssid, ctrl_dir)
             with tempfile.NamedTemporaryFile("w", prefix=f"swissknife_{interface}_", suffix=".conf", delete=False, encoding="utf-8") as handle:
                 handle.write(conf_content)
                 temp_path = handle.name
 
             run_command(["nmcli", "device", "set", interface, "managed", "no"], timeout=8.0)
-            run_command(["pkill", "-f", f"wpa_supplicant.*{interface}"], timeout=4.0)
             run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
 
-            start = run_command(["wpa_supplicant", "-B", "-i", interface, "-c", temp_path], timeout=12.0)
+            start = run_command(
+                ["wpa_supplicant", "-B", "-P", pid_file, "-i", interface, "-c", temp_path],
+                timeout=12.0,
+            )
             if start.returncode != 0:
                 return (start.stderr or start.stdout or "Failed to start wpa_supplicant.").strip()
 
@@ -1028,6 +1040,9 @@ class IpCamFinder(Module):
             if not subnet:
                 return "Associated, but no IPv4 lease was obtained."
             success = True
+            self._wpa_managed_interface = interface
+            self._wpa_pid_file = pid_file
+            self._wpa_ctrl_dir = ctrl_dir
             return ""
         finally:
             if temp_path and os.path.exists(temp_path):
@@ -1036,14 +1051,18 @@ class IpCamFinder(Module):
                 except OSError:
                     pass
             if not success:
-                run_command(["pkill", "-f", f"wpa_supplicant.*{interface}"], timeout=4.0)
-                run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
+                self._cleanup_wpa_runtime(interface, restore_managed=True, ctrl_dir_override=ctrl_dir, pid_file_override=pid_file)
+            elif ctrl_dir != self._wpa_ctrl_dir and ctrl_dir and os.path.isdir(ctrl_dir):
+                try:
+                    shutil.rmtree(ctrl_dir, ignore_errors=True)
+                except Exception:
+                    pass
 
-    def _build_wpa_supplicant_config(self, ssid: str, password: str, bssid: str) -> str:
+    def _build_wpa_supplicant_config(self, ssid: str, password: str, bssid: str, ctrl_dir: str) -> str:
         safe_ssid = ssid.replace("\\", "\\\\").replace('"', '\\"')
         safe_password = password.replace("\\", "\\\\").replace('"', '\\"')
         lines = [
-            "ctrl_interface=/run/wpa_supplicant",
+            f"ctrl_interface={ctrl_dir}",
             "update_config=0",
             "network={",
             f'    ssid="{safe_ssid}"',
@@ -1057,6 +1076,58 @@ class IpCamFinder(Module):
             lines.append(f"    bssid={normalize_mac(bssid)}")
         lines.append("}")
         return "\n".join(lines) + "\n"
+
+    def _cleanup_wpa_runtime(
+        self,
+        interface: str,
+        restore_managed: bool,
+        ctrl_dir_override: str = "",
+        pid_file_override: str = "",
+    ) -> None:
+        if not interface:
+            return
+
+        pid_file = pid_file_override or self._wpa_pid_file
+        ctrl_dir = ctrl_dir_override or self._wpa_ctrl_dir
+
+        if pid_file and os.path.exists(pid_file):
+            try:
+                with open(pid_file, "r", encoding="utf-8") as handle:
+                    pid_text = handle.read().strip()
+                if pid_text.isdigit():
+                    run_command(["kill", "-TERM", pid_text], timeout=3.0)
+            except Exception:
+                pass
+            try:
+                os.remove(pid_file)
+            except OSError:
+                pass
+
+        run_command(["pkill", "-f", f"wpa_supplicant.*-i{interface}"], timeout=4.0)
+        run_command(["pkill", "-f", f"wpa_supplicant.*-i {interface}"], timeout=4.0)
+
+        sock_path = f"/run/wpa_supplicant/{interface}"
+        if os.path.exists(sock_path):
+            try:
+                os.remove(sock_path)
+            except OSError:
+                pass
+
+        if ctrl_dir and os.path.isdir(ctrl_dir):
+            try:
+                shutil.rmtree(ctrl_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+        if restore_managed:
+            run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
+
+        if interface == self._wpa_managed_interface:
+            self._wpa_managed_interface = ""
+        if pid_file == self._wpa_pid_file:
+            self._wpa_pid_file = ""
+        if ctrl_dir == self._wpa_ctrl_dir:
+            self._wpa_ctrl_dir = ""
 
     def _wait_for_wifi_association(self, interface: str, timeout: float = 20.0) -> bool:
         end = time.time() + max(3.0, timeout)
@@ -1310,6 +1381,7 @@ class IpCamFinder(Module):
         return last_interface, None
 
     def _prepare_network_manager(self, interface: str) -> None:
+        self._cleanup_wpa_runtime(interface, restore_managed=False)
         run_command(["nmcli", "radio", "wifi", "on"], timeout=8.0)
         run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
         run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
