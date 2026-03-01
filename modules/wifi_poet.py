@@ -28,7 +28,7 @@ try:
     RICH_AVAILABLE = True
 except ModuleNotFoundError:
     RICH_AVAILABLE = False
-    # Fallback classes (skrócone dla czytelności)
+    # Fallback classes
     class Console:
         def print(self, *args, **kwargs): print(*args if args else '')
     class Panel:
@@ -50,7 +50,7 @@ except ModuleNotFoundError:
     class Prompt:
         @staticmethod
         def ask(prompt, default=None, **kwargs):
-            sys.stdout.write(prompt + f" [{default}]" if default else prompt + ": ")
+            sys.stdout.write(prompt + (f" [{default}]" if default else "") + ": ")
             sys.stdout.flush()
             return sys.stdin.readline().strip() or default or ''
 
@@ -121,6 +121,7 @@ class WiFiPoet(Module):
         
         # Parametry domyślne
         self.interface = "auto"
+        self.original_interface = None  # zapamiętujemy oryginalną nazwę
         self.count = 24
         self.duration = 0
         self.refresh = 0.6
@@ -129,7 +130,7 @@ class WiFiPoet(Module):
         self.channels = [1, 6, 11]
         self.channel_hop_sec = 15.0
         self.max_rows = 12
-        self.beacon_rate = 100  # szybsza emisja
+        self.beacon_rate = 100
         self.power_level = 30
         
         # Stan wewnętrzny
@@ -147,6 +148,7 @@ class WiFiPoet(Module):
         self._monitor_enabled = False
         self._packets_sent = 0
         self._detected_by_scanner = False
+        self._monitor_interface = None  # nazwa interfejsu w trybie monitor
         
         self.console = Console()
 
@@ -170,7 +172,7 @@ class WiFiPoet(Module):
         return self
 
     def execute(self) -> None:
-        """Główna metoda uruchamiająca - TYLKO TRYB RZECZYWISTY"""
+        """Główna metoda uruchamiająca"""
         started = time.time()
         self.running = True
         self.status = "running"
@@ -193,9 +195,9 @@ class WiFiPoet(Module):
             self._restore_signal_handlers()
             return
 
-        # Wybierz interfejs
-        self.interface = self._select_interface()
-        if not self.interface:
+        # Wybierz interfejs (zapamiętujemy oryginalną nazwę)
+        self.original_interface = self._select_interface()
+        if not self.original_interface:
             self.status = "error"
             self._error = "Nie znaleziono interfejsu Wi-Fi."
             self.console.print(f"[red]{self._error}[/red]")
@@ -203,16 +205,23 @@ class WiFiPoet(Module):
             return
 
         # Zapisz oryginalny tryb
-        self._original_mode = self._get_interface_mode(self.interface)
+        self._original_mode = self._get_interface_mode(self.original_interface)
         
-        # Przełącz na tryb monitor
-        self.console.print("[yellow]Przełączanie interfejsu w tryb monitor...[/yellow]")
-        if not self._ensure_monitor_mode(self.interface):
+        # Przełącz na tryb monitor - to może zmienić nazwę interfejsu!
+        self.console.print(f"[yellow]Przełączanie {self.original_interface} w tryb monitor...[/yellow]")
+        
+        monitor_iface = self._enable_monitor_mode(self.original_interface)
+        if not monitor_iface:
             self.status = "error"
-            self._error = f"Nie udało się włączyć trybu monitor na {self.interface}."
+            self._error = f"Nie udało się włączyć trybu monitor na {self.original_interface}."
             self.console.print(f"[red]{self._error}[/red]")
             self._restore_signal_handlers()
             return
+        
+        # Używamy interfejsu monitor do dalszej pracy
+        self.interface = monitor_iface
+        self._monitor_enabled = True
+        self.console.print(f"[green]✓ Tryb monitor aktywny na {self.interface}[/green]")
 
         # Wyświetl nagłówek
         self.console.print(
@@ -272,12 +281,150 @@ class WiFiPoet(Module):
             self.running = False
             self._stop_event.set()
             self._stop_engine()
-            self._restore_interface_mode()
+            self._disable_monitor_mode()
             self._mark_stopped()
             elapsed = max(0, int(time.time() - started))
             self._render_summary(elapsed)
             self._emit_webui_result(running=False, elapsed_sec=elapsed)
             self._restore_signal_handlers()
+
+    def _enable_monitor_mode(self, iface: str) -> Optional[str]:
+        """
+        Włącza tryb monitor i zwraca NAZWĘ interfejsu monitor.
+        airmon-ng często zmienia nazwę na np. wlan1mon
+        """
+        # Sprawdź czy już jest w trybie monitor
+        current_mode = self._get_interface_mode(iface).lower()
+        if current_mode == "monitor":
+            return iface
+        
+        # Metoda 1: airmon-ng (to zmienia nazwę interfejsu!)
+        try:
+            # Najpierw zabij procesy które mogą przeszkadzać
+            subprocess.run(["airmon-ng", "check", "kill"], 
+                         stdout=subprocess.DEVNULL, 
+                         stderr=subprocess.DEVNULL, 
+                         check=False)
+            
+            # Uruchom airmon-ng start
+            result = subprocess.run(
+                ["airmon-ng", "start", iface],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            
+            if result.returncode == 0:
+                # airmon-ng informuje o nowej nazwie interfejsu
+                # Szukamy wzorca: "(monitor mode enabled on) wlan1mon"
+                output = result.stdout + result.stderr
+                
+                # Różne wzorce które mogą wystąpić
+                patterns = [
+                    r"monitor mode enabled on (\w+)",
+                    r"enabled on (\w+mon)",
+                    r"\(mode enabled on\) (\w+)",
+                    r"monitor mode vif enabled on (\w+)",
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, output, re.IGNORECASE)
+                    if match:
+                        new_iface = match.group(1)
+                        self.console.print(f"[green]✓ airmon-ng utworzył interfejs: {new_iface}[/green]")
+                        return new_iface
+                
+                # Jeśli nie znaleźliśmy wzorca, ale airmon-ng succeeded,
+                # spróbujmy znaleźć nowy interfejs przez iw dev
+                time.sleep(1)  # daj czas na utworzenie
+                interfaces = self._discover_wifi_interfaces()
+                
+                # Szukamy interfejsu który kończy się na "mon" lub zawiera "mon"
+                for mon_iface in interfaces:
+                    if mon_iface.endswith("mon") or "mon" in mon_iface:
+                        if mon_iface != iface:  # inny niż oryginalny
+                            self.console.print(f"[green]✓ Znaleziono interfejs monitor: {mon_iface}[/green]")
+                            return mon_iface
+        except Exception as e:
+            self.console.print(f"[yellow]airmon-ng nie zadziałał: {e}[/yellow]")
+        
+        # Metoda 2: ręczne ustawienie (bez zmiany nazwy)
+        self.console.print("[yellow]Próba ręcznego ustawienia trybu monitor...[/yellow]")
+        try:
+            # Wyłącz interfejs
+            subprocess.run(["ip", "link", "set", iface, "down"], check=False)
+            time.sleep(0.5)
+            
+            # Ustaw typ na monitor
+            subprocess.run(
+                ["iw", iface, "set", "type", "monitor"],
+                check=False,
+                capture_output=True,
+            )
+            
+            # Włącz interfejs
+            subprocess.run(["ip", "link", "set", iface, "up"], check=False)
+            time.sleep(1)
+            
+            # Sprawdź czy się udało
+            if self._get_interface_mode(iface).lower() == "monitor":
+                self.console.print(f"[green]✓ Ręcznie ustawiono monitor na {iface}[/green]")
+                return iface
+        except Exception as e:
+            self.console.print(f"[red]Ręczne ustawienie nie powiodło się: {e}[/red]")
+        
+        return None
+
+    def _disable_monitor_mode(self) -> None:
+        """Wyłącza tryb monitor i przywraca oryginalny interfejs"""
+        if not self._monitor_enabled or not self.original_interface:
+            return
+        
+        self.console.print("[yellow]Wyłączanie trybu monitor...[/yellow]")
+        
+        # Metoda 1: airmon-ng stop
+        try:
+            # Jeśli mamy interfejs monitor (np. wlan1mon)
+            if self.interface and self.interface != self.original_interface:
+                subprocess.run(
+                    ["airmon-ng", "stop", self.interface],
+                    capture_output=True,
+                    check=False,
+                )
+                self.console.print(f"[green]✓ Zatrzymano {self.interface}[/green]")
+        except:
+            pass
+        
+        # Metoda 2: ręczne przywrócenie
+        try:
+            # Wyłącz interfejs monitor jeśli istnieje
+            if self.interface and self.interface != self.original_interface:
+                subprocess.run(["ip", "link", "set", self.interface, "down"], check=False)
+            
+            # Przywróć oryginalny interfejs
+            subprocess.run(["ip", "link", "set", self.original_interface, "down"], check=False)
+            time.sleep(0.5)
+            
+            # Ustaw tryb managed
+            target = self._original_mode if self._original_mode != "unknown" else "managed"
+            subprocess.run(
+                ["iw", self.original_interface, "set", "type", target],
+                check=False,
+            )
+            
+            # Włącz interfejs
+            subprocess.run(["ip", "link", "set", self.original_interface, "up"], check=False)
+            self.console.print(f"[green]✓ Przywrócono {self.original_interface}[/green]")
+        except Exception as e:
+            self.console.print(f"[red]Błąd przy przywracaniu: {e}[/red]")
+        
+        # Przywróć menedżery sieci
+        subprocess.run(["systemctl", "start", "NetworkManager"], 
+                      stdout=subprocess.DEVNULL, 
+                      stderr=subprocess.DEVNULL, 
+                      check=False)
+        
+        self._monitor_enabled = False
 
     def _start_engine(self) -> None:
         """Uruchamia mdk4 do emisji beaconów"""
@@ -299,7 +446,7 @@ class WiFiPoet(Module):
             "-s", str(beacon_interval),
             "-m",  # spoof MAC
             "-t",  # używaj własnych BSSID
-            "-w",  # WPA2 (opcjonalnie)
+            "-w",  # WPA2
         ]
         
         if self.power_level > 0:
@@ -349,58 +496,13 @@ class WiFiPoet(Module):
         thread = threading.Thread(target=monitor, daemon=True)
         thread.start()
 
-    def _ensure_monitor_mode(self, iface: str) -> bool:
-        """Przełącza interfejs w tryb monitor"""
-        current = self._get_interface_mode(iface).lower()
-        if current == "monitor":
-            self._monitor_enabled = True
-            return True
-        
-        # Próba z airmon-ng
-        try:
-            result = subprocess.run(
-                ["airmon-ng", "start", iface],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    if "monitor mode enabled" in line.lower():
-                        self._monitor_enabled = True
-                        return True
-        except:
-            pass
-        
-        # Ręczne przełączanie
-        try:
-            subprocess.run(["ip", "link", "set", iface, "down"], check=False)
-            time.sleep(0.5)
-            
-            subprocess.run(
-                ["iw", iface, "set", "type", "monitor"],
-                check=False,
-                capture_output=True,
-            )
-            
-            subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-            time.sleep(1)
-            
-            if self._get_interface_mode(iface).lower() == "monitor":
-                self._monitor_enabled = True
-                return True
-        except:
-            pass
-        
-        return False
-
     def _build_view(self, elapsed: int):
         """Buduje widok na żywo"""
         status_lines = [
             f"🔴 EMISJA RZECZYWISTA - sprawdź telefon!",
             f"📊 Wersów: {len(self._fake_aps)}",
             f"⏱️  Czas: {elapsed}s",
-            f"📡 Interfejs: {self.interface}",
+            f"📡 Interfejs: {self.interface} (z {self.original_interface})",
             f"📻 Kanał: {self._current_channel}",
             f"⚡ Szybkość: {self.beacon_rate} beaconów/s",
             f"📦 Wysłano: ~{self._packets_sent} pakietów",
@@ -465,23 +567,6 @@ class WiFiPoet(Module):
             except:
                 pass
 
-    def _restore_interface_mode(self) -> None:
-        """Przywraca oryginalny tryb interfejsu"""
-        if not self.interface or not self._monitor_enabled:
-            return
-        
-        try:
-            subprocess.run(["airmon-ng", "stop", self.interface], check=False)
-        except:
-            try:
-                subprocess.run(["ip", "link", "set", self.interface, "down"], check=False)
-                time.sleep(0.5)
-                target = self._original_mode if self._original_mode != "unknown" else "managed"
-                subprocess.run(["iw", self.interface, "set", "type", target], check=False)
-                subprocess.run(["ip", "link", "set", self.interface, "up"], check=False)
-            except:
-                pass
-
     def _build_fake_aps(self) -> None:
         """Buduje listę AP z fragmentami poematu"""
         all_lines = PAN_TADEUSZ_LINES + EXTRA_LINES
@@ -511,7 +596,7 @@ class WiFiPoet(Module):
     def _generate_mac(self, rng: random.Random, offset: int) -> str:
         """Generuje adres MAC"""
         oui = [
-            [0x02, 0x11, 0x22],  # local admin
+            [0x02, 0x11, 0x22],
             [0x02, 0x14, 0xBF],
             [0x02, 0x18, 0xF8],
             [0x02, 0x1E, 0x52],
@@ -663,6 +748,7 @@ class WiFiPoet(Module):
             "running": running,
             "status": self.status,
             "interface": self.interface,
+            "original_interface": self.original_interface,
             "duration": elapsed_sec,
             "channel": self._current_channel,
             "device_count": len(self._fake_aps),
