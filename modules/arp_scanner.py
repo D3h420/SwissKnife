@@ -10,6 +10,7 @@ import re
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -838,7 +839,6 @@ class ArpScanner(Module):
     def _connect_to_network(self, interface: str, network: WiFiNetwork, password: str) -> None:
         self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
         self._prepare_network_manager(interface)
-        run_command(["nmcli", "device", "disconnect", interface], timeout=8.0)
 
         ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
         attempts: List[List[str]] = []
@@ -848,7 +848,6 @@ class ArpScanner(Module):
             cmd_no_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
             if password:
                 cmd_no_bssid += ["password", password]
-            cmd_no_bssid += ["hidden", "yes"]
             attempts.append(cmd_no_bssid)
 
             if bssid_visible:
@@ -856,7 +855,6 @@ class ArpScanner(Module):
                 if password:
                     cmd_with_bssid += ["password", password]
                 cmd_with_bssid += ["bssid", network.bssid]
-                cmd_with_bssid += ["hidden", "yes"]
                 attempts.append(cmd_with_bssid)
 
         if bssid_visible:
@@ -892,6 +890,13 @@ class ArpScanner(Module):
                 return
             errors.append(profile_error)
 
+            self.console.print("[yellow]nmcli failed, trying wpa_supplicant fallback...[/yellow]")
+            supp_error = self._connect_with_wpa_supplicant(interface, ssid_target, password, network.bssid if bssid_visible else "")
+            if not supp_error:
+                self.console.print("[green]Wi-Fi connected via wpa_supplicant fallback.[/green]")
+                return
+            errors.append(supp_error)
+
         if errors:
             deduped = []
             for item in errors:
@@ -914,7 +919,6 @@ class ArpScanner(Module):
             return (add_result.stderr or add_result.stdout or "Failed to create temporary NetworkManager profile.").strip()
 
         run_command(["nmcli", "connection", "modify", profile, "connection.autoconnect", "no"], timeout=8.0)
-        run_command(["nmcli", "connection", "modify", profile, "802-11-wireless.hidden", "yes"], timeout=8.0)
         if bssid:
             run_command(["nmcli", "connection", "modify", profile, "802-11-wireless.bssid", bssid], timeout=8.0)
 
@@ -930,6 +934,93 @@ class ArpScanner(Module):
         if up_result.returncode == 0:
             return ""
         return (up_result.stderr or up_result.stdout or "Failed to activate temporary Wi-Fi profile.").strip()
+
+    def _connect_with_wpa_supplicant(self, interface: str, ssid: str, password: str, bssid: str) -> str:
+        if not tool_exists("wpa_supplicant"):
+            return "wpa_supplicant not available."
+
+        conf_content = self._build_wpa_supplicant_config(ssid, password, bssid)
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile("w", prefix=f"swissknife_{interface}_", suffix=".conf", delete=False, encoding="utf-8") as handle:
+                handle.write(conf_content)
+                temp_path = handle.name
+
+            run_command(["nmcli", "device", "set", interface, "managed", "no"], timeout=8.0)
+            run_command(["pkill", "-f", f"wpa_supplicant.*{interface}"], timeout=4.0)
+            run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
+
+            start = run_command(["wpa_supplicant", "-B", "-i", interface, "-c", temp_path], timeout=12.0)
+            if start.returncode != 0:
+                return (start.stderr or start.stdout or "Failed to start wpa_supplicant.").strip()
+
+            if not self._wait_for_wifi_association(interface, timeout=20.0):
+                return "wpa_supplicant started but Wi-Fi association did not complete."
+
+            dhcp_error = self._request_dhcp_lease(interface)
+            if dhcp_error:
+                return dhcp_error
+
+            subnet = self._wait_for_ipv4(interface, timeout=20.0)
+            if not subnet:
+                return "Associated, but no IPv4 lease was obtained."
+            return ""
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+
+    def _build_wpa_supplicant_config(self, ssid: str, password: str, bssid: str) -> str:
+        safe_ssid = ssid.replace("\\", "\\\\").replace('"', '\\"')
+        safe_password = password.replace("\\", "\\\\").replace('"', '\\"')
+        lines = [
+            "ctrl_interface=/run/wpa_supplicant",
+            "update_config=0",
+            "network={",
+            f'    ssid="{safe_ssid}"',
+            "    scan_ssid=1",
+        ]
+        if password:
+            lines.append(f'    psk="{safe_password}"')
+        else:
+            lines.append("    key_mgmt=NONE")
+        if bssid:
+            lines.append(f"    bssid={normalize_mac(bssid)}")
+        lines.append("}")
+        return "\n".join(lines) + "\n"
+
+    def _wait_for_wifi_association(self, interface: str, timeout: float = 20.0) -> bool:
+        end = time.time() + max(3.0, timeout)
+        while time.time() < end and self.running:
+            bssid, _ssid = self._read_iw_link(interface)
+            if bssid:
+                return True
+            time.sleep(1.0)
+        return False
+
+    def _request_dhcp_lease(self, interface: str) -> str:
+        if tool_exists("dhclient"):
+            run_command(["dhclient", "-r", interface], timeout=8.0)
+            result = run_command(["dhclient", interface], timeout=25.0)
+            if result.returncode == 0:
+                return ""
+            return (result.stderr or result.stdout or "dhclient failed to acquire lease.").strip()
+
+        if tool_exists("dhcpcd"):
+            result = run_command(["dhcpcd", "-n", interface], timeout=20.0)
+            if result.returncode == 0:
+                return ""
+            return (result.stderr or result.stdout or "dhcpcd failed to acquire lease.").strip()
+
+        if tool_exists("udhcpc"):
+            result = run_command(["udhcpc", "-i", interface, "-n", "-q", "-t", "5"], timeout=25.0)
+            if result.returncode == 0:
+                return ""
+            return (result.stderr or result.stdout or "udhcpc failed to acquire lease.").strip()
+
+        return "No DHCP client available (install dhclient, dhcpcd, or udhcpc)."
 
     def _is_bssid_visible(self, interface: str, bssid: str) -> bool:
         target = normalize_mac(bssid)

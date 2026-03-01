@@ -110,6 +110,7 @@ System tools used by launcher/modules:
 Extra tools used by specific paths/fallbacks:
 - `iwlist` (wireless-tools fallback scans)
 - `nmcli` (NetworkManager scan fallback)
+- `wpa_supplicant` + DHCP client (`dhclient` or `dhcpcd` or `udhcpc`) as connect fallback in ARP/IP.CAM modules
 - `ifconfig` and `iwconfig` (legacy mode fallback in deauth)
 - `hciconfig` and `hcitool` (Bluetooth legacy operations)
 - `rfkill` (Bluetooth unblock)
