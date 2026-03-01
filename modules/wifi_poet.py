@@ -162,6 +162,8 @@ class WiFiPoet(Module):
         self._ssid_list_file: Optional[str] = None
         self._current_channel = self.channels[0]
         self._last_hop_ts = 0.0
+        self._original_mode: str = "unknown"
+        self._monitor_enabled = False
         self._build_fake_aps()
 
     def run(self) -> None:
@@ -183,6 +185,15 @@ class WiFiPoet(Module):
         if not self.interface:
             self.status = "error"
             self._error = "No usable Wi-Fi interface found."
+            self.console.print(f"[red]{self._error}[/red]")
+            self._render_summary(0)
+            self._restore_signal_handlers()
+            return
+
+        self._original_mode = self._get_interface_mode(self.interface)
+        if not self._ensure_monitor_mode(self.interface):
+            self.status = "error"
+            self._error = f"Failed to enable monitor mode on {self.interface}."
             self.console.print(f"[red]{self._error}[/red]")
             self._render_summary(0)
             self._restore_signal_handlers()
@@ -232,6 +243,7 @@ class WiFiPoet(Module):
             self.running = False
             self._stop_event.set()
             self._stop_engine()
+            self._restore_interface_mode()
             self._mark_stopped()
             elapsed = max(0, int(time.time() - started))
             self._render_summary(elapsed)
@@ -342,6 +354,70 @@ class WiFiPoet(Module):
             check=False,
         )
         return result.returncode == 0 and ("state UP" in result.stdout or " UP " in result.stdout)
+
+    def _set_interface_type(self, iface: str, mode: str) -> bool:
+        try:
+            subprocess.run(["ip", "link", "set", iface, "down"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            result = subprocess.run(
+                ["iw", "dev", iface, "set", "type", mode],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                self.console.print(f"[red]Failed to set {iface} to {mode}: {result.stderr.strip() or 'unknown error'}[/red]")
+                subprocess.run(["ip", "link", "set", iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                return False
+
+            subprocess.run(["ip", "link", "set", iface, "up"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if mode == "monitor":
+                subprocess.run(
+                    ["iw", "dev", iface, "set", "monitor", "otherbss"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            time.sleep(0.4)
+            return True
+        except Exception as exc:
+            self.console.print(f"[red]Failed to switch {iface} mode: {exc}[/red]")
+            return False
+
+    def _ensure_monitor_mode(self, iface: str) -> bool:
+        current_mode = self._get_interface_mode(iface).lower()
+        if current_mode == "monitor":
+            self._monitor_enabled = True
+            return True
+
+        # Keep behavior aligned with other modules: release iface from NM before monitor switch.
+        subprocess.run(["nmcli", "device", "set", iface, "managed", "no"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        ok = self._set_interface_type(iface, "monitor")
+        if not ok:
+            return False
+        self._monitor_enabled = True
+        self.console.print(f"[green]{iface} switched to monitor mode.[/green]")
+        return True
+
+    def _restore_interface_mode(self) -> None:
+        if not self.interface:
+            return
+        if not self._monitor_enabled:
+            return
+
+        target_mode = "managed"
+        original = (self._original_mode or "").lower()
+        if original and original not in {"monitor", "unknown"}:
+            target_mode = "managed" if original in {"managed", "station"} else original
+
+        self._set_interface_type(self.interface, target_mode)
+        subprocess.run(
+            ["nmcli", "device", "set", self.interface, "managed", "yes"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        self._monitor_enabled = False
 
     def _select_interface(self) -> str:
         interfaces = self._discover_wifi_interfaces()
