@@ -335,7 +335,7 @@ MENU_SCHEMA = {
             "label": "Bluetooth",
             "icon": "BT",
             "type": "group",
-            "description": "Bluetooth and BLE workflows.",
+            "description": "Bluetooth discovery workflow.",
             "items": [
                 {
                     "id": "bluetooth_scan",
@@ -343,26 +343,6 @@ MENU_SCHEMA = {
                     "type": "module",
                     "module_id": "bluetooth_scan",
                     "description": "Live Bluetooth discovery scan.",
-                    "controls": [
-                        {
-                            "id": "timeout",
-                            "label": "Timeout",
-                            "kind": "range",
-                            "arg": "--timeout",
-                            "min": 10,
-                            "max": 180,
-                            "step": 5,
-                            "default": 30,
-                            "suffix": "s",
-                        },
-                    ],
-                },
-                {
-                    "id": "bluetooth_poet",
-                    "label": "BLE Poet",
-                    "type": "module",
-                    "module_id": "bluetooth_poet",
-                    "description": "BLE Poet advertiser workflow.",
                     "controls": [
                         {
                             "id": "timeout",

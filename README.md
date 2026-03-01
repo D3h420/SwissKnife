@@ -12,7 +12,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Deauth - network deauthentication workflow
 - Portal - phishing-style portal with logging
 - Evil Twin - rogue AP + portal workflow
-- Bluetooth - BT scan + BLE Poet workflow
+- Bluetooth - BT scan workflow
 - Handshaker - PCAP capture + 4-way EAPOL validation
 - ARP scan - ARP table discovery (IP/MAC/OUI vendor)
 - IP.CAM finder - camera discovery by Wi-Fi OUI + LAN neighbor scan

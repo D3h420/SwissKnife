@@ -69,12 +69,6 @@ DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
         description="Live Bluetooth discovery scan.",
     ),
     ModuleSpec(
-        module_id="bluetooth_poet",
-        name="BLE Poet",
-        script="webui/actions/bluetooth_poet.py",
-        description="BLE advertiser workflow.",
-    ),
-    ModuleSpec(
         module_id="handshaker",
         name="Handshaker",
         script="modules/handshaker.py",

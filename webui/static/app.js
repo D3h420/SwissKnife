@@ -275,7 +275,7 @@ const FALLBACK_MENU = {
       label: "Bluetooth",
       icon: "BT",
       type: "group",
-      description: "Bluetooth and BLE workflows.",
+      description: "Bluetooth discovery workflow.",
       items: [
         {
           id: "bluetooth_scan",
@@ -283,26 +283,6 @@ const FALLBACK_MENU = {
           type: "module",
           module_id: "bluetooth_scan",
           description: "Live Bluetooth discovery scan.",
-          controls: [
-            {
-              id: "timeout",
-              label: "Timeout",
-              kind: "range",
-              arg: "--timeout",
-              min: 10,
-              max: 180,
-              step: 5,
-              default: 30,
-              suffix: "s",
-            },
-          ],
-        },
-        {
-          id: "bluetooth_poet",
-          label: "BLE Poet",
-          type: "module",
-          module_id: "bluetooth_poet",
-          description: "BLE Poet advertiser workflow.",
           controls: [
             {
               id: "timeout",
@@ -787,7 +767,7 @@ function isReconModule(moduleId) {
 }
 
 function isBluetoothModule(moduleId) {
-  return moduleId === "bluetooth_scan" || moduleId === "bluetooth_poet";
+  return moduleId === "bluetooth_scan";
 }
 
 function stripAnsi(text) {
@@ -1307,7 +1287,7 @@ function collectAutomationPreset(item, card) {
       selectedTargetIndex: null,
     };
   }
-  if (item.module_id === "bluetooth_scan" || item.module_id === "bluetooth_poet") {
+  if (item.module_id === "bluetooth_scan") {
     return null;
   }
   return null;
@@ -1413,7 +1393,6 @@ function applyAutomationPreset(taskId, moduleId, preset) {
   }
   if (moduleId === "bluetooth") {
     setBluetoothState(taskId, {
-      mode: String(preset.mode || "bt").toLowerCase() === "ble" ? "ble" : "bt",
       timeout: normalizePositiveInt(preset.timeout, 30, 5),
       menuChoiceSent: false,
       startSent: false,
@@ -1421,11 +1400,6 @@ function applyAutomationPreset(taskId, moduleId, preset) {
       scanStopSent: false,
       returnSent: false,
       backSent: false,
-      proceedSent: false,
-      poetStartSent: false,
-      poetStartedAt: 0,
-      poetStopRequested: false,
-      poetReturnSent: false,
       autoLock: false,
       lastActionByKey: {},
     });
@@ -2785,27 +2759,6 @@ function renderBluetoothScanResult(result, task) {
   dom.resultsView.appendChild(renderLogFeed(task.task_id));
 }
 
-function renderBluetoothPoetResult(result, task) {
-  dom.resultsView.innerHTML = "";
-
-  const summary = document.createElement("div");
-  summary.className = "result-summary";
-  summary.appendChild(createSummaryPill("Mode", "BLE Poet"));
-  summary.appendChild(createSummaryPill("Interface", result.interface || "-"));
-  summary.appendChild(createSummaryPill("Advertised Name", result.identity_name || "BLE Poet"));
-  if (result.device_count !== null && result.device_count !== undefined) {
-    summary.appendChild(createSummaryPill("Devices", result.device_count));
-  }
-  summary.appendChild(createSummaryPill("Duration", `${result.duration ?? 0}s`));
-  summary.appendChild(createSummaryPill("State", task.running ? "RUNNING" : "STOPPED"));
-  summary.appendChild(createSummaryPill("Task", task.task_id));
-  dom.resultsView.appendChild(summary);
-  if (Array.isArray(result.devices) && result.devices.length > 0) {
-    dom.resultsView.appendChild(buildBluetoothDevicesTable(result.devices));
-  }
-  dom.resultsView.appendChild(renderLogFeed(task.task_id));
-}
-
 function renderHandshakerResult(result, task) {
   dom.resultsView.innerHTML = "";
 
@@ -3299,7 +3252,6 @@ function setHandshakerState(taskId, patch) {
 function getBluetoothState(taskId) {
   if (!state.bluetoothStateByTask[taskId]) {
     state.bluetoothStateByTask[taskId] = {
-      mode: "bt",
       timeout: 30,
       menuChoiceSent: false,
       startSent: false,
@@ -3307,11 +3259,6 @@ function getBluetoothState(taskId) {
       scanStopSent: false,
       returnSent: false,
       backSent: false,
-      proceedSent: false,
-      poetStartSent: false,
-      poetStartedAt: 0,
-      poetStopRequested: false,
-      poetReturnSent: false,
       autoLock: false,
       lastActionByKey: {},
     };
@@ -3977,13 +3924,11 @@ async function maybeDriveBluetooth(task) {
   }
   const taskId = task.task_id;
   const bt = getBluetoothState(taskId);
-  const mode = String(bt.mode || "bt").toLowerCase() === "ble" ? "ble" : "bt";
   const timeoutSeconds = normalizePositiveInt(bt.timeout, 30, 5);
 
-  if (hasPrompt(taskId, /Your choice \(1-3\)/i) && !bt.menuChoiceSent) {
-    const choice = mode === "ble" ? "2" : "1";
+  if (hasPrompt(taskId, /Your choice \(1-2\)|Your choice \(1-3\)/i) && !bt.menuChoiceSent) {
     if (
-      await autoSendTaskInput(taskId, bt, "bt-menu-choice", choice, {
+      await autoSendTaskInput(taskId, bt, "bt-menu-choice", "1", {
         silentError: true,
       })
     ) {
@@ -3992,99 +3937,53 @@ async function maybeDriveBluetooth(task) {
     return;
   }
 
-  if (mode === "bt") {
-    if (hasPrompt(taskId, /Press Enter.*start live BT scan/i) && !bt.startSent) {
+  if (hasPrompt(taskId, /Press Enter.*start live BT scan/i) && !bt.startSent) {
+    if (
+      await autoSendTaskInput(taskId, bt, "bt-start-enter", "", {
+        cooldownMs: 1400,
+        silentError: true,
+      })
+    ) {
+      setBluetoothState(taskId, { startSent: true, scanStartedAt: Date.now() });
+    }
+    return;
+  }
+
+  if (bt.startSent && !bt.scanStopSent && bt.scanStartedAt > 0) {
+    const elapsedMs = Date.now() - bt.scanStartedAt;
+    if (elapsedMs >= timeoutSeconds * 1000) {
       if (
-        await autoSendTaskInput(taskId, bt, "bt-start-enter", "", {
-          cooldownMs: 1400,
+        await autoSendTaskInput(taskId, bt, "bt-stop-enter", "", {
+          cooldownMs: 2000,
           silentError: true,
         })
       ) {
-        setBluetoothState(taskId, { startSent: true, scanStartedAt: Date.now() });
-      }
-      return;
-    }
-
-    if (bt.startSent && !bt.scanStopSent && bt.scanStartedAt > 0) {
-      const elapsedMs = Date.now() - bt.scanStartedAt;
-      if (elapsedMs >= timeoutSeconds * 1000) {
-        if (
-          await autoSendTaskInput(taskId, bt, "bt-stop-enter", "", {
-            cooldownMs: 2000,
-            silentError: true,
-          })
-        ) {
-          setBluetoothState(taskId, { scanStopSent: true });
-        }
-        return;
-      }
-    }
-
-    if (hasPrompt(taskId, /Press Enter to return/i) && !bt.returnSent) {
-      if (
-        await autoSendTaskInput(taskId, bt, "bt-return-enter", "", {
-          cooldownMs: 1400,
-          silentError: true,
-        })
-      ) {
-        setBluetoothState(taskId, { returnSent: true });
-      }
-      return;
-    }
-  } else {
-    if (hasPrompt(taskId, /Proceed.*\(Y\/N\)/i) && !bt.proceedSent) {
-      if (
-        await autoSendTaskInput(taskId, bt, "ble-proceed", "y", {
-          silentError: true,
-        })
-      ) {
-        setBluetoothState(taskId, { proceedSent: true });
-      }
-      return;
-    }
-
-    if (hasPrompt(taskId, /Press Enter.*start BLE Poet/i) && !bt.poetStartSent) {
-      if (
-        await autoSendTaskInput(taskId, bt, "ble-start-enter", "", {
-          cooldownMs: 1400,
-          silentError: true,
-        })
-      ) {
-        setBluetoothState(taskId, { poetStartSent: true, poetStartedAt: Date.now() });
-      }
-      return;
-    }
-
-    if (bt.poetStartSent && !bt.poetStopRequested && bt.poetStartedAt > 0) {
-      const elapsedMs = Date.now() - bt.poetStartedAt;
-      if (elapsedMs >= timeoutSeconds * 1000) {
-        setBluetoothState(taskId, { poetStopRequested: true });
-        await stopTaskById(taskId);
-        return;
-      }
-    }
-
-    if (hasPrompt(taskId, /Press Enter to return/i) && !bt.poetReturnSent) {
-      if (
-        await autoSendTaskInput(taskId, bt, "ble-return-enter", "", {
-          cooldownMs: 1400,
-          silentError: true,
-        })
-      ) {
-        setBluetoothState(taskId, { poetReturnSent: true });
+        setBluetoothState(taskId, { scanStopSent: true });
       }
       return;
     }
   }
 
+  if (hasPrompt(taskId, /Press Enter to return/i) && !bt.returnSent) {
+    if (
+      await autoSendTaskInput(taskId, bt, "bt-return-enter", "", {
+        cooldownMs: 1400,
+        silentError: true,
+      })
+    ) {
+      setBluetoothState(taskId, { returnSent: true });
+    }
+    return;
+  }
+
   if (
-    hasPrompt(taskId, /Your choice \(1-3\)/i)
+    hasPrompt(taskId, /Your choice \(1-2\)|Your choice \(1-3\)/i)
     && bt.menuChoiceSent
     && !bt.backSent
-    && ((mode === "bt" && bt.returnSent) || (mode === "ble" && bt.poetReturnSent))
+    && bt.returnSent
   ) {
     if (
-      await autoSendTaskInput(taskId, bt, "bt-back-menu", "3", {
+      await autoSendTaskInput(taskId, bt, "bt-back-menu", "2", {
         silentError: true,
       })
     ) {
@@ -4161,12 +4060,7 @@ function touchPadRowsForModule(moduleId) {
     return [
       [
         { label: "Scan BT", payload: "1", success: "Sent scan BT" },
-        { label: "BLE Poet", payload: "2", success: "Sent BLE Poet" },
-        { label: "Back", payload: "3", success: "Sent back" },
-      ],
-      [
-        { label: "Yes", payload: "y", success: "Sent yes" },
-        { label: "No", payload: "n", success: "Sent no" },
+        { label: "Back", payload: "2", success: "Sent back" },
         { label: "Enter", payload: "", success: "Sent Enter", accent: true },
       ],
     ];
@@ -4338,7 +4232,7 @@ function renderResultView() {
     empty.textContent = state.selectedSectionId === "recon"
       ? "Run scanner or sniffer to see recon output."
       : state.selectedSectionId === "bluetooth"
-      ? "Run Scan BT or BLE Poet to see Bluetooth output."
+      ? "Run Scan BT to see Bluetooth output."
       : "Select task to see module output.";
     dom.resultsView.appendChild(empty);
     return;
@@ -4362,10 +4256,6 @@ function renderResultView() {
   if (isBluetoothModule(task.module_id)) {
     if (result?.kind === "bluetooth_scan") {
       renderBluetoothScanResult(result, task);
-      return;
-    }
-    if (result?.kind === "bluetooth_poet") {
-      renderBluetoothPoetResult(result, task);
       return;
     }
     renderBluetoothLiveStatus(task, result);
