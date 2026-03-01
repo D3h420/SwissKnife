@@ -81,6 +81,12 @@ DEFAULT_MODULES: Tuple[ModuleSpec, ...] = (
         description="4-way handshake capture and validation workflow.",
     ),
     ModuleSpec(
+        module_id="arp_scan",
+        name="ARP scan",
+        script="modules/arp_scanner.py",
+        description="ARP table discovery workflow.",
+    ),
+    ModuleSpec(
         module_id="ip_cam",
         name="IP.CAM finder",
         script="modules/ipcam_finder.py",

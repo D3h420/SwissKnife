@@ -318,9 +318,8 @@ MENU_SCHEMA = {
                     "id": "arp_scan",
                     "label": "ARP scan",
                     "type": "module",
-                    "description": "Under construction module.",
-                    "disabled": True,
-                    "under_construction": True,
+                    "module_id": "arp_scan",
+                    "description": "ARP table discovery workflow.",
                 },
                 {
                     "id": "ip_cam",

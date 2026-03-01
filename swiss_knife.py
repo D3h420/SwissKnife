@@ -65,7 +65,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "6": {"name": "Karma (under construction)", "file": "", "disabled": True},
     "spacer_after_basic": {"name": "", "separator": True},
     "inside": {"name": "-INSIDE-", "separator": True},
-    "7": {"name": "ARP scan", "file": "", "disabled": True},
+    "7": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
     "8": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
     "spacer": {"name": "", "separator": True},
     "9": {"name": "Back", "file": ""},
