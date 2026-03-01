@@ -437,6 +437,8 @@ class IpCamFinder(Module):
             elapsed = max(0, int(time.time() - started))
             self._render_summary(elapsed)
             self._emit_webui_result(elapsed)
+            if self._selected_interface:
+                run_command(["nmcli", "device", "set", self._selected_interface, "managed", "yes"], timeout=8.0)
             self._restore_signal_handlers()
 
     def stop(self) -> None:
@@ -700,7 +702,7 @@ class IpCamFinder(Module):
             if not MAC_RE.fullmatch(bssid):
                 continue
 
-            ssid_value = nmcli_unescape(ssid_raw)
+            ssid_value = nmcli_unescape(ssid_raw).strip()
             security_value = nmcli_unescape(security_raw).strip() or "OPEN"
             if security_value in {"--", "(none)"}:
                 security_value = "OPEN"
@@ -788,7 +790,7 @@ class IpCamFinder(Module):
                 continue
 
             if line.startswith("SSID:"):
-                ssid = line.split("SSID:", 1)[1]
+                ssid = line.split("SSID:", 1)[1].strip()
                 current["ssid"] = ssid if ssid else "<hidden>"
                 continue
 
@@ -899,7 +901,8 @@ class IpCamFinder(Module):
         self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
         self._prepare_network_manager(interface)
 
-        ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
+        clean_ssid = (network.ssid or "").strip()
+        ssid_target = clean_ssid if clean_ssid and clean_ssid != "<hidden>" else ""
         attempts: List[List[str]] = []
         bssid_visible = self._is_bssid_visible(interface, network.bssid)
 
@@ -962,7 +965,7 @@ class IpCamFinder(Module):
                 if item not in deduped:
                     deduped.append(item)
             hint = self._build_visibility_hint(interface, ssid_target, network.bssid)
-            message = deduped[0]
+            message = deduped[-1]
             if hint:
                 message = f"{message} ({hint})"
             raise RuntimeError(message)
@@ -1000,6 +1003,7 @@ class IpCamFinder(Module):
 
         conf_content = self._build_wpa_supplicant_config(ssid, password, bssid)
         temp_path = ""
+        success = False
         try:
             with tempfile.NamedTemporaryFile("w", prefix=f"swissknife_{interface}_", suffix=".conf", delete=False, encoding="utf-8") as handle:
                 handle.write(conf_content)
@@ -1023,6 +1027,7 @@ class IpCamFinder(Module):
             subnet = self._wait_for_ipv4(interface, timeout=20.0)
             if not subnet:
                 return "Associated, but no IPv4 lease was obtained."
+            success = True
             return ""
         finally:
             if temp_path and os.path.exists(temp_path):
@@ -1030,6 +1035,9 @@ class IpCamFinder(Module):
                     os.remove(temp_path)
                 except OSError:
                     pass
+            if not success:
+                run_command(["pkill", "-f", f"wpa_supplicant.*{interface}"], timeout=4.0)
+                run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
 
     def _build_wpa_supplicant_config(self, ssid: str, password: str, bssid: str) -> str:
         safe_ssid = ssid.replace("\\", "\\\\").replace('"', '\\"')
@@ -1100,7 +1108,7 @@ class IpCamFinder(Module):
         if result.returncode != 0:
             return ""
 
-        wanted_ssid = ssid or ""
+        wanted_ssid = (ssid or "").strip()
         wanted_bssid = normalize_mac(bssid)
         seen_ssids: List[str] = []
         ssid_match = False
@@ -1110,7 +1118,7 @@ class IpCamFinder(Module):
             if not line:
                 continue
             ssid_raw, bssid_raw = split_nmcli_escaped(line, 2)
-            current_ssid = nmcli_unescape(ssid_raw)
+            current_ssid = nmcli_unescape(ssid_raw).strip()
             current_bssid = normalize_mac(nmcli_unescape(bssid_raw))
             if current_ssid and current_ssid not in seen_ssids:
                 seen_ssids.append(current_ssid)
