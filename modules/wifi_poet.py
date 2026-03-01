@@ -16,7 +16,7 @@ import threading
 import time
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Any
 
 # Rich import with fallback
 try:
@@ -103,7 +103,7 @@ EXTRA_LINES = [
     "I mnie, dziecinę, uczyła pacierza i szyła.",
 ]
 
-DISCLAIMER = "⚠️  LABORATORIUM: Rzeczywista emisja beaconów WiFi. Tylko do użytku prywatnego."
+DISCLAIMER = "⚠️ LABORATORIUM: Rzeczywista emisja beaconów WiFi. Tylko do użytku prywatnego."
 
 @dataclass
 class FakeAP:
@@ -121,7 +121,7 @@ class WiFiPoet(Module):
         
         # Parametry domyślne
         self.interface = "auto"
-        self.original_interface = None  # zapamiętujemy oryginalną nazwę
+        self.original_interface = None
         self.count = 24
         self.duration = 0
         self.refresh = 0.6
@@ -130,7 +130,7 @@ class WiFiPoet(Module):
         self.channels = [1, 6, 11]
         self.channel_hop_sec = 15.0
         self.max_rows = 12
-        self.beacon_rate = 100
+        self.beacon_rate = 50  # wolniej dla stabilności
         self.power_level = 30
         
         # Stan wewnętrzny
@@ -148,7 +148,8 @@ class WiFiPoet(Module):
         self._monitor_enabled = False
         self._packets_sent = 0
         self._detected_by_scanner = False
-        self._monitor_interface = None  # nazwa interfejsu w trybie monitor
+        self._monitor_interface = None
+        self._using_airmon = False  # czy używamy airmon-ng
         
         self.console = Console()
 
@@ -164,7 +165,7 @@ class WiFiPoet(Module):
         self.channel = max(1, min(14, int(self.channel)))
         self.channels = [ch for ch in self.channels if 1 <= ch <= 14] or [self.channel]
         self.channel_hop_sec = max(3.0, float(self.channel_hop_sec))
-        self.beacon_rate = max(20, min(1000, int(self.beacon_rate)))
+        self.beacon_rate = max(20, min(500, int(self.beacon_rate)))  # max 500 dla stabilności
         
         self._current_channel = self.channels[0]
         self._build_fake_aps()
@@ -195,33 +196,41 @@ class WiFiPoet(Module):
             self._restore_signal_handlers()
             return
 
-        # Wybierz interfejs (zapamiętujemy oryginalną nazwę)
-        self.original_interface = self._select_interface()
-        if not self.original_interface:
+        # Wybierz interfejs
+        chosen = self._select_interface()
+        if not chosen:
             self.status = "error"
-            self._error = "Nie znaleziono interfejsu Wi-Fi."
+            self._error = "Nie wybrano interfejsu."
             self.console.print(f"[red]{self._error}[/red]")
             self._restore_signal_handlers()
             return
 
-        # Zapisz oryginalny tryb
-        self._original_mode = self._get_interface_mode(self.original_interface)
+        # Sprawdź czy wybrany interfejs jest już w trybie monitor
+        current_mode = self._get_interface_mode(chosen).lower()
         
-        # Przełącz na tryb monitor - to może zmienić nazwę interfejsu!
-        self.console.print(f"[yellow]Przełączanie {self.original_interface} w tryb monitor...[/yellow]")
-        
-        monitor_iface = self._enable_monitor_mode(self.original_interface)
-        if not monitor_iface:
-            self.status = "error"
-            self._error = f"Nie udało się włączyć trybu monitor na {self.original_interface}."
-            self.console.print(f"[red]{self._error}[/red]")
-            self._restore_signal_handlers()
-            return
-        
-        # Używamy interfejsu monitor do dalszej pracy
-        self.interface = monitor_iface
-        self._monitor_enabled = True
-        self.console.print(f"[green]✓ Tryb monitor aktywny na {self.interface}[/green]")
+        if current_mode == "monitor":
+            # Już jest w trybie monitor - używamy go bezpośrednio
+            self.console.print(f"[green]✓ Interfejs {chosen} jest już w trybie monitor[/green]")
+            self.interface = chosen
+            self.original_interface = chosen
+            self._monitor_enabled = True
+            self._using_airmon = False
+        else:
+            # Trzeba przełączyć na monitor
+            self.original_interface = chosen
+            self.console.print(f"[yellow]Przełączanie {chosen} w tryb monitor...[/yellow]")
+            
+            monitor_iface = self._enable_monitor_mode(chosen)
+            if not monitor_iface:
+                self.status = "error"
+                self._error = f"Nie udało się włączyć trybu monitor na {chosen}."
+                self.console.print(f"[red]{self._error}[/red]")
+                self._restore_signal_handlers()
+                return
+            
+            self.interface = monitor_iface
+            self._monitor_enabled = True
+            self.console.print(f"[green]✓ Tryb monitor aktywny na {self.interface}[/green]")
 
         # Wyświetl nagłówek
         self.console.print(
@@ -229,7 +238,7 @@ class WiFiPoet(Module):
                 "🔴 WiFi Poet - RZECZYWISTA EMISJA BEACONÓW\n"
                 "Pan Tadeusz na liście sieci WiFi",
                 border_style="red",
-                title="⚠️  UWAGA",
+                title="⚠️ UWAGA",
             )
         )
         
@@ -238,7 +247,8 @@ class WiFiPoet(Module):
 
         try:
             # Uruchom emisję
-            self._start_engine()
+            if not self._start_engine():
+                raise RuntimeError("Nie udało się uruchomić mdk4")
             
             self.console.print("[bold green]✓ EMISJA AKTYWNA! Otwórz listę WiFi w telefonie.[/bold green]")
             self.console.print("[bold cyan]Naciśnij Ctrl+C aby zatrzymać.[/bold cyan]")
@@ -291,22 +301,20 @@ class WiFiPoet(Module):
     def _enable_monitor_mode(self, iface: str) -> Optional[str]:
         """
         Włącza tryb monitor i zwraca NAZWĘ interfejsu monitor.
-        airmon-ng często zmienia nazwę na np. wlan1mon
         """
-        # Sprawdź czy już jest w trybie monitor
-        current_mode = self._get_interface_mode(iface).lower()
-        if current_mode == "monitor":
+        # Sprawdź ponownie (na wszelki wypadek)
+        if self._get_interface_mode(iface).lower() == "monitor":
             return iface
         
-        # Metoda 1: airmon-ng (to zmienia nazwę interfejsu!)
+        # Metoda 1: airmon-ng
         try:
-            # Najpierw zabij procesy które mogą przeszkadzać
+            # Zabij procesy
             subprocess.run(["airmon-ng", "check", "kill"], 
                          stdout=subprocess.DEVNULL, 
                          stderr=subprocess.DEVNULL, 
                          check=False)
             
-            # Uruchom airmon-ng start
+            # Uruchom airmon-ng
             result = subprocess.run(
                 ["airmon-ng", "start", iface],
                 capture_output=True,
@@ -315,108 +323,103 @@ class WiFiPoet(Module):
             )
             
             if result.returncode == 0:
-                # airmon-ng informuje o nowej nazwie interfejsu
-                # Szukamy wzorca: "(monitor mode enabled on) wlan1mon"
                 output = result.stdout + result.stderr
                 
-                # Różne wzorce które mogą wystąpić
+                # Szukaj nowej nazwy interfejsu
                 patterns = [
                     r"monitor mode enabled on (\w+)",
                     r"enabled on (\w+mon)",
                     r"\(mode enabled on\) (\w+)",
-                    r"monitor mode vif enabled on (\w+)",
                 ]
                 
                 for pattern in patterns:
                     match = re.search(pattern, output, re.IGNORECASE)
                     if match:
                         new_iface = match.group(1)
-                        self.console.print(f"[green]✓ airmon-ng utworzył interfejs: {new_iface}[/green]")
+                        self._using_airmon = True
                         return new_iface
                 
-                # Jeśli nie znaleźliśmy wzorca, ale airmon-ng succeeded,
-                # spróbujmy znaleźć nowy interfejs przez iw dev
-                time.sleep(1)  # daj czas na utworzenie
+                # Jeśli nie znaleziono, poczekaj i sprawdź dostępne interfejsy
+                time.sleep(2)
                 interfaces = self._discover_wifi_interfaces()
-                
-                # Szukamy interfejsu który kończy się na "mon" lub zawiera "mon"
                 for mon_iface in interfaces:
-                    if mon_iface.endswith("mon") or "mon" in mon_iface:
-                        if mon_iface != iface:  # inny niż oryginalny
-                            self.console.print(f"[green]✓ Znaleziono interfejs monitor: {mon_iface}[/green]")
-                            return mon_iface
+                    if mon_iface.endswith("mon") and mon_iface != iface:
+                        self._using_airmon = True
+                        return mon_iface
         except Exception as e:
-            self.console.print(f"[yellow]airmon-ng nie zadziałał: {e}[/yellow]")
+            self.console.print(f"[yellow]airmon-ng: {e}[/yellow]")
         
         # Metoda 2: ręczne ustawienie (bez zmiany nazwy)
         self.console.print("[yellow]Próba ręcznego ustawienia trybu monitor...[/yellow]")
         try:
-            # Wyłącz interfejs
             subprocess.run(["ip", "link", "set", iface, "down"], check=False)
             time.sleep(0.5)
             
-            # Ustaw typ na monitor
-            subprocess.run(
+            # Usuń istniejące tryby
+            subprocess.run(["iw", iface, "set", "type", "managed"], 
+                         stdout=subprocess.DEVNULL, 
+                         stderr=subprocess.DEVNULL, 
+                         check=False)
+            time.sleep(0.3)
+            
+            # Ustaw monitor
+            result = subprocess.run(
                 ["iw", iface, "set", "type", "monitor"],
-                check=False,
                 capture_output=True,
+                text=True,
+                check=False,
             )
             
-            # Włącz interfejs
-            subprocess.run(["ip", "link", "set", iface, "up"], check=False)
-            time.sleep(1)
-            
-            # Sprawdź czy się udało
-            if self._get_interface_mode(iface).lower() == "monitor":
-                self.console.print(f"[green]✓ Ręcznie ustawiono monitor na {iface}[/green]")
-                return iface
+            if result.returncode == 0:
+                subprocess.run(["ip", "link", "set", iface, "up"], check=False)
+                time.sleep(1)
+                
+                # Sprawdź czy się udało
+                if self._get_interface_mode(iface).lower() == "monitor":
+                    self._using_airmon = False
+                    return iface
         except Exception as e:
-            self.console.print(f"[red]Ręczne ustawienie nie powiodło się: {e}[/red]")
+            self.console.print(f"[red]Błąd ręcznego ustawienia: {e}[/red]")
         
         return None
 
     def _disable_monitor_mode(self) -> None:
-        """Wyłącza tryb monitor i przywraca oryginalny interfejs"""
+        """Wyłącza tryb monitor"""
         if not self._monitor_enabled or not self.original_interface:
             return
         
         self.console.print("[yellow]Wyłączanie trybu monitor...[/yellow]")
         
-        # Metoda 1: airmon-ng stop
-        try:
-            # Jeśli mamy interfejs monitor (np. wlan1mon)
-            if self.interface and self.interface != self.original_interface:
+        if self._using_airmon and self.interface != self.original_interface:
+            # Mamy interfejs z airmon-ng
+            try:
                 subprocess.run(
                     ["airmon-ng", "stop", self.interface],
                     capture_output=True,
                     check=False,
                 )
                 self.console.print(f"[green]✓ Zatrzymano {self.interface}[/green]")
-        except:
-            pass
-        
-        # Metoda 2: ręczne przywrócenie
-        try:
-            # Wyłącz interfejs monitor jeśli istnieje
-            if self.interface and self.interface != self.original_interface:
+            except:
+                pass
+            
+            # Upewnij się że oryginalny interfejs jest włączony
+            try:
+                subprocess.run(["ip", "link", "set", self.original_interface, "up"], check=False)
+            except:
+                pass
+        else:
+            # Ręcznie ustawiony monitor - przywróć managed
+            try:
                 subprocess.run(["ip", "link", "set", self.interface, "down"], check=False)
-            
-            # Przywróć oryginalny interfejs
-            subprocess.run(["ip", "link", "set", self.original_interface, "down"], check=False)
-            time.sleep(0.5)
-            
-            # Ustaw tryb managed
-            target = self._original_mode if self._original_mode != "unknown" else "managed"
-            subprocess.run(
-                ["iw", self.original_interface, "set", "type", target],
-                check=False,
-            )
-            
-            # Włącz interfejs
-            subprocess.run(["ip", "link", "set", self.original_interface, "up"], check=False)
-            self.console.print(f"[green]✓ Przywrócono {self.original_interface}[/green]")
-        except Exception as e:
-            self.console.print(f"[red]Błąd przy przywracaniu: {e}[/red]")
+                time.sleep(0.5)
+                
+                target = self._original_mode if self._original_mode not in ["unknown", "monitor"] else "managed"
+                subprocess.run(["iw", self.interface, "set", "type", target], check=False)
+                
+                subprocess.run(["ip", "link", "set", self.interface, "up"], check=False)
+                self.console.print(f"[green]✓ Przywrócono {self.interface}[/green]")
+            except Exception as e:
+                self.console.print(f"[red]Błąd przy przywracaniu: {e}[/red]")
         
         # Przywróć menedżery sieci
         subprocess.run(["systemctl", "start", "NetworkManager"], 
@@ -426,87 +429,143 @@ class WiFiPoet(Module):
         
         self._monitor_enabled = False
 
-    def _start_engine(self) -> None:
-        """Uruchamia mdk4 do emisji beaconów"""
+    def _start_engine(self) -> bool:
+        """Uruchamia mdk4 do emisji beaconów - zwraca True jeśli sukces"""
         self._last_hop_ts = time.time()
         
         # Przygotuj plik z SSID
         self._ssid_list_file = f"/tmp/wifi_poet_{os.getpid()}.txt"
-        with open(self._ssid_list_file, "w", encoding="utf-8") as f:
-            for ap in self._fake_aps:
-                f.write(f"{ap.ssid}\n")
+        try:
+            with open(self._ssid_list_file, "w", encoding="utf-8") as f:
+                for ap in self._fake_aps:
+                    f.write(f"{ap.ssid}\n")
+        except Exception as e:
+            self.console.print(f"[red]Błąd zapisu pliku SSID: {e}[/red]")
+            return False
         
-        # Oblicz interwał beaconów
-        beacon_interval = max(10, min(1000, int(1000 / self.beacon_rate)))
+        # Oblicz interwał beaconów (ms)
+        beacon_interval = max(20, min(500, int(1000 / self.beacon_rate)))
         
+        # Podstawowa komenda mdk4 - Z POPRAWNĄ SKŁADNIĄ!
         cmd = [
-            "mdk4", self.interface, "b",
+            "mdk4",
+            self.interface,
+            "b",  # tryb beacon flood
             "-c", str(self._current_channel),
             "-f", self._ssid_list_file,
-            "-s", str(beacon_interval),
+            "-s", str(beacon_interval),  # szybkość
             "-m",  # spoof MAC
             "-t",  # używaj własnych BSSID
-            "-w",  # WPA2
         ]
         
+        # Opcjonalnie dodaj parametry
         if self.power_level > 0:
             cmd.extend(["-p", str(self.power_level)])
         
-        self.console.print(f"[dim]Uruchamianie: {' '.join(cmd)}[/dim]")
+        # Pokaż komendę
+        cmd_str = " ".join(cmd)
+        self.console.print(f"[dim]Uruchamianie: {cmd_str}[/dim]")
         
         try:
+            # Uruchom proces
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL,
                 preexec_fn=os.setsid,
                 text=True,
                 bufsize=1,
             )
             
+            # Daj czas na start
             time.sleep(2)
             
+            # Sprawdź czy proces żyje
             if self._proc.poll() is not None:
-                stderr = self._proc.stderr.read() if self._proc.stderr else ""
-                raise RuntimeError(f"mdk4 nie wystartował: {stderr}")
+                # Proces umarł - odczytaj błąd
+                stderr = ""
+                if self._proc.stderr:
+                    stderr = self._proc.stderr.read()
+                self.console.print(f"[red]mdk4 nie wystartował: {stderr}[/red]")
+                return False
             
-            # Uruchom wątek monitorujący
+            # Uruchom wątek monitorujący wyjście
             self._start_monitor_thread()
+            return True
             
         except Exception as e:
-            raise RuntimeError(f"Błąd uruchamiania mdk4: {e}")
+            self.console.print(f"[red]Błąd uruchamiania mdk4: {e}[/red]")
+            return False
 
     def _start_monitor_thread(self) -> None:
         """Monitoruje wyjście mdk4"""
         def monitor():
             if not self._proc or not self._proc.stderr:
                 return
-            for line in self._proc.stderr:
-                if not line or self._stop_event.is_set():
-                    break
-                if "Packets sent" in line:
-                    try:
-                        packets = int(re.search(r'Packets sent: (\d+)', line).group(1))
-                        self._packets_sent = packets
-                    except:
-                        pass
-                elif "sent" in line.lower():
-                    self._detected_by_scanner = True
+            
+            try:
+                for line in self._proc.stderr:
+                    if not line or self._stop_event.is_set():
+                        break
+                    
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    # Parsuj statystyki
+                    if "Packets sent" in line:
+                        try:
+                            match = re.search(r'Packets sent: (\d+)', line)
+                            if match:
+                                self._packets_sent = int(match.group(1))
+                        except:
+                            pass
+                    elif "sent" in line.lower() and not self._detected_by_scanner:
+                        self._detected_by_scanner = True
+            except:
+                pass
         
         thread = threading.Thread(target=monitor, daemon=True)
+        thread.daemon = True
         thread.start()
+
+    def _stop_engine(self) -> None:
+        """Zatrzymuje mdk4"""
+        if self._proc:
+            try:
+                # Wyślij SIGTERM do grupy procesów
+                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
+                self._proc.wait(timeout=3)
+            except:
+                try:
+                    # Jeśli nie zadziała, SIGKILL
+                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
+                except:
+                    pass
+            self._proc = None
+        
+        # Usuń plik tymczasowy
+        if self._ssid_list_file and os.path.exists(self._ssid_list_file):
+            try:
+                os.remove(self._ssid_list_file)
+            except:
+                pass
 
     def _build_view(self, elapsed: int):
         """Buduje widok na żywo"""
+        # Status
         status_lines = [
             f"🔴 EMISJA RZECZYWISTA - sprawdź telefon!",
             f"📊 Wersów: {len(self._fake_aps)}",
             f"⏱️  Czas: {elapsed}s",
-            f"📡 Interfejs: {self.interface} (z {self.original_interface})",
+            f"📡 Interfejs: {self.interface}",
             f"📻 Kanał: {self._current_channel}",
             f"⚡ Szybkość: {self.beacon_rate} beaconów/s",
-            f"📦 Wysłano: ~{self._packets_sent} pakietów",
         ]
+        
+        if self._packets_sent > 0:
+            status_lines.append(f"📦 Wysłano: {self._packets_sent} pakietów")
         
         if self._detected_by_scanner:
             status_lines.append("✅ WYKRYTO W ETERZE!")
@@ -519,6 +578,7 @@ class WiFiPoet(Module):
             border_style="red",
         )
         
+        # Tabela SSID
         table = Table(title="📜 Pan Tadeusz na liście WiFi")
         table.add_column("#", width=3)
         table.add_column("SSID (wers z poematu)", width=50)
@@ -538,34 +598,16 @@ class WiFiPoet(Module):
         if len(self._fake_aps) > self.max_rows:
             table.add_row("...", f"+{len(self._fake_aps)-self.max_rows} więcej", "", "", "")
         
+        # Instrukcja
         tip = Panel(
             "📱 SPRAWDŹ TELEFON!\n"
             "Otwórz listę sieci Wi-Fi - zobaczysz fragmenty Pana Tadeusza.\n"
-            "Odśwież listę kilka razy jeśli nie widzisz.",
+            "Jeśli nie widzisz, odśwież listę kilka razy.",
             title="📱 Instrukcja",
             border_style="green",
         )
         
         return Group(header, table, tip)
-
-    def _stop_engine(self) -> None:
-        """Zatrzymuje mdk4"""
-        if self._proc:
-            try:
-                os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
-                self._proc.wait(timeout=3)
-            except:
-                try:
-                    os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
-                except:
-                    pass
-            self._proc = None
-        
-        if self._ssid_list_file and os.path.exists(self._ssid_list_file):
-            try:
-                os.remove(self._ssid_list_file)
-            except:
-                pass
 
     def _build_fake_aps(self) -> None:
         """Buduje listę AP z fragmentami poematu"""
@@ -600,7 +642,9 @@ class WiFiPoet(Module):
             [0x02, 0x14, 0xBF],
             [0x02, 0x18, 0xF8],
             [0x02, 0x1E, 0x52],
-        ][offset % 4]
+            [0x02, 0x23, 0x76],
+            [0x02, 0x26, 0x5E],
+        ][offset % 6]
         
         octets = oui + [rng.randint(0, 255) for _ in range(3)]
         return ":".join(f"{b:02X}" for b in octets)
@@ -651,20 +695,15 @@ class WiFiPoet(Module):
         if not interfaces:
             return ""
         
-        if self.interface and self.interface != "auto":
-            return self.interface if self.interface in interfaces else ""
-        
-        if len(interfaces) == 1:
-            return interfaces[0]
-        
-        # Wyświetl menu
-        self.console.print("\n[dostępne interfejsy WiFi]")
+        # Filtruj - preferuj interfejsy bez "mon" jeśli to możliwe
+        # ale pokazujemy wszystkie
+        self.console.print("")
         for i, iface in enumerate(interfaces, 1):
             mode = self._get_interface_mode(iface)
             self.console.print(f"  {i}. {iface} [{mode}]")
         
         while True:
-            choice = Prompt.ask("Wybierz numer", default="1")
+            choice = Prompt.ask("\nWybierz numer", default="1")
             if choice.isdigit():
                 idx = int(choice) - 1
                 if 0 <= idx < len(interfaces):
@@ -727,13 +766,16 @@ class WiFiPoet(Module):
             f"Status: {self.status}",
             f"Czas emisji: {elapsed}s",
             f"Wysłano wersów: {len(self._fake_aps)}",
-            f"Przybliżona liczba pakietów: ~{self._packets_sent}",
+            f"Pakietów: ~{self._packets_sent}",
             "",
             "Fragmenty które były emitowane:",
         ]
         
         for i, ap in enumerate(self._fake_aps[:5], 1):
             lines.append(f"  {i}. {ap.ssid}")
+        
+        if self._error:
+            lines.append(f"\nBłąd: {self._error}")
         
         lines.append(f"\n{DISCLAIMER}")
         
@@ -748,13 +790,16 @@ class WiFiPoet(Module):
             "running": running,
             "status": self.status,
             "interface": self.interface,
-            "original_interface": self.original_interface,
             "duration": elapsed_sec,
             "channel": self._current_channel,
             "device_count": len(self._fake_aps),
             "packets_sent": self._packets_sent,
+            "error": self._error,
         }
-        print(f"[webui-result] {json.dumps(payload)}", flush=True)
+        try:
+            print(f"[webui-result] {json.dumps(payload)}", flush=True)
+        except:
+            pass
 
     def stop(self) -> None:
         self.running = False
@@ -788,7 +833,8 @@ def main():
     parser.add_argument("--count", type=int, default=24, help="Liczba SSID")
     parser.add_argument("--duration", type=int, default=0, help="Czas emisji (sekundy)")
     parser.add_argument("--channel-hop", type=float, default=15.0, help="Zmiana kanału co (s)")
-    parser.add_argument("--beacon-rate", type=int, default=100, help="Beaconów na sekundę")
+    parser.add_argument("--beacon-rate", type=int, default=50, help="Beaconów na sekundę")
+    parser.add_argument("--channel", type=int, default=6, help="Początkowy kanał")
     
     args = parser.parse_args()
     
@@ -799,6 +845,7 @@ def main():
         duration=args.duration,
         channel_hop_sec=args.channel_hop,
         beacon_rate=args.beacon_rate,
+        channel=args.channel,
     )
     
     try:
@@ -806,6 +853,9 @@ def main():
     except KeyboardInterrupt:
         module.stop()
         print("\nZatrzymano.")
+    except Exception as e:
+        print(f"\nBłąd: {e}")
+        module.stop()
 
 
 __all__ = ['WiFiPoet']
