@@ -52,7 +52,7 @@ MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon", "icon": "🛰️"},
     "2": {"name": "Attacks", "action": "attacks", "icon": "⚔️"},
     "3": {"name": "Bluetooth", "action": "bluetooth", "icon": "📶"},
-    "4": {"name": "Exit", "action": "exit", "icon": "🚪"},
+    "0": {"name": "Exit", "action": "exit", "icon": "🚪"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -69,7 +69,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "8": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
     "9": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
     "spacer": {"name": "", "separator": True},
-    "10": {"name": "Back", "file": ""},
+    "0": {"name": "Back", "file": ""},
 }
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
@@ -637,13 +637,13 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (1-10): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (0-9): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
             continue
 
-        if choice == "10":
+        if choice == "0":
             break
 
         if ATTACKS_MENU[choice].get("disabled"):
@@ -684,13 +684,13 @@ def main() -> None:
                 show_webui_hint=True,
                 webui_status=webui_status_line(webui_service),
             )
-            choice = input(style("Your choice (1-4): ", STYLE_BOLD)).strip()
+            choice = input(style("Your choice (0-3): ", STYLE_BOLD)).strip()
 
             if choice not in MAIN_MENU:
                 print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
                 continue
 
-            if choice == "4":
+            if choice == "0":
                 print()
                 print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
                 print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))

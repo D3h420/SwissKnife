@@ -774,12 +774,12 @@ def menu_loop() -> None:
         logging.info("")
         logging.info(style("Bluetooth menu:", STYLE_BOLD))
         logging.info("  %s", color_text("[1] Scan BT devices", COLOR_HIGHLIGHT))
-        logging.info("  %s", color_text("[2] Back", COLOR_HIGHLIGHT))
-        choice = input(style("Your choice (1-2): ", STYLE_BOLD)).strip()
+        logging.info("  %s", color_text("[0] Back", COLOR_HIGHLIGHT))
+        choice = input(style("Your choice (0-1): ", STYLE_BOLD)).strip()
         if choice == "1":
             scan_flow()
             continue
-        if choice == "2":
+        if choice == "0":
             return
         logging.warning("Invalid choice.")
 

@@ -281,20 +281,88 @@ class WiFiPoet(Module):
         octets[0] = (octets[0] | 0x02) & 0xFE
         return ":".join(f"{value:02X}" for value in octets)
 
+    def _discover_wifi_interfaces(self) -> List[str]:
+        interfaces: List[str] = []
+
+        iw_result = subprocess.run(
+            ["iw", "dev"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if iw_result.returncode == 0:
+            for raw in iw_result.stdout.splitlines():
+                line = raw.strip()
+                if line.startswith("Interface "):
+                    name = line.split("Interface", 1)[1].strip()
+                    if name and name != "lo" and name not in interfaces:
+                        interfaces.append(name)
+
+        if not interfaces:
+            ip_result = subprocess.run(
+                ["ip", "-o", "link", "show"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            if ip_result.returncode == 0:
+                for raw in ip_result.stdout.splitlines():
+                    if ": " not in raw:
+                        continue
+                    name = raw.split(": ", 1)[1].split(":", 1)[0]
+                    if name.startswith("wl") and name not in interfaces:
+                        interfaces.append(name)
+
+        return interfaces
+
+    def _get_interface_mode(self, iface: str) -> str:
+        result = subprocess.run(
+            ["iw", "dev", iface, "info"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            return "unknown"
+        for raw in result.stdout.splitlines():
+            line = raw.strip()
+            if line.startswith("type "):
+                return line.split("type", 1)[1].strip()
+        return "unknown"
+
+    def _is_interface_up(self, iface: str) -> bool:
+        result = subprocess.run(
+            ["ip", "link", "show", "dev", iface],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+        return result.returncode == 0 and ("state UP" in result.stdout or " UP " in result.stdout)
+
     def _select_interface(self) -> str:
-        # ... (pozostawiam bez zmian – Twój kod wyboru interfejsu jest bardzo dobry)
-        # (wklejam go tutaj tylko po to, by całość była kompletna – możesz zostawić swoją wersję)
         interfaces = self._discover_wifi_interfaces()
         if not interfaces:
             return ""
+        if self.interface and self.interface != "auto":
+            return self.interface if self.interface in interfaces else ""
         if len(interfaces) == 1:
             return interfaces[0]
+
         table = Table(title="Available Wi-Fi Interfaces")
         table.add_column("#", justify="right")
         table.add_column("Interface", style="bold cyan")
+        table.add_column("Mode")
+        table.add_column("State")
         for idx, iface in enumerate(interfaces, start=1):
-            table.add_row(str(idx), iface)
+            mode = self._get_interface_mode(iface)
+            state = "UP" if self._is_interface_up(iface) else "DOWN"
+            table.add_row(str(idx), iface, mode, state)
         self.console.print(table)
+
         while True:
             raw = Prompt.ask("Select interface number", default="1", console=self.console).strip()
             if raw.isdigit():

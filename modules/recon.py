@@ -1169,10 +1169,10 @@ def recon_menu(vendors: Dict[str, str]) -> None:
         logging.info(style("Recon menu:", STYLE_BOLD))
         logging.info("  %s", color_text("[1] Scaner (aircrack-ng)", COLOR_HIGHLIGHT))
         logging.info("  %s", color_text("[2] Sniffer (aircrack-ng)", COLOR_HIGHLIGHT))
-        logging.info("  %s", color_text("[3] Back", COLOR_HIGHLIGHT))
+        logging.info("  %s", color_text("[0] Back", COLOR_HIGHLIGHT))
 
-        choice = input(style("Your choice (1-3): ", STYLE_BOLD)).strip()
-        if choice == "3":
+        choice = input(style("Your choice (0-2): ", STYLE_BOLD)).strip()
+        if choice == "0":
             return
 
         if choice == "1":
@@ -1266,11 +1266,11 @@ def recon_menu(vendors: Dict[str, str]) -> None:
 
                 logging.info("")
                 logging.info(style("Options:", STYLE_BOLD))
-                logging.info("  %s", color_text("[1] Back to main menu", COLOR_HIGHLIGHT))
+                logging.info("  %s", color_text("[0] Back to main menu", COLOR_HIGHLIGHT))
                 logging.info("  %s", color_text("[2] Resume sniffer", COLOR_HIGHLIGHT))
                 while True:
-                    selection = input(style("Your choice (1-2): ", STYLE_BOLD)).strip()
-                    if selection in ("1", "2"):
+                    selection = input(style("Your choice (0/2): ", STYLE_BOLD)).strip()
+                    if selection in ("0", "2"):
                         break
                     logging.warning("Invalid choice.")
                 if selection == "2":
