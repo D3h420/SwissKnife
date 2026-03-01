@@ -779,35 +779,63 @@ class IpCamFinder(Module):
 
         ssid_target = network.ssid if network.ssid and network.ssid != "<hidden>" else ""
         attempts: List[List[str]] = []
+        bssid_visible = self._is_bssid_visible(interface, network.bssid)
 
         if ssid_target:
-            cmd = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
-            if password:
-                cmd += ["password", password]
-            cmd += ["bssid", network.bssid]
-            attempts.append(cmd)
-
             cmd_no_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
             if password:
                 cmd_no_bssid += ["password", password]
             attempts.append(cmd_no_bssid)
 
-        cmd_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", network.bssid, "ifname", interface]
-        if password:
-            cmd_bssid += ["password", password]
-        attempts.append(cmd_bssid)
+            if bssid_visible:
+                cmd_with_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", ssid_target, "ifname", interface]
+                if password:
+                    cmd_with_bssid += ["password", password]
+                cmd_with_bssid += ["bssid", network.bssid]
+                attempts.append(cmd_with_bssid)
+
+        if bssid_visible:
+            cmd_bssid = ["nmcli", "--wait", "30", "device", "wifi", "connect", network.bssid, "ifname", interface]
+            if password:
+                cmd_bssid += ["password", password]
+            attempts.append(cmd_bssid)
+        elif not ssid_target:
+            raise RuntimeError(
+                f"Target BSSID {network.bssid} is not visible on {interface}. "
+                "Select network again or move closer to AP."
+            )
 
         last_error = ""
+        errors: List[str] = []
         for cmd in attempts:
             run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=8.0)
-            time.sleep(0.8)
+            time.sleep(1.2)
             result = run_command(cmd, timeout=35.0)
             if result.returncode == 0:
                 self.console.print("[green]Wi-Fi connected.[/green]")
                 return
             last_error = (result.stderr or result.stdout or "").strip()
+            if last_error:
+                errors.append(last_error)
 
+        if errors:
+            deduped = []
+            for item in errors:
+                if item not in deduped:
+                    deduped.append(item)
+            raise RuntimeError(deduped[0])
         raise RuntimeError(last_error or "Failed to connect to selected Wi-Fi network.")
+
+    def _is_bssid_visible(self, interface: str, bssid: str) -> bool:
+        target = normalize_mac(bssid)
+        result = run_command(
+            ["nmcli", "-t", "-f", "BSSID", "device", "wifi", "list", "ifname", interface],
+            timeout=8.0,
+        )
+        if result.returncode != 0:
+            return False
+        visible = {normalize_mac(line.strip()) for line in result.stdout.splitlines() if line.strip()}
+        return target in visible
 
     def _ensure_client_mode(self, interface: str) -> None:
         mode = self._get_interface_mode(interface).lower()
