@@ -9,7 +9,6 @@ import time
 import subprocess
 import threading
 import logging
-import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -734,11 +733,6 @@ def packet_matches_bssid(packet, bssid: str) -> bool:
     }
 
 
-def emit_webui_result(payload: Dict) -> None:
-    """Emit a structured payload consumed by WebUI task result endpoint."""
-    print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
-
-
 KEY_INFO_PAIRWISE = 1 << 3
 KEY_INFO_INSTALL = 1 << 4
 KEY_INFO_ACK = 1 << 5
@@ -1298,23 +1292,6 @@ def main() -> None:
             logging.info(f"  → {summary['path']}")
             logging.info("  Detected full handshakes: %s", summary["detected_handshakes"])
             logging.info("Open in Wireshark and filter: eapol")
-
-        if os.environ.get("SWISSKNIFE_WEBUI_TASK") == "1":
-            emit_webui_result(
-                {
-                    "kind": "handshaker_capture",
-                    "running": False,
-                    "timestamp": int(time.time()),
-                    "interface": interface,
-                    "ssid": target_ap.ssid,
-                    "bssid": target_ap.bssid,
-                    "channel": target_ap.channel,
-                    "capture_duration": capture_total_sec,
-                    "deauth_duration": deauth_sec,
-                    "ok": bool(summary),
-                    "summary": summary or {},
-                }
-            )
 
     finally:
         if changed_to_monitor:

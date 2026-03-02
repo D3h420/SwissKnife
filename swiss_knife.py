@@ -10,13 +10,8 @@ import subprocess
 import sys
 import shutil
 import platform
-import socket
-import time
-import signal
-import secrets
 import importlib.util
-from dataclasses import dataclass
-from typing import Dict, List, Optional, TextIO
+from typing import Dict, List, Optional
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -74,21 +69,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
-WEBUI_REQUIREMENTS = os.path.join("webui", "requirements.txt")
 RUNTIME_REQUIREMENTS = "requirements.txt"
-WEBUI_PORT = 8000
-WEBUI_HOST = "0.0.0.0"
-WEBUI_AP_INTERFACE = "builtin"
-WEBUI_AP_IP = "10.10.0.1"
-WEBUI_TOKEN_HEADER = "X-SwissKnife-Token"
-WEBUI_LOG_FILE = os.path.join("webui", "webui_server.log")
-WEBUI_TOKEN_FILE = os.path.join("webui", ".webui_token")
-WEBUI_LAUNCHER_PID_ENV = "SWISSKNIFE_LAUNCHER_PID"
-WEBUI_REQUIRED_PY_MODULES: List[str] = [
-    "fastapi",
-    "uvicorn",
-    "pydantic",
-]
 RUNTIME_REQUIRED_PY_MODULES: List[str] = [
     "scapy",
 ]
@@ -152,17 +133,6 @@ PACKAGE_MAPS = {
         "ip": "iproute2",
     },
 }
-
-
-@dataclass
-class WebUIProcess:
-    process: subprocess.Popen
-    token: str
-    log_handle: TextIO
-    log_path: str
-    token_path: str
-    token_created: bool
-    token_persistent: bool
 
 
 def base_dir() -> str:
@@ -337,42 +307,6 @@ def ensure_runtime_python_dependencies() -> bool:
     return True
 
 
-def ensure_webui_python_dependencies() -> bool:
-    missing = missing_python_modules(WEBUI_REQUIRED_PY_MODULES)
-    if not missing:
-        return True
-
-    print(color_text(f"Missing Python modules for Web UI: {', '.join(missing)}", COLOR_HIGHLIGHT))
-    requirements_path = script_path(WEBUI_REQUIREMENTS)
-    if not os.path.isfile(requirements_path):
-        print(color_text(f"Requirements file not found: {requirements_path}", COLOR_HIGHLIGHT))
-        return False
-
-    if not pip_available():
-        print(color_text("pip is not available for this Python interpreter.", COLOR_HIGHLIGHT))
-        print(style(f"Install manually: {sys.executable or 'python3'} -m ensurepip --upgrade", STYLE_BOLD))
-        return False
-
-    if not prompt_yes_no("Install Web UI Python dependencies now? [Y/n]: "):
-        print(style(f"Install manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
-        print(style(f"If needed on Debian/Ubuntu: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
-        return False
-
-    if not install_python_dependencies(requirements_path):
-        print(color_text("Automatic Python dependency installation failed.", COLOR_HIGHLIGHT))
-        print(style(f"Try manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
-        print(style(f"Or: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
-        return False
-
-    still_missing = missing_python_modules(WEBUI_REQUIRED_PY_MODULES)
-    if still_missing:
-        print(color_text(f"Web UI modules still missing after install: {', '.join(still_missing)}", COLOR_HIGHLIGHT))
-        return False
-
-    print(color_text("Web UI Python dependencies are ready.\n", COLOR_SUCCESS))
-    return True
-
-
 def report_dependencies() -> List[str]:
     missing = []
     print_banner()
@@ -415,225 +349,11 @@ def script_path(filename: str) -> str:
     return os.path.join(base_dir(), filename)
 
 
-def detect_primary_ipv4() -> Optional[str]:
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            sock.connect(("1.1.1.1", 80))
-            ip_addr = sock.getsockname()[0]
-            if ip_addr and not ip_addr.startswith("127."):
-                return ip_addr
-    except OSError:
-        pass
-
-    try:
-        result = subprocess.run(
-            ["ip", "-4", "-o", "addr", "show", "scope", "global"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if "inet" in parts:
-                    index = parts.index("inet")
-                    if index + 1 < len(parts):
-                        return parts[index + 1].split("/", 1)[0]
-    except Exception:
-        pass
-    return None
-
-
-def webui_hint_line(port: int = WEBUI_PORT) -> str:
-    ip_addr = detect_primary_ipv4() or "<device-ip>"
-    hostname = socket.gethostname().strip() or "swissknife"
-    local_host = hostname if hostname.endswith(".local") else f"{hostname}.local"
-    return (
-        f"Web UI AP: http://{WEBUI_AP_IP}:{port}  |  "
-        f"LAN: http://{ip_addr}:{port}  |  http://{local_host}:{port}"
-    )
-
-
-def read_file_tail(path: str, max_lines: int = 20) -> str:
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            lines = handle.readlines()
-    except OSError:
-        return "(log unavailable)"
-    if not lines:
-        return "(no log output)"
-    return "".join(lines[-max_lines:]).strip() or "(no log output)"
-
-
-def stop_background_process(process: Optional[subprocess.Popen]) -> None:
-    if not process or process.poll() is not None:
-        return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except Exception:
-        try:
-            process.terminate()
-        except Exception:
-            return
-    try:
-        process.wait(timeout=2.5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except Exception:
-        try:
-            process.kill()
-        except Exception:
-            return
-    try:
-        process.wait(timeout=1.0)
-    except subprocess.TimeoutExpired:
-        pass
-
-
-def _read_persistent_webui_token(path: str) -> str:
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            token = handle.read().strip()
-    except OSError:
-        return ""
-
-    if len(token) < 16 or any(char.isspace() for char in token):
-        return ""
-    return token
-
-
-def _write_persistent_webui_token(path: str, token: str) -> bool:
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(token + "\n")
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except OSError:
-        return False
-    return True
-
-
-def load_or_create_webui_token() -> tuple[str, str, bool, bool]:
-    token_path = script_path(WEBUI_TOKEN_FILE)
-    existing = _read_persistent_webui_token(token_path)
-    if existing:
-        return existing, token_path, False, True
-
-    generated = secrets.token_urlsafe(20)
-    if _write_persistent_webui_token(token_path, generated):
-        return generated, token_path, True, True
-    return generated, token_path, True, False
-
-
-def start_webui_background() -> Optional[WebUIProcess]:
-    token, token_path, token_created, token_persistent = load_or_create_webui_token()
-    log_path = script_path(WEBUI_LOG_FILE)
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    log_handle = open(log_path, "w", encoding="utf-8")
-    env = os.environ.copy()
-    env[WEBUI_LAUNCHER_PID_ENV] = str(os.getpid())
-    cmd = [
-        sys.executable or "python3",
-        "-m",
-        "webui.server",
-        "--host",
-        WEBUI_HOST,
-        "--port",
-        str(WEBUI_PORT),
-        "--ap-interface",
-        WEBUI_AP_INTERFACE,
-        "--ap-ip",
-        WEBUI_AP_IP,
-        "--token",
-        token,
-    ]
-    process: Optional[subprocess.Popen] = None
-    try:
-        process = subprocess.Popen(
-            cmd,
-            cwd=base_dir(),
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            text=True,
-            start_new_session=True,
-            env=env,
-        )
-        time.sleep(1.4)
-        if process.poll() is not None:
-            log_tail = read_file_tail(log_path)
-            print(color_text("Web UI failed to start in background.", COLOR_HIGHLIGHT))
-            print(color_text(f"Log file: {log_path}", COLOR_DIM))
-            if log_tail:
-                print(color_text(log_tail, COLOR_DIM))
-            log_handle.close()
-            return None
-        return WebUIProcess(
-            process=process,
-            token=token,
-            log_handle=log_handle,
-            log_path=log_path,
-            token_path=token_path,
-            token_created=token_created,
-            token_persistent=token_persistent,
-        )
-    except OSError as exc:
-        if process and process.poll() is None:
-            stop_background_process(process)
-        log_handle.close()
-        print(color_text(f"Failed to launch Web UI background process: {exc}", COLOR_HIGHLIGHT))
-        return None
-
-
-def stop_webui_background(service: Optional[WebUIProcess]) -> None:
-    if not service:
-        return
-    stop_background_process(service.process)
-    try:
-        service.log_handle.close()
-    except Exception:
-        pass
-
-
-def webui_status_line(service: Optional[WebUIProcess]) -> str:
-    if not service:
-        return f"Web UI autostart unavailable (check {script_path(WEBUI_LOG_FILE)})"
-    if service.process.poll() is not None:
-        return f"Web UI stopped (check {service.log_path})"
-    if service.token_created and service.token_persistent:
-        return (
-            f"Web UI token saved to {service.token_path} "
-            f"({WEBUI_TOKEN_HEADER}): {service.token}"
-        )
-    if service.token_persistent:
-        return (
-            f"Web UI token loaded from {service.token_path} "
-            "(browser remembers it after first login)"
-        )
-    return (
-        f"Web UI token ({WEBUI_TOKEN_HEADER}, ephemeral): {service.token}"
-    )
-
-
 def print_header(
     title: str,
     menu: Dict[str, Dict[str, str]],
-    show_webui_hint: bool = False,
-    webui_status: str = "",
 ) -> None:
     print(color_text(ASCII_HEADER, COLOR_HEADER))
-    if show_webui_hint:
-        print(color_text(webui_hint_line(), COLOR_DIM))
-        if webui_status:
-            print(color_text(webui_status, COLOR_DIM))
-        print()
     print(style(title, STYLE_BOLD))
     print()
     for key, meta in menu.items():
@@ -709,51 +429,32 @@ def main() -> None:
     if not ensure_runtime_python_dependencies():
         print(color_text("Some modules may fail without runtime Python dependencies.", COLOR_HIGHLIGHT))
 
-    webui_service: Optional[WebUIProcess] = None
-    if ensure_webui_python_dependencies():
-        webui_service = start_webui_background()
-    else:
-        print(color_text("Web UI autostart skipped (missing Python dependencies).", COLOR_HIGHLIGHT))
+    while True:
+        print_header("Main menu:", MAIN_MENU)
+        choice = input(style("Your choice (0-3): ", STYLE_BOLD)).strip()
 
-    try:
-        while True:
-            if webui_service and webui_service.process.poll() is not None:
-                print(color_text("Web UI stopped unexpectedly. Restarting background service...", COLOR_HIGHLIGHT))
-                stop_webui_background(webui_service)
-                webui_service = start_webui_background()
+        if choice not in MAIN_MENU:
+            print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
+            continue
 
-            print_header(
-                "Main menu:",
-                MAIN_MENU,
-                show_webui_hint=True,
-                webui_status=webui_status_line(webui_service),
-            )
-            choice = input(style("Your choice (0-3): ", STYLE_BOLD)).strip()
+        if choice == "0":
+            print()
+            print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
+            print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
+            print()
+            break
 
-            if choice not in MAIN_MENU:
-                print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
-                continue
+        if choice == "1":
+            run_child(RECON_SCRIPT)
+            continue
 
-            if choice == "0":
-                print()
-                print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
-                print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
-                print()
-                break
+        if choice == "2":
+            attacks_menu()
+            continue
 
-            if choice == "1":
-                run_child(RECON_SCRIPT)
-                continue
-
-            if choice == "2":
-                attacks_menu()
-                continue
-
-            if choice == "3":
-                run_child(BLUETOOTH_SCRIPT)
-                continue
-    finally:
-        stop_webui_background(webui_service)
+        if choice == "3":
+            run_child(BLUETOOTH_SCRIPT)
+            continue
 
 
 if __name__ == "__main__":

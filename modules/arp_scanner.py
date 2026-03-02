@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import ipaddress
-import json
 import os
 import re
 import shutil
@@ -382,7 +381,6 @@ class ArpScanner(Module):
             if self._wpa_managed_interface:
                 self._cleanup_wpa_runtime(self._wpa_managed_interface, restore_managed=True)
             self._render_summary(elapsed)
-            self._emit_webui_result(elapsed)
             if self._selected_interface:
                 run_command(["nmcli", "device", "set", self._selected_interface, "managed", "yes"], timeout=8.0)
             self._restore_signal_handlers()
@@ -1538,37 +1536,6 @@ class ArpScanner(Module):
             lines.append(f"Error: {self._error}")
 
         self.console.print(Panel("\n".join(lines), title="Summary", border_style="green" if devices else "cyan"))
-
-    def _emit_webui_result(self, elapsed_sec: int) -> None:
-        if os.environ.get("SWISSKNIFE_WEBUI_TASK") != "1":
-            return
-        payload = {
-            "kind": "arp_scan",
-            "running": False,
-            "timestamp": int(time.time()),
-            "status": self.status,
-            "interface": self._selected_interface,
-            "connected_interface": self._connected_interface or self._selected_interface,
-            "target_ssid": self._target_network.ssid if self._target_network else "",
-            "subnet": self._connected_subnet,
-            "duration": int(elapsed_sec),
-            "device_count": len(self._devices_by_ip),
-            "devices": [
-                {
-                    "ip": item.ip,
-                    "mac": item.mac,
-                    "vendor": item.vendor,
-                    "state": item.state,
-                    "source": item.source,
-                }
-                for item in sorted(
-                    self._devices_by_ip.values(),
-                    key=lambda row: tuple(int(part) for part in row.ip.split(".")),
-                )
-            ],
-            "error": self._error,
-        }
-        print(f"[webui-result] {json.dumps(payload, ensure_ascii=False)}", flush=True)
 
     @staticmethod
     def _freq_to_channel(freq_mhz: int) -> Optional[int]:
