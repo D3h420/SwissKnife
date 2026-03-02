@@ -395,12 +395,42 @@ class WiFiPoet(Module):
 
     def _get_interface_mode(self, iface: str) -> str:
         try:
-            out = subprocess.run(["iw", "dev", iface, "info"], capture_output=True, text=True).stdout
-            for line in out.splitlines():
-                if line.startswith("type "):
-                    return line.split("type", 1)[1].strip()
+            result = subprocess.run(
+                ["iw", "dev", iface, "info"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                for raw_line in result.stdout.splitlines():
+                    line = raw_line.strip()
+                    if line.startswith("type "):
+                        return line.split("type", 1)[1].strip().lower()
         except:
             pass
+
+        # Fallback for environments where `iw dev <iface> info` is incomplete.
+        try:
+            result = subprocess.run(
+                ["iwconfig", iface],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                for raw_line in result.stdout.splitlines():
+                    if "Mode:" not in raw_line:
+                        continue
+                    mode_part = raw_line.split("Mode:", 1)[1].strip()
+                    mode = mode_part.split()[0].strip().lower()
+                    if mode:
+                        return mode
+        except FileNotFoundError:
+            pass
+
+        # Common monitor naming convention used by airmon-ng.
+        if iface.lower().endswith("mon"):
+            return "monitor"
         return "unknown"
 
     def _get_interface_chipset(self, iface: str) -> str:
