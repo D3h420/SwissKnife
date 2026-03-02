@@ -17,6 +17,7 @@ import time
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
+
 # Rich import with fallback
 try:
     from rich.console import Console, Group
@@ -27,31 +28,38 @@ try:
     RICH_AVAILABLE = True
 except ModuleNotFoundError:
     RICH_AVAILABLE = False
-# Fallback classes
+
+# Fallback classes (dostosowane – bez .fit)
 class Console:
     def print(self, *args, **kwargs): print(*args if args else '')
+
 class Panel:
     def __init__(self, renderable, **kwargs): self.renderable = renderable
     def __str__(self): return str(self.renderable) if self.renderable else ''
+
 class Table:
     def __init__(self, **kwargs): self.rows = []
     def add_column(self, name, **kwargs): pass
     def add_row(self, *vals): self.rows.append(vals)
     def __str__(self): return '\n'.join(str(r) for r in self.rows)
+
 class Group:
     def __init__(self, *objs): self.objs = objs
     def __str__(self): return "\n\n".join(str(o) for o in self.objs)
+
 class Live:
     def __init__(self, renderable, **kwargs): self.renderable = renderable
     def __enter__(self): print(self.renderable); return self
     def update(self, renderable, **kwargs): print(renderable)
     def __exit__(self, *args): pass
+
 class Prompt:
     @staticmethod
     def ask(prompt, default=None, **kwargs):
         sys.stdout.write(prompt + (f" [{default}]" if default else "") + ": ")
         sys.stdout.flush()
         return sys.stdin.readline().strip() or default or ''
+
 # Import bazowego modułu SwissKnife
 try:
     from core.module import Module
@@ -64,6 +72,7 @@ except ImportError:
             self.running = False
         def stop(self): self.running = False; self.status = "stopped"
         def execute(self): pass
+
 # Pan Tadeusz - pełna inwokacja
 PAN_TADEUSZ_LINES = [
     "Litwo! Ojczyzno moja! ty jesteś jak zdrowie;",
@@ -89,6 +98,7 @@ PAN_TADEUSZ_LINES = [
     "A wszystko przepasane, jakby wstęgą, miedzą",
     "Zieloną, na niej z rzadka ciche grusze siedzą.",
 ]
+
 # Dodatkowe linie
 EXTRA_LINES = [
     "Śród takich pól przed laty, nad błękitnym Niemnem",
@@ -98,7 +108,9 @@ EXTRA_LINES = [
     "I matka, w wieńcu z jarzyn, w ogrodzie robiła",
     "I mnie, dziecinę, uczyła pacierza i szyła.",
 ]
+
 DISCLAIMER = "⚠️ LABORATORIUM: Rzeczywista emisja beaconów WiFi. Tylko do użytku prywatnego."
+
 @dataclass
 class FakeAP:
     ssid: str
@@ -106,6 +118,7 @@ class FakeAP:
     channel: int
     power: int = 0
     status: str = "📡 EMITUJE"
+
 class WiFiPoet(Module):
     """Główna klasa modułu WiFi Poet - TYLKO TRYB RZECZYWISTY"""
     def __init__(self):
@@ -121,7 +134,7 @@ class WiFiPoet(Module):
         self.channels = [1, 6, 11]
         self.channel_hop_sec = 15.0
         self.max_rows = 12
-        self.beacon_rate = 50 # pps dla stabilności
+        self.beacon_rate = 50  # pps dla stabilności
         self.power_level = 30
         # Stan wewnętrzny
         self.running = False
@@ -139,10 +152,10 @@ class WiFiPoet(Module):
         self._packets_sent = 0
         self._detected_by_scanner = False
         self._monitor_interface = None
-        self._using_airmon = False # czy używamy airmon-ng
+        self._using_airmon = False
         self.console = Console()
+
     def configure(self, **kwargs):
-        """Konfiguruje moduł"""
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
@@ -152,32 +165,32 @@ class WiFiPoet(Module):
         self.channel = max(1, min(14, int(self.channel)))
         self.channels = [ch for ch in self.channels if 1 <= ch <= 14] or [self.channel]
         self.channel_hop_sec = max(3.0, float(self.channel_hop_sec))
-        self.beacon_rate = max(20, min(500, int(self.beacon_rate))) # max 500 dla stabilności
+        self.beacon_rate = max(20, min(500, int(self.beacon_rate)))
         self._current_channel = self.channels[0]
         self._build_fake_aps()
         return self
+
     def execute(self) -> None:
-        """Główna metoda uruchamiająca"""
         started = time.time()
         self.running = True
         self.status = "running"
         self._stop_event.clear()
         self._install_signal_handlers()
-        # Sprawdź uprawnienia root
+
         if os.geteuid() != 0:
             self.status = "error"
             self._error = "WiFi Poet wymaga uprawnień root (sudo)."
             self.console.print(f"[red]{self._error}[/red]")
             self._restore_signal_handlers()
             return
-        # Sprawdź czy mdk4 jest zainstalowany
+
         if not self._tool_exists("mdk4"):
             self.status = "error"
             self._error = "mdk4 nie jest zainstalowany. Zainstaluj: sudo apt install mdk4"
             self.console.print(f"[red]{self._error}[/red]")
             self._restore_signal_handlers()
             return
-        # Wybierz interfejs
+
         chosen = self._select_interface()
         if not chosen:
             self.status = "error"
@@ -185,17 +198,15 @@ class WiFiPoet(Module):
             self.console.print(f"[red]{self._error}[/red]")
             self._restore_signal_handlers()
             return
-        # Sprawdź czy wybrany interfejs jest już w trybie monitor
+
         current_mode = self._get_interface_mode(chosen).lower()
         if current_mode == "monitor":
-            # Już jest w trybie monitor - używamy go bezpośrednio
             self.console.print(f"[green]✓ Interfejs {chosen} jest już w trybie monitor[/green]")
             self.interface = chosen
             self.original_interface = chosen
             self._monitor_enabled = True
             self._using_airmon = False
         else:
-            # Trzeba przełączyć na monitor
             self.original_interface = chosen
             self.console.print(f"[yellow]Przełączanie {chosen} w tryb monitor...[/yellow]")
             monitor_iface = self._enable_monitor_mode(chosen)
@@ -208,24 +219,26 @@ class WiFiPoet(Module):
             self.interface = monitor_iface
             self._monitor_enabled = True
             self.console.print(f"[green]✓ Tryb monitor aktywny na {self.interface}[/green]")
-        # Wyświetl nagłówek
+
+        # Nagłówek – bez .fit
         self.console.print(
-            Panel.fit(
+            Panel(
                 "🔴 WiFi Poet - RZECZYWISTA EMISJA BEACONÓW\n"
                 "Pan Tadeusz na liście sieci WiFi",
                 border_style="red",
                 title="⚠️ UWAGA",
+                expand=False,
             )
         )
         self.console.print("[bold red]🔴 EMISJA W ETERZE - sprawdź telefon![/bold red]")
         self.console.print(f"[dim]{DISCLAIMER}[/dim]")
+
         try:
-            # Uruchom emisję
             if not self._start_engine():
                 raise RuntimeError("Nie udało się uruchomić mdk4")
             self.console.print("[bold green]✓ EMISJA AKTYWNA! Otwórz listę WiFi w telefonie.[/bold green]")
             self.console.print("[bold cyan]Naciśnij Ctrl+C aby zatrzymać.[/bold cyan]")
-            # Główna pętla
+
             with Live(
                 self._build_view(0),
                 console=self.console,
@@ -253,7 +266,6 @@ class WiFiPoet(Module):
             self._error = str(exc)
             self.console.print(f"[red]Błąd: {exc}[/red]")
         finally:
-            # Sprzątanie
             self.running = False
             self._stop_event.set()
             self._stop_engine()
@@ -263,21 +275,17 @@ class WiFiPoet(Module):
             self._render_summary(elapsed)
             self._emit_webui_result(running=False, elapsed_sec=elapsed)
             self._restore_signal_handlers()
+
+    # Reszta metod bez zmian (tylko _start_engine, _build_view itd. – jak w poprzedniej wersji)
+
     def _enable_monitor_mode(self, iface: str) -> Optional[str]:
-        """
-        Włącza tryb monitor i zwraca NAZWĘ interfejsu monitor.
-        """
-        # Sprawdź ponownie (na wszelki wypadek)
         if self._get_interface_mode(iface).lower() == "monitor":
             return iface
-        # Metoda 1: airmon-ng
         try:
-            # Zabij procesy
             subprocess.run(["airmon-ng", "check", "kill"],
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL,
                            check=False)
-            # Uruchom airmon-ng
             result = subprocess.run(
                 ["airmon-ng", "start", iface],
                 capture_output=True,
@@ -286,7 +294,6 @@ class WiFiPoet(Module):
             )
             if result.returncode == 0:
                 output = result.stdout + result.stderr
-                # Szukaj nowej nazwy interfejsu
                 patterns = [
                     r"monitor mode enabled on (\w+)",
                     r"enabled on (\w+mon)",
@@ -298,7 +305,6 @@ class WiFiPoet(Module):
                         new_iface = match.group(1)
                         self._using_airmon = True
                         return new_iface
-                # Jeśli nie znaleziono, poczekaj i sprawdź dostępne interfejsy
                 time.sleep(2)
                 interfaces = self._discover_wifi_interfaces()
                 for mon_iface in interfaces:
@@ -307,18 +313,16 @@ class WiFiPoet(Module):
                         return mon_iface
         except Exception as e:
             self.console.print(f"[yellow]airmon-ng: {e}[/yellow]")
-        # Metoda 2: ręczne ustawienie (bez zmiany nazwy)
+
         self.console.print("[yellow]Próba ręcznego ustawienia trybu monitor...[/yellow]")
         try:
             subprocess.run(["ip", "link", "set", iface, "down"], check=False)
             time.sleep(0.5)
-            # Usuń istniejące tryby
             subprocess.run(["iw", iface, "set", "type", "managed"],
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL,
                            check=False)
             time.sleep(0.3)
-            # Ustaw monitor
             result = subprocess.run(
                 ["iw", iface, "set", "type", "monitor"],
                 capture_output=True,
@@ -328,36 +332,30 @@ class WiFiPoet(Module):
             if result.returncode == 0:
                 subprocess.run(["ip", "link", "set", iface, "up"], check=False)
                 time.sleep(1)
-                # Sprawdź czy się udało
                 if self._get_interface_mode(iface).lower() == "monitor":
                     self._using_airmon = False
                     return iface
         except Exception as e:
             self.console.print(f"[red]Błąd ręcznego ustawienia: {e}[/red]")
         return None
+
     def _disable_monitor_mode(self) -> None:
-        """Wyłącza tryb monitor"""
         if not self._monitor_enabled or not self.original_interface:
             return
         self.console.print("[yellow]Wyłączanie trybu monitor...[/yellow]")
         if self._using_airmon and self.interface != self.original_interface:
-            # Mamy interfejs z airmon-ng
             try:
-                subprocess.run(
-                    ["airmon-ng", "stop", self.interface],
-                    capture_output=True,
-                    check=False,
-                )
+                subprocess.run(["airmon-ng", "stop", self.interface],
+                               capture_output=True,
+                               check=False)
                 self.console.print(f"[green]✓ Zatrzymano {self.interface}[/green]")
             except:
                 pass
-            # Upewnij się że oryginalny interfejs jest włączony
             try:
                 subprocess.run(["ip", "link", "set", self.original_interface, "up"], check=False)
             except:
                 pass
         else:
-            # Ręcznie ustawiony monitor - przywróć managed
             try:
                 subprocess.run(["ip", "link", "set", self.interface, "down"], check=False)
                 time.sleep(0.5)
@@ -367,16 +365,14 @@ class WiFiPoet(Module):
                 self.console.print(f"[green]✓ Przywrócono {self.interface}[/green]")
             except Exception as e:
                 self.console.print(f"[red]Błąd przy przywracaniu: {e}[/red]")
-        # Przywróć menedżery sieci
         subprocess.run(["systemctl", "start", "NetworkManager"],
                        stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL,
                        check=False)
         self._monitor_enabled = False
+
     def _start_engine(self) -> bool:
-        """Uruchamia mdk4 do emisji beaconów - zwraca True jeśli sukces"""
         self._last_hop_ts = time.time()
-        # Przygotuj plik z MAC i SSID
         self._ssid_list_file = f"/tmp/wifi_poet_{os.getpid()}.txt"
         try:
             with open(self._ssid_list_file, "w", encoding="utf-8") as f:
@@ -385,28 +381,27 @@ class WiFiPoet(Module):
         except Exception as e:
             self.console.print(f"[red]Błąd zapisu pliku SSID: {e}[/red]")
             return False
-        # Ustaw txpower jeśli >0
+
         if self.power_level > 0:
             try:
                 subprocess.run(["iw", "dev", self.interface, "set", "txpower", "fixed", str(self.power_level * 100)], check=True)
                 self.console.print(f"[green]✓ Ustawiono txpower na {self.power_level} dBm[/green]")
             except Exception as e:
                 self.console.print(f"[yellow]Nie udało się ustawić txpower: {e}[/yellow]")
-        # Podstawowa komenda mdk4
+
         cmd = [
             "mdk4",
             self.interface,
-            "b",  # tryb beacon flood
+            "b",
             "-c", str(self._current_channel),
-            "-v", self._ssid_list_file,  # plik z MAC SSID
-            "-s", str(self.beacon_rate),  # pps
-            "-m",  # valid MACs (opcjonalne, ale zostawiam)
+            "-v", self._ssid_list_file,
+            "-s", str(self.beacon_rate),
+            "-m",
         ]
-        # Pokaż komendę
         cmd_str = " ".join(cmd)
         self.console.print(f"[dim]Uruchamianie: {cmd_str}[/dim]")
+
         try:
-            # Uruchom proces
             self._proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -416,24 +411,18 @@ class WiFiPoet(Module):
                 text=True,
                 bufsize=1,
             )
-            # Daj czas na start
             time.sleep(2)
-            # Sprawdź czy proces żyje
             if self._proc.poll() is not None:
-                # Proces umarł - odczytaj błąd
-                stderr = ""
-                if self._proc.stderr:
-                    stderr = self._proc.stderr.read()
+                stderr = self._proc.stderr.read() if self._proc.stderr else ""
                 self.console.print(f"[red]mdk4 nie wystartował: {stderr}[/red]")
                 return False
-            # Uruchom wątek monitorujący wyjście
             self._start_monitor_thread()
             return True
         except Exception as e:
             self.console.print(f"[red]Błąd uruchamiania mdk4: {e}[/red]")
             return False
+
     def _start_monitor_thread(self) -> None:
-        """Monitoruje wyjście mdk4"""
         def monitor():
             if not self._proc or not self._proc.stderr:
                 return
@@ -444,7 +433,6 @@ class WiFiPoet(Module):
                     line = line.strip()
                     if not line:
                         continue
-                    # Parsuj statystyki
                     if "Packets sent" in line:
                         try:
                             match = re.search(r'Packets sent: (\d+)', line)
@@ -458,29 +446,25 @@ class WiFiPoet(Module):
                 pass
         thread = threading.Thread(target=monitor, daemon=True)
         thread.start()
+
     def _stop_engine(self) -> None:
-        """Zatrzymuje mdk4"""
         if self._proc:
             try:
-                # Wyślij SIGTERM do grupy procesów
                 os.killpg(os.getpgid(self._proc.pid), signal.SIGTERM)
                 self._proc.wait(timeout=3)
             except:
                 try:
-                    # Jeśli nie zadziała, SIGKILL
                     os.killpg(os.getpgid(self._proc.pid), signal.SIGKILL)
                 except:
                     pass
             self._proc = None
-        # Usuń plik tymczasowy
         if self._ssid_list_file and os.path.exists(self._ssid_list_file):
             try:
                 os.remove(self._ssid_list_file)
             except:
                 pass
+
     def _build_view(self, elapsed: int):
-        """Buduje widok na żywo"""
-        # Status
         status_lines = [
             f"🔴 EMISJA RZECZYWISTA - sprawdź telefon!",
             f"📊 Wersów: {len(self._fake_aps)}",
@@ -495,12 +479,14 @@ class WiFiPoet(Module):
             status_lines.append("✅ WYKRYTO W ETERZE!")
         else:
             status_lines.append("📱 Skanuj WiFi w telefonie...")
+
         header = Panel(
             "\n".join(status_lines),
             title="🔴 WiFi Poet - AKTYWNY",
             border_style="red",
+            expand=False,
         )
-        # Tabela SSID
+
         table = Table(title="📜 Pan Tadeusz na liście WiFi")
         table.add_column("#", width=3)
         table.add_column("SSID (wers z poematu)", width=50)
@@ -517,17 +503,18 @@ class WiFiPoet(Module):
             )
         if len(self._fake_aps) > self.max_rows:
             table.add_row("...", f"+{len(self._fake_aps)-self.max_rows} więcej", "", "", "")
-        # Instrukcja
+
         tip = Panel(
             "📱 SPRAWDŹ TELEFON!\n"
             "Otwórz listę sieci Wi-Fi - zobaczysz fragmenty Pana Tadeusza.\n"
             "Jeśli nie widzisz, odśwież listę kilka razy.",
             title="📱 Instrukcja",
             border_style="green",
+            expand=False,
         )
         return Group(header, table, tip)
+
     def _build_fake_aps(self) -> None:
-        """Buduje listę AP z fragmentami poematu"""
         all_lines = PAN_TADEUSZ_LINES + EXTRA_LINES
         selected = []
         for i in range(self.count):
@@ -548,8 +535,8 @@ class WiFiPoet(Module):
                     power=power,
                 )
             )
+
     def _generate_mac(self, rng: random.Random, offset: int) -> str:
-        """Generuje adres MAC"""
         oui = [
             [0x02, 0x11, 0x22],
             [0x02, 0x14, 0xBF],
@@ -560,16 +547,11 @@ class WiFiPoet(Module):
         ][offset % 6]
         octets = oui + [rng.randint(0, 255) for _ in range(3)]
         return ":".join(f"{b:02X}" for b in octets)
+
     def _discover_wifi_interfaces(self) -> List[str]:
-        """Wykrywa interfejsy WiFi"""
         interfaces = []
         try:
-            result = subprocess.run(
-                ["iw", "dev"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = subprocess.run(["iw", "dev"], capture_output=True, text=True, check=False)
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
                     if "Interface" in line:
@@ -579,15 +561,10 @@ class WiFiPoet(Module):
         except:
             pass
         return interfaces
+
     def _get_interface_mode(self, iface: str) -> str:
-        """Sprawdza tryb interfejsu"""
         try:
-            result = subprocess.run(
-                ["iw", "dev", iface, "info"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            result = subprocess.run(["iw", "dev", iface, "info"], capture_output=True, text=True, check=False)
             if result.returncode == 0:
                 for line in result.stdout.splitlines():
                     if line.startswith("type "):
@@ -595,8 +572,8 @@ class WiFiPoet(Module):
         except:
             pass
         return "unknown"
+
     def _select_interface(self) -> str:
-        """Wyświetla menu wyboru interfejsu"""
         interfaces = self._discover_wifi_interfaces()
         if not interfaces:
             return ""
@@ -611,23 +588,19 @@ class WiFiPoet(Module):
                 if 0 <= idx < len(interfaces):
                     return interfaces[idx]
             self.console.print("[yellow]Nieprawidłowy wybór[/yellow]")
+
     def _tool_exists(self, tool: str) -> bool:
-        """Sprawdza czy narzędzie istnieje"""
         try:
-            return subprocess.run(
-                ["which", tool],
-                capture_output=True,
-                check=False,
-            ).returncode == 0
+            return subprocess.run(["which", tool], capture_output=True, check=False).returncode == 0
         except:
             return False
+
     def _sleep_interruptible(self, seconds: float) -> None:
-        """Czekanie z możliwością przerwania"""
         deadline = time.time() + seconds
         while not self._stop_event.is_set() and time.time() < deadline:
             time.sleep(0.1)
+
     def _tick_channel_rotation(self) -> None:
-        """Rotacja kanałów"""
         now = time.time()
         if now - self._last_hop_ts < self.channel_hop_sec:
             return
@@ -643,14 +616,15 @@ class WiFiPoet(Module):
         for ap in self._fake_aps:
             ap.channel = self._current_channel
         self.console.print(f"[cyan]Zmiana kanału na {self._current_channel}[/cyan]")
-        # Restart mdk4 z nowym kanałem
         if self._proc:
             self._stop_engine()
             time.sleep(1)
         self._start_engine()
+
     def _mark_stopped(self) -> None:
         for ap in self._fake_aps:
             ap.status = "⏹️ ZATRZYMANO"
+
     def _render_summary(self, elapsed: int) -> None:
         lines = [
             f"Status: {self.status}",
@@ -665,7 +639,8 @@ class WiFiPoet(Module):
         if self._error:
             lines.append(f"\nBłąd: {self._error}")
         lines.append(f"\n{DISCLAIMER}")
-        self.console.print(Panel("\n".join(lines), title="Podsumowanie"))
+        self.console.print(Panel("\n".join(lines), title="Podsumowanie", expand=False))
+
     def _emit_webui_result(self, *, running: bool, elapsed_sec: int) -> None:
         if os.environ.get("SWISSKNIFE_WEBUI_TASK") != "1":
             return
@@ -684,11 +659,13 @@ class WiFiPoet(Module):
             print(f"[webui-result] {json.dumps(payload)}", flush=True)
         except:
             pass
+
     def stop(self) -> None:
         self.running = False
         self.status = "stopped"
         self._stop_event.set()
         self._stop_engine()
+
     def _install_signal_handlers(self) -> None:
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
@@ -696,16 +673,18 @@ class WiFiPoet(Module):
                 signal.signal(sig, self._handle_signal)
             except:
                 pass
+
     def _restore_signal_handlers(self) -> None:
         for sig, prev in self._signal_handlers.items():
             try:
                 signal.signal(sig, prev)
             except:
                 pass
+
     def _handle_signal(self, signum, frame):
         self.stop()
+
 def main():
-    """Samodzielne uruchomienie"""
     parser = argparse.ArgumentParser(description="WiFi Poet - Pan Tadeusz na liście WiFi")
     parser.add_argument("--interface", default="auto", help="Interfejs WiFi")
     parser.add_argument("--count", type=int, default=24, help="Liczba SSID")
@@ -731,6 +710,8 @@ def main():
     except Exception as e:
         print(f"\nBłąd: {e}")
         module.stop()
+
 __all__ = ['WiFiPoet']
+
 if __name__ == "__main__":
     main()
