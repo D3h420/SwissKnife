@@ -281,15 +281,24 @@ def scan_wireless_networks(
 
         if result.returncode != 0 and is_monitor_mode(interface):
             if set_interface_type(interface, "managed"):
-                remaining_time = end_time - time.time()
-                if remaining_time <= 0:
-                    break
-                timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
-                result = run_scan(timeout_seconds)
-                if not set_interface_type(interface, "monitor"):
-                    logging.error("Failed to restore monitor mode after scan.")
-                else:
-                    time.sleep(0.5)
+                fallback_timed_out = False
+                try:
+                    remaining_time = end_time - time.time()
+                    if remaining_time <= 0:
+                        break
+                    timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
+                    result = run_scan(timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    fallback_timed_out = True
+                finally:
+                    if not set_interface_type(interface, "monitor"):
+                        logging.error("Failed to restore monitor mode after scan.")
+                    else:
+                        time.sleep(0.5)
+
+                if fallback_timed_out:
+                    time.sleep(0.2)
+                    continue
 
         if result.returncode != 0:
             err_text = result.stderr.strip()
