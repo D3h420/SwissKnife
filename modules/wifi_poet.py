@@ -28,48 +28,163 @@ try:
 except ModuleNotFoundError:
     RICH_AVAILABLE = False
 
-# Fallback classes (simplified)
-class Console:
-    def print(self, *args, **kwargs): print(*args if args else '')
+# Fallback classes (used only when rich is unavailable)
+if not RICH_AVAILABLE:
+    _COLOR_ENABLED = sys.stdout.isatty()
+    _RESET = "\033[0m" if _COLOR_ENABLED else ""
+    _TAG_RE = re.compile(r"\[([^\[\]]+)\]")
+    _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+    _STYLE_MAP = {
+        "bold": "\033[1m",
+        "dim": "\033[90m",
+        "red": "\033[31m",
+        "green": "\033[32m",
+        "yellow": "\033[33m",
+        "blue": "\033[34m",
+        "magenta": "\033[35m",
+        "cyan": "\033[36m",
+        "white": "\033[37m",
+    }
 
-class Panel:
-    def __init__(self, renderable, **kwargs): self.renderable = renderable
-    def __str__(self): return str(self.renderable) if self.renderable else ''
+    def _strip_ansi(text: str) -> str:
+        return _ANSI_RE.sub("", text)
 
-class Table:
-    def __init__(self, **kwargs):
-        self.rows = []
-        self.columns = []
-    def add_column(self, name, **kwargs):
-        self.columns.append(name)
-    def add_row(self, *vals):
-        self.rows.append(vals)
-    def __str__(self):
-        if not self.rows: return ''
-        headers = self.columns or [f"Col{i+1}" for i in range(len(self.rows[0]))]
-        widths = [max(len(str(row[i])) for row in [headers] + list(self.rows)) for i in range(len(headers))]
-        s = ' | '.join(h.ljust(w) for h, w in zip(headers, widths)) + '\n'
-        s += '-+-'.join('-' * w for w in widths) + '\n'
-        for row in self.rows:
-            s += ' | '.join(str(v).ljust(w) for v, w in zip(row, widths)) + '\n'
-        return s
+    def _visible_len(text: str) -> int:
+        return len(_strip_ansi(text))
 
-class Group:
-    def __init__(self, *objs): self.objs = objs
-    def __str__(self): return "\n".join(str(o) for o in self.objs)
+    def _pad_visible(text: str, width: int) -> str:
+        return text + (" " * max(0, width - _visible_len(text)))
 
-class Live:
-    def __init__(self, renderable, **kwargs): self.renderable = renderable
-    def __enter__(self): print('\033c' + str(self.renderable)); return self
-    def update(self, renderable, **kwargs): print('\033c' + str(renderable))
-    def __exit__(self, *args): pass
+    def _render_markup(text: str) -> str:
+        if not isinstance(text, str):
+            text = str(text)
 
-class Prompt:
-    @staticmethod
-    def ask(prompt, default=None, **kwargs):
-        sys.stdout.write(prompt + (f" [{default}]" if default else "") + ": ")
-        sys.stdout.flush()
-        return sys.stdin.readline().strip() or default or ''
+        def _replace_tag(match: re.Match[str]) -> str:
+            token = match.group(1).strip()
+            if token.startswith("/"):
+                return _RESET if _COLOR_ENABLED else ""
+            if not _COLOR_ENABLED:
+                return ""
+            parts = token.split()
+            return "".join(_STYLE_MAP.get(part, "") for part in parts)
+
+        rendered = _TAG_RE.sub(_replace_tag, text)
+        if _COLOR_ENABLED and _RESET not in rendered:
+            return rendered + _RESET
+        return rendered
+
+    class Console:
+        def print(self, *args, **kwargs):
+            sep = kwargs.get("sep", " ")
+            end = kwargs.get("end", "\n")
+            flush = kwargs.get("flush", False)
+            text = sep.join(str(arg) for arg in args) if args else ""
+            sys.stdout.write(_render_markup(text) + end)
+            if flush:
+                sys.stdout.flush()
+
+    class Panel:
+        def __init__(self, renderable, **kwargs):
+            self.renderable = renderable
+            self.title = kwargs.get("title", "")
+            self.border_style = kwargs.get("border_style", "")
+
+        def __str__(self):
+            body = "" if self.renderable is None else str(self.renderable)
+            lines = body.splitlines() or [""]
+            width = max(_visible_len(line) for line in lines)
+
+            title = str(self.title).strip()
+            if title:
+                title_text = f" {title} "
+                inner = width + 2
+                if len(title_text) <= inner:
+                    left = (inner - len(title_text)) // 2
+                    right = inner - len(title_text) - left
+                    top = "+" + ("-" * left) + title_text + ("-" * right) + "+"
+                else:
+                    top = "+" + ("-" * inner) + "+"
+            else:
+                top = "+" + ("-" * (width + 2)) + "+"
+
+            bottom = "+" + ("-" * (width + 2)) + "+"
+            rows = [f"| {_pad_visible(line, width)} |" for line in lines]
+
+            if self.border_style:
+                style_open = f"[{self.border_style}]"
+                style_close = f"[/{self.border_style}]"
+                return "\n".join([f"{style_open}{top}{style_close}", *rows, f"{style_open}{bottom}{style_close}"])
+            return "\n".join([top, *rows, bottom])
+
+    class Table:
+        def __init__(self, **kwargs):
+            self.rows: List[List[str]] = []
+            self.columns: List[str] = []
+
+        def add_column(self, name, **kwargs):
+            self.columns.append(str(name))
+
+        def add_row(self, *vals):
+            self.rows.append([str(v) for v in vals])
+
+        def __str__(self):
+            if not self.columns and not self.rows:
+                return ""
+
+            col_count = len(self.columns) if self.columns else len(self.rows[0])
+            headers = self.columns or [f"Col{i + 1}" for i in range(col_count)]
+            widths = []
+            for idx in range(col_count):
+                column_values = [headers[idx]]
+                for row in self.rows:
+                    column_values.append(row[idx] if idx < len(row) else "")
+                widths.append(max(_visible_len(value) for value in column_values))
+
+            border = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+            header_row = "|" + "|".join(f" {_pad_visible(headers[idx], widths[idx])} " for idx in range(col_count)) + "|"
+            body_rows = []
+            for row in self.rows:
+                body_rows.append(
+                    "|" + "|".join(
+                        f" {_pad_visible(row[idx] if idx < len(row) else '', widths[idx])} "
+                        for idx in range(col_count)
+                    ) + "|"
+                )
+
+            return "\n".join([border, header_row, border, *body_rows, border])
+
+    class Group:
+        def __init__(self, *objs):
+            self.objs = objs
+
+        def __str__(self):
+            return "\n".join(str(obj) for obj in self.objs)
+
+    class Live:
+        def __init__(self, renderable, **kwargs):
+            self.renderable = renderable
+
+        def __enter__(self):
+            if _COLOR_ENABLED:
+                sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(_render_markup(str(self.renderable)) + "\n")
+            return self
+
+        def update(self, renderable, **kwargs):
+            if _COLOR_ENABLED:
+                sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(_render_markup(str(renderable)) + "\n")
+
+        def __exit__(self, *args):
+            pass
+
+    class Prompt:
+        @staticmethod
+        def ask(prompt, default=None, **kwargs):
+            shown = _render_markup(prompt)
+            sys.stdout.write(shown + (f" [{default}]" if default else "") + ": ")
+            sys.stdout.flush()
+            return sys.stdin.readline().strip() or default or ""
 
 try:
     from core.module import Module
