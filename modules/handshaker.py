@@ -748,11 +748,17 @@ def packet_matches_bssid(packet, bssid: str) -> bool:
     }
 
 
+# EAPOL-Key Key Information bit masks (host order after BE16 parse):
+# - Key Type (pairwise): bit 3
+# - Install:             bit 6
+# - ACK:                 bit 7
+# - MIC:                 bit 8
+# - Secure:              bit 9
 KEY_INFO_PAIRWISE = 1 << 3
-KEY_INFO_INSTALL = 1 << 4
-KEY_INFO_ACK = 1 << 5
-KEY_INFO_MIC = 1 << 6
-KEY_INFO_SECURE = 1 << 7
+KEY_INFO_INSTALL = 1 << 6
+KEY_INFO_ACK = 1 << 7
+KEY_INFO_MIC = 1 << 8
+KEY_INFO_SECURE = 1 << 9
 EAPOL_TYPE_KEY = 3
 EAPOL_KEY_MIN_LEN = 95
 HANDSHAKE_IDLE_TIMEOUT_SEC = 8.0
