@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-WiFi Poet module for SwissKnife - wersja testowa.
-Emisja 10 linijek Pana Tadeusza na wszystkich kanałach 2.4 GHz.
+WiFi Poet module for SwissKnife - test edition.
+Broadcast 10 poem lines on all 2.4 GHz channels.
 """
 from __future__ import annotations
 import argparse
@@ -28,7 +28,7 @@ try:
 except ModuleNotFoundError:
     RICH_AVAILABLE = False
 
-# Fallback classes (uproszczone)
+# Fallback classes (simplified)
 class Console:
     def print(self, *args, **kwargs): print(*args if args else '')
 
@@ -83,42 +83,42 @@ except ImportError:
         def stop(self): self.running = False; self.status = "stopped"
         def execute(self): pass
 
-# Skrócona wersja – tylko 10 linijek + jedna testowa
+# Short test version: 10 lines + 1 test line
 POEM_LINES = [
-    "Litwo! Ojczyzno moja! ty jesteś jak zdrowie;",
-    "Ile cię trzeba cenić, ten tylko się dowie,",
-    "Kto cię stracił. Dziś piękność twą w całej ozdobie",
-    "Widzę i opisuję, bo tęsknię po tobie.",
-    "Panno Święta, co Jasnej bronisz Częstochowy",
-    "I w Ostrej świecisz Bramie! Ty, co gród zamkowy",
-    "Nowogródzki ochraniasz z jego wiernym ludem!",
-    "Jak mnie dziecko do zdrowia powróciłaś cudem",
-    "Gdy od płaczącej matki pod Twoją opiekę",
-    "Ofiarowany, martwą podniosłem powiekę;",
-    "[TEST] WiFi Poet – emisja na wszystkich kanałach"
+    "Lithuania, my homeland! You are like health;",
+    "Only one who lost you can truly value you,",
+    "Today I see your beauty in full adornment,",
+    "I describe it because I long for you.",
+    "Holy Virgin, guardian of bright Czestochowa,",
+    "And light above Ostra Gate and castle walls,",
+    "You protect Nowogrodek and its faithful people,",
+    "You restored me to health when I was a child,",
+    "When from my weeping mother into Your care,",
+    "I was entrusted and raised from darkened eyes;",
+    "[TEST] WiFi Poet - broadcast on all channels"
 ]
 
-DISCLAIMER = "⚠️ LABORATORIUM – tylko do użytku prywatnego!"
+DISCLAIMER = "WARNING: LAB ONLY - private use only!"
 
 @dataclass
 class FakeAP:
     ssid: str
     bssid: str
     channel: int
-    status: str = "📡 EMITUJE"
+    status: str = "ON AIR"
 
 class WiFiPoet(Module):
     def __init__(self):
         super().__init__(name="WiFi Poet Test")
         self.interface = "auto"
         self.original_interface = None
-        self.count = 11                      # 10 + 1 testowa
+        self.count = 11                      # 10 + 1 test line
         self.duration = 0
         self.refresh = 1.2
         self.seed = None
-        self.channels = list(range(1, 14))   # 1–13 (2.4 GHz)
-        self.channel_hop_sec = 12.0          # co ~12 sekund zmiana kanału
-        self.beacon_rate = 100               # zwiększona częstotliwość
+        self.channels = list(range(1, 14))   # 1-13 (2.4 GHz)
+        self.channel_hop_sec = 12.0          # channel change every ~12 seconds
+        self.beacon_rate = 100               # increased frequency
         self.power_level = 30
         self.max_rows = 11
 
@@ -156,54 +156,54 @@ class WiFiPoet(Module):
         self._install_signal_handlers()
 
         if os.geteuid() != 0:
-            self.console.print("[red]Wymagane uprawnienia root[/red]")
+            self.console.print("[red]Root privileges are required[/red]")
             self._restore_signal_handlers()
             return
 
         if not self._tool_exists("mdk4"):
-            self.console.print("[red]mdk4 nie znaleziono – sudo apt install mdk4[/red]")
+            self.console.print("[red]mdk4 not found - install with: sudo apt install mdk4[/red]")
             self._restore_signal_handlers()
             return
 
         chosen = self._select_interface()
         if not chosen:
-            self.console.print("[red]Nie wybrano interfejsu[/red]")
+            self.console.print("[red]No interface selected[/red]")
             self._restore_signal_handlers()
             return
 
         current_mode = self._get_interface_mode(chosen).lower()
         if current_mode == "monitor":
-            self.console.print(f"[green]✓ {chosen} już w trybie monitor[/green]")
+            self.console.print(f"[green]{chosen} is already in monitor mode[/green]")
             self.interface = chosen
             self.original_interface = chosen
             self._monitor_enabled = True
             self._using_airmon = False
         else:
             self.original_interface = chosen
-            self.console.print(f"[yellow]Włączanie monitor na {chosen}...[/yellow]")
+            self.console.print(f"[yellow]Enabling monitor mode on {chosen}...[/yellow]")
             monitor_iface = self._enable_monitor_mode(chosen)
             if not monitor_iface:
-                self.console.print(f"[red]Nie udało się włączyć monitor na {chosen}[/red]")
+                self.console.print(f"[red]Failed to enable monitor mode on {chosen}[/red]")
                 self._restore_signal_handlers()
                 return
             self.interface = monitor_iface
             self._monitor_enabled = True
-            self.console.print(f"[green]✓ Monitor aktywny: {self.interface}[/green]")
+            self.console.print(f"[green]Monitor interface active: {self.interface}[/green]")
 
         self.console.print(Panel(
-            "WiFi Poet TEST – 11 SSID na wszystkich kanałach 2.4 GHz",
+            "WiFi Poet TEST - 11 SSIDs on all 2.4 GHz channels",
             border_style="red",
-            title="UWAGA",
+            title="WARNING",
             expand=False
         ))
-        self.console.print("[bold red]EMISJA W ETERZE – sprawdź telefon![/bold red]")
+        self.console.print("[bold red]ON-AIR BROADCAST - check Wi-Fi list on your phone![/bold red]")
         self.console.print(f"[dim]{DISCLAIMER}[/dim]")
 
         try:
             if not self._start_engine():
-                raise RuntimeError("Nie udało się uruchomić mdk4")
-            self.console.print("[bold green]EMISJA ROZPOCZĘTA – 100 beaconów/s[/bold green]")
-            self.console.print("[bold cyan]Ctrl+C → zatrzymaj[/bold cyan]")
+                raise RuntimeError("Failed to start mdk4")
+            self.console.print("[bold green]BROADCAST STARTED - 100 beacons/s[/bold green]")
+            self.console.print("[bold cyan]Ctrl+C to stop[/bold cyan]")
 
             with Live(
                 self._build_view(0),
@@ -225,11 +225,11 @@ class WiFiPoet(Module):
             self.status = "completed"
         except KeyboardInterrupt:
             self.status = "stopped"
-            self.console.print("\n[yellow]Zatrzymywanie...[/yellow]")
+            self.console.print("\n[yellow]Stopping...[/yellow]")
         except Exception as exc:
             self.status = "error"
             self._error = str(exc)
-            self.console.print(f"[red]Błąd: {exc}[/red]")
+            self.console.print(f"[red]Error: {exc}[/red]")
         finally:
             self.running = False
             self._stop_event.set()
@@ -239,7 +239,7 @@ class WiFiPoet(Module):
             self._render_summary(elapsed)
             self._restore_signal_handlers()
 
-    # Pozostałe metody bez większych zmian (skrócone wyświetlanie)
+    # Remaining methods (logic unchanged, shorter rendering)
 
     def _enable_monitor_mode(self, iface: str) -> Optional[str]:
         if self._get_interface_mode(iface).lower() == "monitor":
@@ -262,7 +262,7 @@ class WiFiPoet(Module):
         except:
             pass
 
-        # Ręczna metoda
+        # Manual fallback method
         try:
             subprocess.run(["ip", "link", "set", iface, "down"], check=False)
             time.sleep(0.5)
@@ -300,7 +300,7 @@ class WiFiPoet(Module):
                 for ap in self._fake_aps:
                     f.write(f"{ap.bssid} {ap.ssid}\n")
         except Exception as e:
-            self.console.print(f"[red]Błąd zapisu SSID: {e}[/red]")
+            self.console.print(f"[red]Failed to write SSID list: {e}[/red]")
             return False
 
         if self.power_level > 0:
@@ -353,11 +353,11 @@ class WiFiPoet(Module):
 
     def _build_view(self, elapsed: int):
         status = [
-            f"🔴 EMISJA – kanał {self._current_channel} | {self.beacon_rate} pps",
-            f"⏱️ {elapsed}s   |   Wysłano ~{self._packets_sent} pakietów",
-            "📱 Odśwież listę Wi-Fi w telefonie"
+            f"ON AIR - channel {self._current_channel} | {self.beacon_rate} pps",
+            f"Elapsed: {elapsed}s | Sent ~{self._packets_sent} packets",
+            "Refresh Wi-Fi list on your phone"
         ]
-        header = Panel("\n".join(status), title="WiFi Poet TEST", border_style="red", expand=False)
+        header = Panel("\n".join(status), title="WiFi Poet Test", border_style="red", expand=False)
 
         table = Table()
         table.add_column("#")
@@ -403,18 +403,51 @@ class WiFiPoet(Module):
             pass
         return "unknown"
 
+    def _get_interface_chipset(self, iface: str) -> str:
+        try:
+            result = subprocess.run(
+                ["ethtool", "-i", iface],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return "unknown"
+
+        if result.returncode != 0:
+            return "unknown"
+
+        driver = None
+        bus_info = None
+        for line in result.stdout.splitlines():
+            if line.startswith("driver:"):
+                driver = line.split(":", 1)[1].strip()
+            elif line.startswith("bus-info:"):
+                bus_info = line.split(":", 1)[1].strip()
+
+        if driver and bus_info:
+            return f"{driver} ({bus_info})"
+        if driver:
+            return driver
+        return "unknown"
+
     def _select_interface(self) -> str:
         interfaces = self._discover_wifi_interfaces()
-        if not interfaces: return ""
+        if not interfaces:
+            return ""
         self.console.print("")
+        self.console.print("[bold]Available interfaces:[/bold]")
         for i, iface in enumerate(interfaces, 1):
             mode = self._get_interface_mode(iface)
-            self.console.print(f" {i}. {iface} [{mode}]")
+            chipset = self._get_interface_chipset(iface)
+            self.console.print(f"  {i}) {iface} - {chipset} [{mode}]")
         while True:
-            choice = Prompt.ask("\nWybierz numer", default="1")
+            choice = Prompt.ask("\nSelect interface (number or name)", default="1")
             if choice.isdigit() and 0 < int(choice) <= len(interfaces):
-                return interfaces[int(choice)-1]
-            self.console.print("[yellow]Zły wybór[/yellow]")
+                return interfaces[int(choice) - 1]
+            if choice in interfaces:
+                return choice
+            self.console.print("[yellow]Invalid selection. Try again.[/yellow]")
 
     def _tool_exists(self, tool: str) -> bool:
         return subprocess.run(["which", tool], capture_output=True, check=False).returncode == 0
@@ -433,7 +466,7 @@ class WiFiPoet(Module):
         self._current_channel = self.channels[(idx + 1) % len(self.channels)]
         for ap in self._fake_aps:
             ap.channel = self._current_channel
-        self.console.print(f"[cyan]→ kanał {self._current_channel}[/cyan]")
+        self.console.print(f"[cyan]-> channel {self._current_channel}[/cyan]")
         if self._proc:
             self._stop_engine()
             time.sleep(0.8)
@@ -442,15 +475,15 @@ class WiFiPoet(Module):
     def _render_summary(self, elapsed: int):
         lines = [
             f"Status: {self.status}",
-            f"Czas: {elapsed}s",
-            f"Kanałów przetestowano: ~{len(self.channels)}",
-            f"Pakietów: ~{self._packets_sent}",
-            "\nOstatnie SSID:",
+            f"Time: {elapsed}s",
+            f"Channels tested: ~{len(self.channels)}",
+            f"Packets: ~{self._packets_sent}",
+            "\nLast SSIDs:",
         ]
         for i, ap in enumerate(self._fake_aps[:3], 1):
             lines.append(f"  {i}. {ap.ssid}")
         lines.append(f"\n{DISCLAIMER}")
-        self.console.print(Panel("\n".join(lines), title="Podsumowanie", expand=False))
+        self.console.print(Panel("\n".join(lines), title="Summary", expand=False))
 
     def stop(self):
         self.running = False
@@ -477,7 +510,7 @@ class WiFiPoet(Module):
         self.stop()
 
 def main():
-    parser = argparse.ArgumentParser(description="WiFi Poet TEST – 10 linijek na wszystkich kanałach")
+    parser = argparse.ArgumentParser(description="WiFi Poet TEST - 10 lines on all channels")
     parser.add_argument("--interface", default="auto")
     parser.add_argument("--beacon-rate", type=int, default=100)
     parser.add_argument("--channel-hop", type=float, default=12.0)
@@ -493,9 +526,9 @@ def main():
         mod.execute()
     except KeyboardInterrupt:
         mod.stop()
-        print("\nZatrzymano.")
+        print("\nStopped.")
     except Exception as e:
-        print(f"Błąd: {e}")
+        print(f"Error: {e}")
         mod.stop()
 
 if __name__ == "__main__":
