@@ -83,20 +83,49 @@ except ImportError:
         def stop(self): self.running = False; self.status = "stopped"
         def execute(self): pass
 
-# Short test version: 10 lines + 1 test line
-POEM_LINES = [
-    "Lithuania, my homeland! You are like health;",
-    "Only one who lost you can truly value you,",
-    "Today I see your beauty in full adornment,",
-    "I describe it because I long for you.",
-    "Holy Virgin, guardian of bright Czestochowa,",
-    "And light above Ostra Gate and castle walls,",
-    "You protect Nowogrodek and its faithful people,",
-    "You restored me to health when I was a child,",
-    "When from my weeping mother into Your care,",
-    "I was entrusted and raised from darkened eyes;",
-    "[TEST] WiFi Poet - broadcast on all channels"
+####
+#### YOU CAN CHANGE CUSTOM SSID HERE - MAX 30 LINES (will be rotated on all channels)
+#### 
+
+CUSTOM_LINES = [
+    "Litwo! Ojczyzno moja!;",
+    "ty jesteś jak zdrowie",
+    "Ile cię trzeba cenić",
+    "ten tylko się dowie",
+    "Kto cię stracił",
+    "Dziś piękność twą w całej ozdobie",
+    "Widzę i opisuję",
+    "bo tęsknię po tobie",
+    "Panno Święta",
+    "co Jasnej bronisz Częstochowy",
+    "I w Ostrej świecisz Bramie!"
 ]
+
+CHAOS_LINES = [
+    "NASA Satellite 8420X",
+    "FBI Van 7",
+    "We Know About the Basement",
+    "DJI Police Drone",
+    "STARLINK-TEST-FLY",
+    "Nice Try, I Have Your Password",
+    "404 Network Unavailable",
+    "Nuclear Launch Warning System",
+    "FBI Undercover Unit 4B",
+    "5G-TOWER-strong-signal",
+]
+
+SSID_SETS: Dict[str, Dict[str, Any]] = {
+    "custom": {
+        "label": "custom ssid",
+        "description": "edit wifi_poet.py to change lines",
+        "lines": CUSTOM_LINES,
+    },
+    "chaos": {
+        "label": "Chaos mode",
+        "description": "NASA, Covid, FBI",
+        "lines": CHAOS_LINES,
+    },
+}
 
 DISCLAIMER = "WARNING: LAB ONLY - private use only!"
 
@@ -112,7 +141,9 @@ class WiFiPoet(Module):
         super().__init__(name="WiFi Poet Test")
         self.interface = "auto"
         self.original_interface = None
-        self.count = 11                      # 10 + 1 test line
+        self.ssid_set = "invocation"
+        self._ssid_lines: List[str] = list(SSID_SETS[self.ssid_set]["lines"])
+        self.count = 11                      # default for invocation set
         self.duration = 0
         self.refresh = 1.2
         self.seed = None
@@ -141,6 +172,9 @@ class WiFiPoet(Module):
         for key, value in kwargs.items():
             if hasattr(self, key):
                 setattr(self, key, value)
+        if self.ssid_set not in SSID_SETS:
+            self.ssid_set = "invocation"
+        self._ssid_lines = list(SSID_SETS[self.ssid_set]["lines"])
         self.count = max(5, min(30, int(self.count)))
         self.channels = [ch for ch in self.channels if 1 <= ch <= 13] or [1]
         self.beacon_rate = max(30, min(300, int(self.beacon_rate)))
@@ -190,12 +224,18 @@ class WiFiPoet(Module):
             self._monitor_enabled = True
             self.console.print(f"[green]Monitor interface active: {self.interface}[/green]")
 
+        selected_set = self._select_ssid_set()
+        self._set_ssid_set(selected_set)
+        self._build_fake_aps()
+        set_meta = SSID_SETS[self.ssid_set]
+
         self.console.print(Panel(
-            "WiFi Poet TEST - 11 SSIDs on all 2.4 GHz channels",
+            f"WiFi Poet TEST - {len(self._fake_aps)} SSIDs on all 2.4 GHz channels",
             border_style="red",
             title="WARNING",
             expand=False
         ))
+        self.console.print(f"[bold]SSID set:[/bold] {set_meta['label']} ({len(self._fake_aps)} entries)")
         self.console.print("[bold red]ON-AIR BROADCAST - check Wi-Fi list on your phone![/bold red]")
         self.console.print(f"[dim]{DISCLAIMER}[/dim]")
 
@@ -372,7 +412,8 @@ class WiFiPoet(Module):
     def _build_fake_aps(self):
         rng = random.Random(self.seed if self.seed else int(time.time()))
         self._fake_aps = []
-        for idx, ssid in enumerate(POEM_LINES[:self.count]):
+        source_lines = self._ssid_lines or list(SSID_SETS["invocation"]["lines"])
+        for idx, ssid in enumerate(source_lines[:self.count]):
             mac = self._generate_mac(rng, idx)
             self._fake_aps.append(FakeAP(ssid=ssid, bssid=mac, channel=self._current_channel))
 
@@ -476,6 +517,40 @@ class WiFiPoet(Module):
             if choice.isdigit() and 0 < int(choice) <= len(interfaces):
                 return interfaces[int(choice) - 1]
             if choice in interfaces:
+                return choice
+            self.console.print("[yellow]Invalid selection. Try again.[/yellow]")
+
+    def _set_ssid_set(self, set_key: str) -> None:
+        if set_key not in SSID_SETS:
+            set_key = "invocation"
+        self.ssid_set = set_key
+        self._ssid_lines = list(SSID_SETS[self.ssid_set]["lines"])
+
+    def _select_ssid_set(self) -> str:
+        set_keys = list(SSID_SETS.keys())
+        default_index = 1
+        if self.ssid_set in set_keys:
+            default_index = set_keys.index(self.ssid_set) + 1
+
+        self.console.print("")
+        self.console.print("[bold]Available SSID sets:[/bold]")
+        for index, set_key in enumerate(set_keys, 1):
+            metadata = SSID_SETS[set_key]
+            label = metadata["label"]
+            description = metadata["description"]
+            set_size = len(metadata["lines"])
+            self.console.print(f"  {index}) {label} - {set_size} SSIDs ({description})")
+
+        while True:
+            choice = Prompt.ask(
+                "\nSelect SSID set (number or key)",
+                default=str(default_index),
+            ).strip().lower()
+            if choice.isdigit():
+                index = int(choice)
+                if 1 <= index <= len(set_keys):
+                    return set_keys[index - 1]
+            if choice in SSID_SETS:
                 return choice
             self.console.print("[yellow]Invalid selection. Try again.[/yellow]")
 
