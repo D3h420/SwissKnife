@@ -94,6 +94,9 @@ Python packages for Web UI:
 - `fastapi`
 - `uvicorn`
 
+Runtime Python packages (launcher checks/installs on startup):
+- `scapy` (required by Handshaker)
+
 System tools used by launcher/modules:
 - `iw`
 - `ip` (from `iproute2`)
@@ -120,9 +123,6 @@ Extra tools used by specific paths/fallbacks:
 Optional tools:
 - `bully`
 - `avahi-daemon` (for `<hostname>.local` discovery in local network)
-
-Optional for Handshaker:
-- `scapy`
 
 Optional for IP.CAM finder:
 - `rich`

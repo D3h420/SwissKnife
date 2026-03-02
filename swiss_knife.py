@@ -75,6 +75,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
 RECON_SCRIPT = os.path.join("modules", "recon.py")
 BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
 WEBUI_REQUIREMENTS = os.path.join("webui", "requirements.txt")
+RUNTIME_REQUIREMENTS = "requirements.txt"
 WEBUI_PORT = 8000
 WEBUI_HOST = "0.0.0.0"
 WEBUI_AP_INTERFACE = "builtin"
@@ -87,6 +88,9 @@ WEBUI_REQUIRED_PY_MODULES: List[str] = [
     "fastapi",
     "uvicorn",
     "pydantic",
+]
+RUNTIME_REQUIRED_PY_MODULES: List[str] = [
+    "scapy",
 ]
 
 REQUIRED_TOOLS: List[str] = [
@@ -264,7 +268,7 @@ def pip_available() -> bool:
     return result.returncode == 0
 
 
-def install_webui_python_dependencies(requirements_path: str) -> bool:
+def install_python_dependencies(requirements_path: str) -> bool:
     base = [sys.executable or "python3", "-m", "pip", "install"]
     attempts = [
         [*base, "-r", requirements_path],
@@ -296,6 +300,43 @@ def install_webui_python_dependencies(requirements_path: str) -> bool:
     return False
 
 
+def ensure_runtime_python_dependencies() -> bool:
+    missing = missing_python_modules(RUNTIME_REQUIRED_PY_MODULES)
+    if not missing:
+        return True
+
+    print(color_text(f"Missing Python modules for runtime modules: {', '.join(missing)}", COLOR_HIGHLIGHT))
+    requirements_path = script_path(RUNTIME_REQUIREMENTS)
+    if not os.path.isfile(requirements_path):
+        print(color_text(f"Requirements file not found: {requirements_path}", COLOR_HIGHLIGHT))
+        print(style(f"Install manually: {sys.executable or 'python3'} -m pip install scapy", STYLE_BOLD))
+        return False
+
+    if not pip_available():
+        print(color_text("pip is not available for this Python interpreter.", COLOR_HIGHLIGHT))
+        print(style(f"Install manually: {sys.executable or 'python3'} -m ensurepip --upgrade", STYLE_BOLD))
+        return False
+
+    if not prompt_yes_no("Install runtime Python dependencies now? [Y/n]: "):
+        print(style(f"Install manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
+        print(style(f"If needed on Debian/Ubuntu: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
+        return False
+
+    if not install_python_dependencies(requirements_path):
+        print(color_text("Automatic Python dependency installation failed.", COLOR_HIGHLIGHT))
+        print(style(f"Try manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
+        print(style(f"Or: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
+        return False
+
+    still_missing = missing_python_modules(RUNTIME_REQUIRED_PY_MODULES)
+    if still_missing:
+        print(color_text(f"Runtime Python modules still missing after install: {', '.join(still_missing)}", COLOR_HIGHLIGHT))
+        return False
+
+    print(color_text("Runtime Python dependencies are ready.\n", COLOR_SUCCESS))
+    return True
+
+
 def ensure_webui_python_dependencies() -> bool:
     missing = missing_python_modules(WEBUI_REQUIRED_PY_MODULES)
     if not missing:
@@ -317,7 +358,7 @@ def ensure_webui_python_dependencies() -> bool:
         print(style(f"If needed on Debian/Ubuntu: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
         return False
 
-    if not install_webui_python_dependencies(requirements_path):
+    if not install_python_dependencies(requirements_path):
         print(color_text("Automatic Python dependency installation failed.", COLOR_HIGHLIGHT))
         print(style(f"Try manually: {sys.executable or 'python3'} -m pip install -r {requirements_path}", STYLE_BOLD))
         print(style(f"Or: {sys.executable or 'python3'} -m pip install --break-system-packages -r {requirements_path}", STYLE_BOLD))
@@ -664,6 +705,9 @@ def main() -> None:
     if not is_root:
         print(color_text("This launcher must be run as root.", COLOR_HIGHLIGHT))
         sys.exit(1)
+
+    if not ensure_runtime_python_dependencies():
+        print(color_text("Some modules may fail without runtime Python dependencies.", COLOR_HIGHLIGHT))
 
     webui_service: Optional[WebUIProcess] = None
     if ensure_webui_python_dependencies():

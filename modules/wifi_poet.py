@@ -141,9 +141,9 @@ class WiFiPoet(Module):
         super().__init__(name="WiFi Poet Test")
         self.interface = "auto"
         self.original_interface = None
-        self.ssid_set = "invocation"
+        self.ssid_set = "chaos"
         self._ssid_lines: List[str] = list(SSID_SETS[self.ssid_set]["lines"])
-        self.count = 11                      # default for invocation set
+        self.count = 11                      # default for chaos set
         self.duration = 0
         self.refresh = 1.2
         self.seed = None
@@ -173,7 +173,7 @@ class WiFiPoet(Module):
             if hasattr(self, key):
                 setattr(self, key, value)
         if self.ssid_set not in SSID_SETS:
-            self.ssid_set = "invocation"
+            self.ssid_set = "chaos"
         self._ssid_lines = list(SSID_SETS[self.ssid_set]["lines"])
         self.count = max(5, min(30, int(self.count)))
         self.channels = [ch for ch in self.channels if 1 <= ch <= 13] or [1]
