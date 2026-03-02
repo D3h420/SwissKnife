@@ -161,7 +161,8 @@ def select_interface(interfaces: List[str]) -> str:
     logging.info(style("Available interfaces:", STYLE_BOLD))
     for index, name in enumerate(interfaces, start=1):
         chipset = get_interface_chipset(name)
-        label = f"{index}) {name} -"
+        display_name = f"{name} (AP running)" if name == "wlan0" else name
+        label = f"{index}) {display_name} -"
         logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), chipset)
 
     while True:

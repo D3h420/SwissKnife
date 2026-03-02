@@ -558,12 +558,14 @@ class ArpScanner(Module):
         if len(ordered) == 1:
             profile = self._interface_profiles.get(ordered[0])
             if profile:
+                display_name = f"{profile.name} (AP running)" if profile.name == "wlan0" else profile.name
                 self.console.print(
-                    f"[green]Selected interface:[/green] {profile.name} "
+                    f"[green]Selected interface:[/green] {display_name} "
                     f"([dim]{profile.role} | {profile.chipset}[/dim])"
                 )
             else:
-                self.console.print(f"[green]Selected interface:[/green] {ordered[0]}")
+                display_name = f"{ordered[0]} (AP running)" if ordered[0] == "wlan0" else ordered[0]
+                self.console.print(f"[green]Selected interface:[/green] {display_name}")
             return ordered[0]
 
         table = Table(title="Available Wi-Fi Interfaces", box=box.SIMPLE_HEAVY)
@@ -576,11 +578,13 @@ class ArpScanner(Module):
         for idx, iface in enumerate(ordered, start=1):
             profile = self._interface_profiles.get(iface)
             if not profile:
-                table.add_row(str(idx), iface, "-", "-", "-", "-")
+                display_name = f"{iface} (AP running)" if iface == "wlan0" else iface
+                table.add_row(str(idx), display_name, "-", "-", "-", "-")
                 continue
+            display_name = f"{profile.name} (AP running)" if profile.name == "wlan0" else profile.name
             table.add_row(
                 str(idx),
-                profile.name,
+                display_name,
                 profile.role,
                 profile.chipset,
                 profile.mode,

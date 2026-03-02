@@ -626,7 +626,8 @@ class WiFiPoet(Module):
         for i, iface in enumerate(interfaces, 1):
             mode = self._get_interface_mode(iface)
             chipset = self._get_interface_chipset(iface)
-            self.console.print(f"  {i}) {iface} - {chipset} [{mode}]")
+            display_iface = f"{iface} (AP running)" if iface == "wlan0" else iface
+            self.console.print(f"  {i}) {display_iface} - {chipset} [{mode}]")
         while True:
             choice = Prompt.ask("\nSelect interface (number or name)", default="1")
             if choice.isdigit() and 0 < int(choice) <= len(interfaces):
