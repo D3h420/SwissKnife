@@ -410,6 +410,11 @@ def setup_ap():
     logging.info("Setting up Access Point...")
     
     try:
+        # Remove stale AP daemons from previous/failed runs.
+        subprocess.run(['pkill', '-f', '/tmp/hostapd.conf'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', '/tmp/dnsmasq.conf'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        time.sleep(0.4)
+
         # Allow interface state to settle before reconfiguration.
         time.sleep(2)
         
@@ -442,8 +447,15 @@ ignore_broadcast_ssid=0
         # Start hostapd in the background.
         hostapd_process = subprocess.Popen(['hostapd', '/tmp/hostapd.conf'], 
                                          stdout=subprocess.PIPE, 
-                                         stderr=subprocess.PIPE)
-        time.sleep(3)
+                                         stderr=subprocess.PIPE,
+                                         text=True)
+        time.sleep(2)
+        if hostapd_process.poll() is not None:
+            hostapd_log = (hostapd_process.stderr.read() or "").strip()
+            logging.error("hostapd failed to start (exit code %s).", hostapd_process.returncode)
+            if hostapd_log:
+                logging.error("hostapd output: %s", hostapd_log)
+            return None, None
         
         # Configure dnsmasq for DHCP and DNS.
         dnsmasq_conf = f"""
@@ -463,8 +475,19 @@ log-dhcp
         # Start dnsmasq.
         dnsmasq_process = subprocess.Popen(['dnsmasq', '-C', '/tmp/dnsmasq.conf', '--no-daemon'],
                                          stdout=subprocess.PIPE,
-                                         stderr=subprocess.PIPE)
-        time.sleep(2)
+                                         stderr=subprocess.PIPE,
+                                         text=True)
+        time.sleep(1.5)
+        if dnsmasq_process.poll() is not None:
+            dnsmasq_log = (dnsmasq_process.stderr.read() or "").strip()
+            logging.error("dnsmasq failed to start (exit code %s).", dnsmasq_process.returncode)
+            if dnsmasq_log:
+                logging.error("dnsmasq output: %s", dnsmasq_log)
+            try:
+                hostapd_process.terminate()
+            except Exception:
+                pass
+            return None, None
         
         # Enable forwarding.
         subprocess.run(['sysctl', '-w', 'net.ipv4.ip_forward=1'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -482,6 +505,27 @@ log-dhcp
     except Exception as e:
         logging.error(f"Error setting up AP: {e}")
         return None, None
+
+
+def read_dead_process_output(proc):
+    if not proc:
+        return ""
+    chunks = []
+    try:
+        if proc.stdout:
+            out = proc.stdout.read()
+            if out:
+                chunks.append(out.strip())
+    except Exception:
+        pass
+    try:
+        if proc.stderr:
+            err = proc.stderr.read()
+            if err:
+                chunks.append(err.strip())
+    except Exception:
+        pass
+    return "\n".join(part for part in chunks if part).strip()
 
 def start_captive_portal():
     """Start the captive portal HTTP server."""
@@ -634,7 +678,7 @@ def run_portal_session():
         )
         
         # Keep processes referenced.
-        processes = [hostapd_proc, dnsmasq_proc]
+        processes = [("hostapd", hostapd_proc), ("dnsmasq", dnsmasq_proc)]
         
         # Main loop.
         while True:
@@ -660,9 +704,12 @@ def run_portal_session():
                 break
 
             # Check if processes are alive.
-            for i, proc in enumerate(processes):
+            for proc_name, proc in processes:
                 if proc and proc.poll() is not None:
-                    logging.error(f"Process {i} died!")
+                    logging.error("%s exited unexpectedly (code %s).", proc_name, proc.returncode)
+                    dead_output = read_dead_process_output(proc)
+                    if dead_output:
+                        logging.error("%s output:\n%s", proc_name, dead_output)
                     return False
                     
     except KeyboardInterrupt:
