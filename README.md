@@ -16,6 +16,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Handshaker - PCAP capture + 4-way EAPOL validation
 - ARP scan - ARP table discovery (IP/MAC/OUI vendor)
 - IP.CAM finder - camera discovery by Wi-Fi OUI + LAN neighbor scan
+- WiFi Poet - SSID beacon spam (chaos/custom mode)
 - ~~Karma - rogue AP auto-responder~~ (🚧 under construction 🚧)
 
 ## Quick start ⚡
