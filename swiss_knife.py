@@ -44,10 +44,10 @@ wireless swiss knife
 """
 
 MAIN_MENU: Dict[str, Dict[str, str]] = {
-    "1": {"name": "Recon", "action": "recon", "icon": "🛰️"},
-    "2": {"name": "Attacks", "action": "attacks", "icon": "⚔️"},
-    "3": {"name": "Bluetooth", "action": "bluetooth", "icon": "📶"},
-    "0": {"name": "Exit", "action": "exit", "icon": "🚪"},
+    "1": {"name": "Recon", "action": "recon"},
+    "2": {"name": "Attacks", "action": "attacks"},
+    "3": {"name": "Bluetooth", "action": "bluetooth"},
+    "0": {"name": "Exit", "action": "exit"},
 }
 
 ATTACKS_MENU: Dict[str, Dict[str, str]] = {
@@ -439,8 +439,8 @@ def main() -> None:
 
         if choice == "0":
             print()
-            print(style("✅ Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
-            print(style("💚 no packets were emotionally harmed", COLOR_HIGHLIGHT, STYLE_BOLD))
+            print(style("Mission complete!", COLOR_SUCCESS, STYLE_BOLD))
+            print(style("No packets were emotionally harmed.", COLOR_HIGHLIGHT, STYLE_BOLD))
             print()
             break
 
