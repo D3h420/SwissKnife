@@ -256,7 +256,7 @@ def prompt_manual_ssid():
         logging.warning("SSID cannot be empty.")
 
 
-def select_network_ssid(interface, duration_seconds):
+def select_network_ssid(interface, duration_seconds) -> Optional[str]:
     while True:
         networks = scan_wireless_networks(interface, duration_seconds, show_progress=True)
         if not networks:
@@ -270,7 +270,7 @@ def select_network_ssid(interface, duration_seconds):
                 continue
             if choice == "m":
                 return prompt_manual_ssid()
-            sys.exit(1)
+            return None
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
@@ -284,12 +284,14 @@ def select_network_ssid(interface, duration_seconds):
             logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), signal)
 
         choice = input(
-            f"{style('Select network', STYLE_BOLD)} (number, R to rescan, M for manual): "
+            f"{style('Select network', STYLE_BOLD)} (number, R to rescan, M for manual, E to exit): "
         ).strip().lower()
         if choice == "r":
             continue
         if choice == "m":
             return prompt_manual_ssid()
+        if choice in {"e", "q", "exit", "quit"}:
+            return None
         if choice.isdigit():
             idx = int(choice)
             if 1 <= idx <= len(networks):
@@ -607,7 +609,7 @@ def run_portal_session():
                 else:
                     scan_prompt = (
                         f"{style('Scan duration', STYLE_BOLD)} in seconds "
-                        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
+                        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
                     )
                     scan_input = input(scan_prompt).strip()
                     try:
@@ -619,10 +621,14 @@ def run_portal_session():
                         logging.warning("Scan duration too short. Using 1 second.")
                         scan_seconds = 1
 
-                input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {AP_INTERFACE}...")
+                input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to scan networks on {AP_INTERFACE}...")
 
                 # Select SSID after scan (or enter manually).
-                globals()["AP_SSID"] = select_network_ssid(AP_INTERFACE, scan_seconds)
+                selected_ssid = select_network_ssid(AP_INTERFACE, scan_seconds)
+                if selected_ssid is None:
+                    logging.info("Aborted by user.")
+                    return False
+                globals()["AP_SSID"] = selected_ssid
                 break
             if method in {"m", "manual"}:
                 globals()["AP_SSID"] = prompt_manual_ssid()
@@ -642,7 +648,7 @@ def run_portal_session():
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start captive portal "
+        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start captive portal "
         f"'{style(AP_SSID, COLOR_SUCCESS, STYLE_BOLD)}'..."
     )
 

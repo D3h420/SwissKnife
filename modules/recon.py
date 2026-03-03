@@ -1015,8 +1015,10 @@ def display_sniffer_live(
     probe_unique: int,
     interface: str,
     status: str,
-    control_hint: str = "Press Enter to stop.",
+    control_hint: Optional[str] = None,
 ) -> None:
+    if control_hint is None:
+        control_hint = style("Press Enter to stop.", COLOR_SUCCESS, STYLE_BOLD)
     lines = [
         f"Sniffer on {interface}",
         f"Packets: {packet_count}",
@@ -1109,9 +1111,11 @@ def run_sniffer(
     hop_interval: float = DEFAULT_HOP_INTERVAL,
     update_interval: float = 1.0,
     display_live: bool = True,
-    control_hint: str = "Press Enter to stop.",
+    control_hint: Optional[str] = None,
     on_update: Optional[Callable[[SnifferState, str], None]] = None,
 ) -> None:
+    if control_hint is None:
+        control_hint = style("Press Enter to stop.", COLOR_SUCCESS, STYLE_BOLD)
     _ = hop_interval
     capture_dir = tempfile.mkdtemp(prefix="swissknife_recon_sniffer_")
     output_prefix = os.path.join(capture_dir, "capture")
@@ -1183,7 +1187,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             original_mode = get_interface_mode(interface)
             if original_mode != "monitor":
                 logging.info("")
-                input(f"{style('Press Enter', STYLE_BOLD)} to switch {interface} to monitor mode...")
+                input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {interface} to monitor mode...")
                 if not set_interface_type(interface, "monitor"):
                     logging.error("Failed to enable monitor mode on %s.", interface)
                     continue
@@ -1192,12 +1196,12 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             logging.info("")
             duration = prompt_int(
                 f"{style('Scan duration', STYLE_BOLD)} in seconds "
-                f"({style('Enter', STYLE_BOLD)} for {style('12', COLOR_SUCCESS, STYLE_BOLD)}): ",
+                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} for {style('12', COLOR_SUCCESS, STYLE_BOLD)}): ",
                 default=12,
             )
 
             logging.info("")
-            input(f"{style('Press Enter', STYLE_BOLD)} to start scaner on {interface}...")
+            input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start scaner on {interface}...")
             live_update = lambda snapshot, remaining: display_scan_live_update(
                 snapshot, vendors, remaining, interface
             )
@@ -1213,7 +1217,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
 
             if original_mode and original_mode != "monitor":
                 restore_managed_mode(interface)
-            input(style("Press Enter to return.", STYLE_BOLD))
+            input(style("Press Enter to return.", COLOR_SUCCESS, STYLE_BOLD))
             continue
 
         if choice == "2":
@@ -1223,7 +1227,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             original_mode = get_interface_mode(interface)
             if original_mode != "monitor":
                 logging.info("")
-                input(f"{style('Press Enter', STYLE_BOLD)} to switch {interface} to monitor mode...")
+                input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {interface} to monitor mode...")
                 if not set_interface_type(interface, "monitor"):
                     logging.error("Failed to enable monitor mode on %s.", interface)
                     continue
@@ -1234,7 +1238,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
             while True:
                 logging.info("")
                 if first_run:
-                    input(f"{style('Press Enter', STYLE_BOLD)} to start sniffer on {interface}...")
+                    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start sniffer on {interface}...")
                     first_run = False
                 stop_event = threading.Event()
 

@@ -590,7 +590,7 @@ def render_scan_live(
         f"Elapsed: {elapsed}s",
         f"Devices: {len(devices)}",
         f"Backends: {backend_status}",
-        "Press Enter or Ctrl+C to stop.",
+        style("Press Enter or Ctrl+C to stop.", COLOR_SUCCESS, STYLE_BOLD),
         "",
     ]
 
@@ -749,8 +749,8 @@ def scan_flow() -> None:
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start live BT scan on {interface_label} "
-        f"({style('Enter/Ctrl+C', STYLE_BOLD)} to stop)..."
+        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start live BT scan on {interface_label} "
+        f"({style('Enter/Ctrl+C', COLOR_SUCCESS, STYLE_BOLD)} to stop)..."
     )
 
     devices = scan_bt_devices_live(interface)
@@ -766,7 +766,7 @@ def scan_flow() -> None:
             label = f"{index}) {device.name} ({device.mac}) -"
             logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), rssi)
 
-    input(style("Press Enter to return.", STYLE_BOLD))
+    input(style("Press Enter to return.", COLOR_SUCCESS, STYLE_BOLD))
 
 
 def menu_loop() -> None:

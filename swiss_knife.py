@@ -388,7 +388,7 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
     except KeyboardInterrupt:
         # Child should receive Ctrl+C too; return cleanly to launcher.
         pass
-    print(style("\nDone. Press Enter to return to the menu.", STYLE_BOLD))
+    print(style("\nDone. Press Enter to return to the menu.", COLOR_SUCCESS, STYLE_BOLD))
     try:
         input()
     except EOFError:

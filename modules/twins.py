@@ -390,15 +390,17 @@ def parse_network_selection(choice: str, max_index: int) -> Optional[List[int]]:
     return selected if selected else None
 
 
-def select_networks(attack_interface: str, duration_seconds: int) -> List[Dict[str, Optional[str]]]:
+def select_networks(attack_interface: str, duration_seconds: int) -> Optional[List[Dict[str, Optional[str]]]]:
     while True:
         networks = scan_wireless_networks(attack_interface, duration_seconds, show_progress=True)
         if not networks:
             logging.warning("No networks found during scan.")
-            retry = input(f"{style('Rescan', STYLE_BOLD)}? (Y/N): ").strip().lower()
+            retry = input(
+                f"{style('Rescan', STYLE_BOLD)} (Y) or {style('Exit', STYLE_BOLD)} (E): "
+            ).strip().lower()
             if retry == "y":
                 continue
-            sys.exit(1)
+            return None
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
@@ -409,10 +411,12 @@ def select_networks(attack_interface: str, duration_seconds: int) -> List[Dict[s
             logging.info("  %s %s %s", color_text(label, COLOR_HIGHLIGHT), channel, signal)
 
         choice = input(
-            f"{style('Select network(s)', STYLE_BOLD)} (number, e.g. 1 or 1,3; R to rescan): "
+            f"{style('Select network(s)', STYLE_BOLD)} (number, e.g. 1 or 1,3; R to rescan; E to exit): "
         ).strip().lower()
         if choice == "r":
             continue
+        if choice in {"e", "q", "exit", "quit"}:
+            return None
         selected_indexes = parse_network_selection(choice, len(networks))
         if selected_indexes:
             return [networks[idx - 1] for idx in selected_indexes]
@@ -954,14 +958,14 @@ def run_twins_session() -> bool:
     ATTACK_INTERFACE = select_interface(interfaces, "Select attack interface")
 
     logging.info("")
-    input(f"{style('Press Enter', STYLE_BOLD)} to switch {ATTACK_INTERFACE} to monitor mode...")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {ATTACK_INTERFACE} to monitor mode...")
     if not enable_monitor_mode(ATTACK_INTERFACE, None):
         return False
 
     logging.info("")
     scan_prompt = (
         f"{style('Scan duration', STYLE_BOLD)} in seconds "
-        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): "
     )
     scan_input = input(scan_prompt).strip()
     try:
@@ -974,8 +978,11 @@ def run_twins_session() -> bool:
         scan_seconds = 1
 
     logging.info("")
-    input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {ATTACK_INTERFACE}...")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to scan networks on {ATTACK_INTERFACE}...")
     target_networks = select_networks(ATTACK_INTERFACE, scan_seconds)
+    if not target_networks:
+        logging.info(color_text("Aborted by user.", COLOR_STOP))
+        return False
     logging.info("")
     logging.info(style("Targets selected:", STYLE_BOLD))
     for target in target_networks:
@@ -1008,7 +1015,7 @@ def run_twins_session() -> bool:
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to start Evil Twin for "
+        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start Evil Twin for "
         f"{style(AP_SSID, COLOR_SUCCESS, STYLE_BOLD)}..."
     )
 

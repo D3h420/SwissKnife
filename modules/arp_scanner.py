@@ -317,7 +317,9 @@ class ArpScanner(Module):
         self._stop_event.clear()
         self._install_signal_handlers()
 
-        self.console.print(Panel.fit("ARP scanner", border_style="cyan", subtitle="SwissKnife"))
+        self.console.print("[cyan]ARP Scanner Wizard[/cyan]")
+        self.console.print("Wi-Fi join + LAN ARP discovery")
+        self.console.print("")
 
         try:
             self._ensure_runtime_requirements()
@@ -568,32 +570,22 @@ class ArpScanner(Module):
                 self.console.print(f"[green]Selected interface:[/green] {display_name}")
             return ordered[0]
 
-        table = Table(title="Available Wi-Fi Interfaces", box=box.SIMPLE_HEAVY)
-        table.add_column("#", justify="right", style="cyan", no_wrap=True)
-        table.add_column("Interface", style="bold")
-        table.add_column("Role")
-        table.add_column("Driver/Bus")
-        table.add_column("Mode")
-        table.add_column("State")
+        self.console.print("")
+        self.console.print("[bold]Available interfaces:[/bold]")
         for idx, iface in enumerate(ordered, start=1):
             profile = self._interface_profiles.get(iface)
             if not profile:
                 display_name = f"{iface} (AP running)" if iface == "wlan0" else iface
-                table.add_row(str(idx), display_name, "-", "-", "-", "-")
+                self.console.print(f"  {idx}) {display_name} - unknown [unknown]")
                 continue
             display_name = f"{profile.name} (AP running)" if profile.name == "wlan0" else profile.name
-            table.add_row(
-                str(idx),
-                display_name,
-                profile.role,
-                profile.chipset,
-                profile.mode,
-                profile.state,
+            details = f"{profile.chipset} [{profile.mode.lower()} | {profile.state}]"
+            self.console.print(
+                f"  [magenta]{idx}) {display_name} -[/magenta] {details}"
             )
-        self.console.print(table)
 
         while self.running:
-            raw = Prompt.ask("Select interface number", default="1", console=self.console)
+            raw = Prompt.ask("Select interface (number)", default="1", console=self.console)
             try:
                 picked = int(raw)
             except ValueError:

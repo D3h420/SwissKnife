@@ -694,15 +694,17 @@ def scan_wireless_networks(
     return []
 
 
-def select_network(attack_interface: str, duration_seconds: int) -> Dict[str, Optional[str]]:
+def select_network(attack_interface: str, duration_seconds: int) -> Optional[Dict[str, Optional[str]]]:
     while True:
         networks = scan_wireless_networks(attack_interface, duration_seconds, show_progress=True)
         if not networks:
             logging.warning("No networks found during scan.")
-            retry = input(f"{style('Rescan', STYLE_BOLD)}? (Y/N): ").strip().lower()
+            retry = input(
+                f"{style('Rescan', STYLE_BOLD)} (Y) or {style('Exit', STYLE_BOLD)} (E): "
+            ).strip().lower()
             if retry == "y":
                 continue
-            sys.exit(1)
+            return None
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
@@ -713,10 +715,12 @@ def select_network(attack_interface: str, duration_seconds: int) -> Dict[str, Op
             logging.info("  %s %s %s", color_text(label, COLOR_HIGHLIGHT), channel, signal)
 
         choice = input(
-            f"{style('Select network', STYLE_BOLD)} (number, or R to rescan): "
+            f"{style('Select network', STYLE_BOLD)} (number, R to rescan, E to exit): "
         ).strip().lower()
         if choice == "r":
             continue
+        if choice in {"e", "q", "exit", "quit"}:
+            return None
         if choice.isdigit():
             idx = int(choice)
             if 1 <= idx <= len(networks):
@@ -1258,7 +1262,7 @@ def run_deauth_session() -> bool:
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to managed mode for scanning..."
+        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {SELECTED_INTERFACE} to managed mode for scanning..."
     )
     if not set_interface_mode(SELECTED_INTERFACE, "managed"):
         return False
@@ -1267,13 +1271,15 @@ def run_deauth_session() -> bool:
     logging.info("")
     scan_seconds = prompt_int(
         f"{style('Scan duration', STYLE_BOLD)} in seconds "
-        f"({style('Enter', STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): ",
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} for {style('15', COLOR_SUCCESS, STYLE_BOLD)}): ",
         default=15,
     )
 
     logging.info("")
-    input(f"{style('Press Enter', STYLE_BOLD)} to scan networks on {SELECTED_INTERFACE}...")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to scan networks on {SELECTED_INTERFACE}...")
     target_network = select_network(SELECTED_INTERFACE, scan_seconds)
+    if target_network is None:
+        return False
     block_reason = get_deauth_safety_block_reason(target_network, SELECTED_INTERFACE)
     if block_reason:
         logging.warning(color_text("Safety warning:", COLOR_WARNING))
@@ -1288,7 +1294,7 @@ def run_deauth_session() -> bool:
 
     logging.info("")
     input(
-        f"{style('Press Enter', STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode for attack..."
+        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode for attack..."
     )
     if not set_interface_mode(SELECTED_INTERFACE, "monitor"):
         return False
@@ -1312,7 +1318,7 @@ def run_deauth_session() -> bool:
     
     logging.info("")
     logging.info(style("ATTACK CONTROLS:", STYLE_BOLD))
-    logging.info("  [Enter] - Stop attack and exit")
+    logging.info("  %s - Stop attack and exit", style("[Enter]", COLOR_SUCCESS, STYLE_BOLD))
     logging.info("  [Ctrl+C] - Emergency stop")
     logging.info("")
     logging.info(style("Note:", COLOR_WARNING))
@@ -1321,7 +1327,7 @@ def run_deauth_session() -> bool:
     
     try:
         while ATTACK_RUNNING:
-            input(style("Press Enter to stop attack and exit: ", STYLE_BOLD))
+            input(style("Press Enter to stop attack and exit: ", COLOR_SUCCESS, STYLE_BOLD))
             if ATTACK_RUNNING:
                 stop_attack()
                 logging.info(color_text("✓ Attack stopped", COLOR_SUCCESS))
@@ -1340,7 +1346,7 @@ def run_deauth_session() -> bool:
 
 
 def main() -> None:
-    print_header("DEAUTH WIZARD v3.0", "Multi-Method Wi-Fi Deauthentication Tool")
+    print_header("Deauth Wizard", "Multi-method Wi-Fi deauthentication tool")
     logging.info(style("IMPORTANT:", COLOR_WARNING, STYLE_BOLD))
     logging.info("Use only on networks you own or have explicit permission to test!")
     logging.info("")

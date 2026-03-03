@@ -1338,7 +1338,7 @@ def main() -> None:
     try:
         if original_mode != "monitor":
             logging.info("")
-            input(f"{style('Press Enter', STYLE_BOLD)} to switch {interface} to monitor mode...")
+            input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {interface} to monitor mode...")
             if not set_interface_type(interface, "monitor"):
                 logging.error("Failed to enable monitor mode on %s.", interface)
                 sys.exit(1)
@@ -1348,12 +1348,12 @@ def main() -> None:
         logging.info("")
         scan_duration = prompt_int(
             f"{style('Scan duration', STYLE_BOLD)} (seconds) "
-            f"({style('Enter', STYLE_BOLD)} = 15s): ",
+            f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = 15s): ",
             default=15
         )
 
         logging.info("")
-        input(f"{style('Press Enter', STYLE_BOLD)} to start scanning...")
+        input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start scanning...")
         aps = scan_networks(
             interface,
             scan_duration,
@@ -1395,7 +1395,7 @@ def main() -> None:
             logging.info("")
             raw_burst_on = input(
                 f"{style('Deauth burst ON time', STYLE_BOLD)} in seconds "
-                f"({style('Enter', STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_ON_SEC:.1f}, 0=disable): "
+                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_ON_SEC:.1f}, 0=disable): "
             ).strip()
             if not raw_burst_on:
                 deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
@@ -1412,7 +1412,7 @@ def main() -> None:
                 min_cycle = deauth_burst_on_sec + 0.5
                 deauth_burst_cycle_sec = prompt_float(
                     f"{style('Deauth burst cycle', STYLE_BOLD)} in seconds "
-                    f"({style('Enter', STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
+                    f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
                     default=DEFAULT_DEAUTH_BURST_CYCLE_SEC,
                     minimum=min_cycle,
                 )
@@ -1422,7 +1422,7 @@ def main() -> None:
                 logging.info("Deauth bursts disabled.")
 
         logging.info("")
-        input(f"{style('Press Enter', STYLE_BOLD)} to start deauth + capture...")
+        input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start deauth + capture...")
 
         output_dir = DEFAULT_HANDSHAKE_DIR
         summary = capture_full_handshakes(
@@ -1447,7 +1447,7 @@ def main() -> None:
             logging.info("Restoring managed mode...")
             restore_managed_mode(interface)
 
-    input(style("\nPress Enter to exit.", STYLE_BOLD))
+    input(style("\nPress Enter to exit.", COLOR_SUCCESS, STYLE_BOLD))
 
 
 if __name__ == "__main__":
