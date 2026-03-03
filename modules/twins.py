@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import sys
 import time
 import subprocess
@@ -69,6 +70,8 @@ DEAUTH_SWITCH_DELAY_SECONDS = 0.25
 MONITOR_SETTLE_SECONDS = 2.0
 SCAN_BUSY_RETRY_DELAY = 0.8
 SCAN_COMMAND_TIMEOUT = 4.0
+IWLIST_SCAN_TIMEOUT = 12.0
+NMCLI_SCAN_TIMEOUT = 6.0
 
 
 def load_portal_html() -> str:
@@ -235,6 +238,156 @@ def is_scan_busy_error(stderr: str) -> bool:
     return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
 
 
+def is_scan_unsupported_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "operation not supported" in lower or "not supported" in lower or "(-95)" in lower
+
+
+def scan_wireless_networks_iwlist(interface: str, timeout_seconds: float) -> List[Dict[str, Optional[str]]]:
+    try:
+        result = subprocess.run(
+            ["iwlist", interface, "scanning"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    networks: Dict[str, Dict[str, Optional[str]]] = {}
+    current: Dict[str, Optional[str]] = {}
+
+    def finalize_current() -> None:
+        if current.get("bssid") and current.get("ssid"):
+            existing = networks.get(current["bssid"])
+            if existing is None or (
+                current.get("signal") is not None
+                and (existing.get("signal") is None or current["signal"] > existing["signal"])
+            ):
+                networks[current["bssid"]] = dict(current)
+
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if "Cell " in line and "Address:" in line:
+            finalize_current()
+            bssid = line.split("Address:", 1)[1].strip()
+            current = {"bssid": bssid, "ssid": None, "signal": None, "channel": None}
+            continue
+        if line.startswith("ESSID:"):
+            ssid_val = line.split(":", 1)[1].strip().strip('"')
+            current["ssid"] = ssid_val if ssid_val else "<hidden>"
+            continue
+        if "Signal level=" in line:
+            signal_text = line.split("Signal level=", 1)[1]
+            cleaned = (
+                signal_text.replace("dBm", " ")
+                .replace("dbm", " ")
+                .replace("/", " ")
+                .replace(";", " ")
+            )
+            for part in cleaned.split():
+                try:
+                    current["signal"] = float(part)
+                    break
+                except ValueError:
+                    continue
+            continue
+        if "Channel:" in line:
+            channel_text = line.split("Channel:", 1)[1].strip()
+            channel_val = parse_channel_value(channel_text.split()[0])
+            if channel_val is not None:
+                current["channel"] = channel_val
+            continue
+        if "Frequency:" in line and "(Channel" in line:
+            try:
+                channel_part = line.split("(Channel", 1)[1].split(")", 1)[0].strip()
+            except IndexError:
+                channel_part = ""
+            channel_val = parse_channel_value(channel_part.split()[0] if channel_part else None)
+            if channel_val is not None:
+                current["channel"] = channel_val
+
+    finalize_current()
+    return sorted(
+        networks.values(),
+        key=lambda item: item["signal"] if item["signal"] is not None else -1000,
+        reverse=True,
+    )
+
+
+def scan_wireless_networks_nmcli(interface: str, timeout_seconds: float) -> List[Dict[str, Optional[str]]]:
+    try:
+        subprocess.run(
+            ["nmcli", "dev", "wifi", "rescan", "ifname", interface],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        result = subprocess.run(
+            ["nmcli", "-t", "-f", "SSID,BSSID,FREQ,SIGNAL", "dev", "wifi", "list", "ifname", interface],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    networks: Dict[str, Dict[str, Optional[str]]] = {}
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        match = re.match(
+            r"^(?P<ssid>.*?):(?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}):(?P<freq>[^:]*):(?P<signal>[^:]*)$",
+            line,
+        )
+        if not match:
+            continue
+        ssid = match.group("ssid").replace("\\:", ":").replace("\\\\", "\\").strip()
+        bssid = match.group("bssid").strip().lower()
+        freq_val = parse_freq_value(match.group("freq").strip())
+        signal_pct = match.group("signal").strip()
+        try:
+            pct = float(signal_pct)
+        except ValueError:
+            pct = None
+        signal_dbm: Optional[float]
+        if pct is None:
+            signal_dbm = None
+        else:
+            signal_dbm = (pct / 2.0) - 100.0
+        channel = freq_to_channel(freq_val) if freq_val is not None else None
+        ssid_val = ssid if ssid else "<hidden>"
+        if not bssid:
+            continue
+        existing = networks.get(bssid)
+        entry = {"bssid": bssid, "ssid": ssid_val, "signal": signal_dbm, "channel": channel}
+        if existing is None or (
+            signal_dbm is not None
+            and (existing.get("signal") is None or signal_dbm > existing["signal"])
+        ):
+            networks[bssid] = entry
+
+    return sorted(
+        networks.values(),
+        key=lambda item: item["signal"] if item["signal"] is not None else -1000,
+        reverse=True,
+    )
+
+
 def scan_wireless_networks(
     interface: str,
     duration_seconds: int = 15,
@@ -249,6 +402,25 @@ def scan_wireless_networks(
             timeout=timeout_seconds,
             check=False,
         )
+
+    started_in_monitor = is_monitor_mode(interface)
+    restore_monitor_after_scan = False
+    fallback_reason: Optional[str] = None
+
+    def restore_monitor_mode() -> None:
+        if not restore_monitor_after_scan:
+            return
+        if not set_interface_type(interface, "monitor"):
+            logging.error("Failed to restore monitor mode after scan.")
+            return
+        wait_for_monitor_settle(interface)
+
+    if started_in_monitor:
+        if set_interface_type(interface, "managed"):
+            restore_monitor_after_scan = True
+            time.sleep(1.0)
+        else:
+            logging.warning("Could not switch %s to managed mode for scan.", interface)
 
     end_time = time.time() + max(1, duration_seconds)
     networks: Dict[str, Dict[str, Optional[str]]] = {}
@@ -274,41 +446,31 @@ def scan_wireless_networks(
             logging.error("Required tool 'iw' not found!")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
+            restore_monitor_mode()
             return []
         except subprocess.TimeoutExpired:
             time.sleep(0.2)
             continue
-
-        if result.returncode != 0 and is_monitor_mode(interface):
-            if set_interface_type(interface, "managed"):
-                fallback_timed_out = False
-                try:
-                    remaining_time = end_time - time.time()
-                    if remaining_time <= 0:
-                        break
-                    timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
-                    result = run_scan(timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    fallback_timed_out = True
-                finally:
-                    if not set_interface_type(interface, "monitor"):
-                        logging.error("Failed to restore monitor mode after scan.")
-                    else:
-                        time.sleep(0.5)
-
-                if fallback_timed_out:
-                    time.sleep(0.2)
-                    continue
 
         if result.returncode != 0:
             err_text = result.stderr.strip()
             if is_scan_busy_error(err_text):
                 time.sleep(SCAN_BUSY_RETRY_DELAY)
                 continue
-            logging.error("Wireless scan failed: %s", err_text or "unknown error")
-            if show_progress and COLOR_ENABLED:
-                sys.stdout.write("\n")
-            return []
+            fallback_reason = err_text or "unknown error"
+            if is_scan_unsupported_error(err_text):
+                logging.warning(
+                    "iw scan is not supported on %s in current state (%s). Trying fallback scanners.",
+                    interface,
+                    fallback_reason,
+                )
+            else:
+                logging.warning(
+                    "iw scan failed on %s (%s). Trying fallback scanners.",
+                    interface,
+                    fallback_reason,
+                )
+            break
 
         current: Dict[str, Optional[str]] = {}
         for raw_line in result.stdout.splitlines():
@@ -371,7 +533,23 @@ def scan_wireless_networks(
         key=lambda item: item["signal"] if item["signal"] is not None else -1000,
         reverse=True,
     )
-    return sorted_networks
+    if sorted_networks:
+        restore_monitor_mode()
+        return sorted_networks
+
+    fallback = scan_wireless_networks_iwlist(interface, IWLIST_SCAN_TIMEOUT)
+    if fallback:
+        restore_monitor_mode()
+        return fallback
+    nmcli_fallback = scan_wireless_networks_nmcli(interface, NMCLI_SCAN_TIMEOUT)
+    if nmcli_fallback:
+        restore_monitor_mode()
+        return nmcli_fallback
+
+    restore_monitor_mode()
+    if fallback_reason:
+        logging.error("Wireless scan failed: %s", fallback_reason)
+    return []
 
 
 def parse_network_selection(choice: str, max_index: int) -> Optional[List[int]]:

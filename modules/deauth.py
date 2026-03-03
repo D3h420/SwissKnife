@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import sys
 import time
 import signal
@@ -421,6 +422,13 @@ def is_scan_busy_error(stderr: str) -> bool:
     return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
 
 
+def is_scan_unsupported_error(stderr: str) -> bool:
+    if not stderr:
+        return False
+    lower = stderr.lower()
+    return "operation not supported" in lower or "not supported" in lower or "(-95)" in lower
+
+
 def scan_wireless_networks_iwlist(interface: str, timeout_seconds: float) -> List[Dict[str, Optional[str]]]:
     try:
         result = subprocess.run(
@@ -531,15 +539,19 @@ def scan_wireless_networks_nmcli(interface: str, timeout_seconds: float) -> List
 
     networks: Dict[str, Dict[str, Optional[str]]] = {}
     for raw_line in result.stdout.splitlines():
-        if not raw_line.strip():
+        line = raw_line.strip()
+        if not line:
             continue
-        parts = raw_line.split(":")
-        if len(parts) < 4:
+        match = re.match(
+            r"^(?P<ssid>.*?):(?P<bssid>(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}):(?P<freq>[^:]*):(?P<signal>[^:]*)$",
+            line,
+        )
+        if not match:
             continue
-        ssid = parts[0].strip()
-        bssid = parts[1].strip().lower()
-        freq_val = parse_freq_value(parts[2].strip())
-        signal_pct = parts[3].strip()
+        ssid = match.group("ssid").replace("\\:", ":").replace("\\\\", "\\").strip()
+        bssid = match.group("bssid").strip().lower()
+        freq_val = parse_freq_value(match.group("freq").strip())
+        signal_pct = match.group("signal").strip()
         try:
             pct = float(signal_pct)
         except ValueError:
@@ -586,6 +598,7 @@ def scan_wireless_networks(
     end_time = time.time() + max(1, duration_seconds)
     networks: Dict[str, Dict[str, Optional[str]]] = {}
     last_remaining = None
+    fallback_reason: Optional[str] = None
     while time.time() < end_time:
         if show_progress and COLOR_ENABLED:
             remaining = max(0, int(end_time - time.time()))
@@ -617,10 +630,20 @@ def scan_wireless_networks(
             if is_scan_busy_error(err_text):
                 time.sleep(SCAN_BUSY_RETRY_DELAY)
                 continue
-            logging.error("Wireless scan failed: %s", err_text or "unknown error")
-            if show_progress and COLOR_ENABLED:
-                sys.stdout.write("\n")
-            return []
+            fallback_reason = err_text or "unknown error"
+            if is_scan_unsupported_error(err_text):
+                logging.warning(
+                    "iw scan is not supported on %s in current state (%s). Trying fallback scanners.",
+                    interface,
+                    fallback_reason,
+                )
+            else:
+                logging.warning(
+                    "iw scan failed on %s (%s). Trying fallback scanners.",
+                    interface,
+                    fallback_reason,
+                )
+            break
 
         current: Dict[str, Optional[str]] = {}
         for raw_line in result.stdout.splitlines():
@@ -691,6 +714,8 @@ def scan_wireless_networks(
     nmcli_fallback = scan_wireless_networks_nmcli(interface, NMCLI_SCAN_TIMEOUT)
     if nmcli_fallback:
         return nmcli_fallback
+    if fallback_reason:
+        logging.error("Wireless scan failed: %s", fallback_reason)
     return []
 
 

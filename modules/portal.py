@@ -6,6 +6,7 @@ import sys
 import time
 import subprocess
 import threading
+from typing import Optional
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
