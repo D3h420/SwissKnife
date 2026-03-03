@@ -400,7 +400,6 @@ class WiFiPoet(Module):
         if self._get_interface_mode(iface).lower() == "monitor":
             return iface
         try:
-            subprocess.run(["airmon-ng", "check", "kill"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
             result = subprocess.run(["airmon-ng", "start", iface], capture_output=True, text=True, check=False)
             if result.returncode == 0:
                 output = result.stdout + result.stderr
