@@ -14,6 +14,7 @@ The main entry point is `swiss_knife.py`. Control the chaos with
 - Evil Twin - rogue AP + portal workflow
 - Bluetooth - BT scan workflow
 - Handshaker - PCAP capture + 4-way EAPOL validation
+- Dragon Drain - single-target Dragon Drain attack (BSSID + channel)
 - ARP scan - ARP table discovery (IP/MAC/OUI vendor)
 - IP.CAM finder - camera discovery by Wi-Fi OUI + LAN neighbor scan
 - WiFi Poet - SSID beacon spam (chaos/custom mode)
@@ -90,7 +91,6 @@ sudo apt install -y arp-scan
 ## Recon vendor lookup (optional)
 
 If you want vendor names in recon results, add an OUI file at `modules/oui.txt`
-or set `SWISSKNIFE_VENDOR_DB` to a custom path.
 
 ## Legal note ⚠️
 

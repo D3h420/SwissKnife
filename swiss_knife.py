@@ -57,7 +57,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
     "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "WiFi Poet", "file": os.path.join("modules", "wifi_poet.py")},
-    "6": {"name": "SEA Overflow (Jan nedded here).", "file": "", "disabled": True},
+    "6": {"name": "Dragon Drain", "file": os.path.join("modules", "dragon_drain.py")},
     "7": {"name": "Karma (under construction)", "file": "", "disabled": True},
     "spacer_after_basic": {"name": "", "separator": True},
     "inside": {"name": "-INSIDE-", "separator": True},
