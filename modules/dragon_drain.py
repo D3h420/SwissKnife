@@ -45,6 +45,21 @@ DRAGON_REPO_URL = "https://github.com/vanhoefm/dragondrain-and-time.git"
 MONITOR_SETTLE_SECONDS = 2.0
 SCAN_PROGRESS_INTERVAL = 0.2
 DEFAULT_SCAN_DURATION = 15
+ATTACK_REQUIRED_TOOLS = ["iw", "ip", "airodump-ng", "ethtool"]
+INSTALL_REQUIRED_TOOLS = ["apt-get"]
+SYSTEM_APT_PACKAGES = [
+    "aircrack-ng",
+    "ethtool",
+    "iproute2",
+    "git",
+    "autoconf",
+    "automake",
+    "libtool",
+    "shtool",
+    "libssl-dev",
+    "pkg-config",
+    "build-essential",
+]
 
 # Requested by user to keep hardcoded for now.
 DRAGON_BEACON_RATE = "54"  # -b
@@ -78,6 +93,17 @@ def print_header(title: str, subtitle: Optional[str] = None) -> None:
     if subtitle:
         logging.info(subtitle)
     logging.info("")
+
+
+def prompt_yes_no(message: str, default_yes: bool = True) -> bool:
+    raw = input(style(message, STYLE_BOLD)).strip().lower()
+    if not raw:
+        return default_yes
+    return raw in {"y", "yes"}
+
+
+def missing_tools(tools: List[str]) -> List[str]:
+    return [tool for tool in tools if shutil.which(tool) is None]
 
 
 def list_network_interfaces() -> List[str]:
@@ -540,24 +566,17 @@ def install_dragon() -> bool:
         logging.error("Install Dragon requires root privileges.")
         return False
 
-    missing_tools = [tool for tool in ("git", "apt-get", "autoreconf", "make") if shutil.which(tool) is None]
-    if missing_tools:
-        logging.error("Missing required tools: %s", ", ".join(missing_tools))
+    missing_install_tools = missing_tools(INSTALL_REQUIRED_TOOLS)
+    if missing_install_tools:
+        logging.error("Missing installer tools: %s", ", ".join(missing_install_tools))
+        return False
+
+    if not run_shell_command(["apt-get", "install", "-y", *SYSTEM_APT_PACKAGES], cwd=PROJECT_ROOT):
         return False
 
     if not ensure_dragon_repo():
         return False
 
-    apt_packages = [
-        "autoconf",
-        "automake",
-        "libtool",
-        "shtool",
-        "libssl-dev",
-        "pkg-config",
-    ]
-    if not run_shell_command(["apt-get", "install", "-y", *apt_packages], cwd=DRAGON_DIR):
-        return False
     if not run_shell_command(["autoreconf", "-i"], cwd=DRAGON_DIR):
         return False
     if not run_shell_command(["./autogen.sh"], cwd=DRAGON_DIR):
@@ -583,8 +602,7 @@ def dragon_ready() -> bool:
 
 
 def ensure_required_tools() -> bool:
-    required = ["iw", "ip", "airodump-ng", "ethtool"]
-    missing = [tool for tool in required if shutil.which(tool) is None]
+    missing = missing_tools(ATTACK_REQUIRED_TOOLS)
     if not missing:
         return True
     logging.error("Missing required tools: %s", ", ".join(missing))
@@ -727,35 +745,51 @@ def run_attack_session() -> None:
             restore_managed_mode(attack_interface)
 
 
-def main_menu() -> None:
-    while True:
-        print_header("Dragon Drain", "Single-target Dragon Drain attack workflow")
-        logging.info("  %s", color_text("[1] Start attack", COLOR_HIGHLIGHT))
-        logging.info("  %s", color_text("[2] Install Dragon", COLOR_HIGHLIGHT))
-        logging.info("  %s", color_text("[0] Exit", COLOR_HIGHLIGHT))
-        logging.info("")
+def bootstrap_dragon() -> bool:
+    missing_runtime = missing_tools(ATTACK_REQUIRED_TOOLS)
+    binary_ready = dragon_ready()
+    installer_ready = not missing_tools(INSTALL_REQUIRED_TOOLS)
 
-        choice = input(style("Your choice (0-2): ", STYLE_BOLD)).strip()
-        if choice == "0":
-            return
-        if choice == "1":
-            run_attack_session()
-        elif choice == "2":
-            install_dragon()
-        else:
-            logging.warning("Invalid choice. Try again.")
-            continue
+    if not missing_runtime and binary_ready:
+        logging.info(color_text("Dragon Drain environment is ready.", COLOR_SUCCESS))
+        return True
 
-        logging.info("")
-        input(style("Press Enter to return to Dragon Drain menu...", COLOR_SUCCESS, STYLE_BOLD))
-        logging.info("")
+    logging.info(style("Bootstrap check:", STYLE_BOLD))
+    if missing_runtime:
+        logging.info("Missing runtime tools: %s", ", ".join(missing_runtime))
+    if not binary_ready:
+        logging.info("Dragon binary not found: %s", DRAGON_BIN_PATH)
+    if not installer_ready:
+        logging.info("Installer tool missing: apt-get")
+
+    logging.info("")
+    if not prompt_yes_no("Install all required tools and build Dragon now? [Y/n]: ", default_yes=True):
+        logging.info("Installation skipped by user.")
+        return False
+
+    logging.info("")
+    if not install_dragon():
+        return False
+
+    if not ensure_required_tools():
+        return False
+    if not dragon_ready():
+        logging.error("Dragon Drain binary is still missing after install.")
+        return False
+
+    logging.info(color_text("Bootstrap completed.", COLOR_SUCCESS))
+    return True
 
 
 def main() -> None:
     if os.geteuid() != 0:
         logging.error("This script must be run as root!")
         sys.exit(1)
-    main_menu()
+    print_header("Dragon Drain", "Single-target Dragon Drain attack workflow")
+    if not bootstrap_dragon():
+        return
+    logging.info("")
+    run_attack_session()
 
 
 if __name__ == "__main__":
