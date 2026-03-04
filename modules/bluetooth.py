@@ -409,6 +409,7 @@ def is_wlan0_ap_running() -> bool:
 
 def select_hci_interface(interfaces: List[str]) -> str:
     if not interfaces:
+        logging.warning("No Bluetooth controllers detected. Falling back to hci0.")
         return "hci0"
 
     prefer_usb = is_wlan0_ap_running()
@@ -424,23 +425,45 @@ def select_hci_interface(interfaces: List[str]) -> str:
         )
     selected = ranked[0]
 
-    if len(ranked) > 1:
+    if len(ranked) == 1:
         logging.info("")
-        logging.info(style("Bluetooth interface auto-selection:", STYLE_BOLD))
-        if prefer_usb:
-            logging.info(
-                color_text(
-                    "Detected wlan0 in AP mode: preferring USB Bluetooth controller for scan stability.",
-                    COLOR_WARNING,
-                )
-            )
-        for iface in ranked:
-            selected_mark = " [selected]" if iface == selected else ""
-            logging.info("  - %s (%s)%s", iface, controller_label(iface), selected_mark)
-        if is_usb_controller(selected):
-            logging.warning("No internal controller detected. Falling back to %s.", selected)
+        logging.info(
+            "Bluetooth interface selected: %s (%s)",
+            style(selected, COLOR_SUCCESS, STYLE_BOLD),
+            controller_label(selected),
+        )
+        return selected
 
-    return selected
+    logging.info("")
+    logging.info(style("Available Bluetooth interfaces:", STYLE_BOLD))
+    if prefer_usb:
+        logging.info(
+            color_text(
+                "Detected wlan0 in AP mode: USB Bluetooth is recommended for scan stability.",
+                COLOR_WARNING,
+            )
+        )
+
+    for index, iface in enumerate(ranked, start=1):
+        recommended = " [recommended]" if iface == selected else ""
+        label = f"{index}) {iface}"
+        logging.info("  %s (%s)%s", color_text(label, COLOR_HIGHLIGHT), controller_label(iface), recommended)
+
+    while True:
+        choice = input(
+            f"{style('Select Bluetooth interface', STYLE_BOLD)} "
+            f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} for {selected}): "
+        ).strip()
+
+        if not choice:
+            return selected
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(ranked):
+                return ranked[idx - 1]
+        if choice in ranked:
+            return choice
+        logging.warning("Invalid selection. Try again.")
 
 
 def update_device(
