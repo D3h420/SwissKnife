@@ -197,10 +197,11 @@ except ImportError:
             self.running = False
         def stop(self): self.running = False; self.status = "stopped"
         def execute(self): pass
-
-####
-#### YOU CAN CHANGE CUSTOM SSID HERE - MAX 30 LINES (will be rotated on all channels)
-#### 
+#########################################
+####                                 ####
+#### YOU CAN CHANGE CUSTOM SSID HERE #### 
+####                                 ####
+#########################################
 
 CUSTOM_LINES = [
     "Litwo! Ojczyzno moja!;",

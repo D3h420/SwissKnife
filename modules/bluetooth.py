@@ -17,10 +17,12 @@ COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
 COLOR_HEADER = "\033[36m" if COLOR_ENABLED else ""
 COLOR_HIGHLIGHT = "\033[35m" if COLOR_ENABLED else ""
+COLOR_SUCCESS = "\033[32m" if COLOR_ENABLED else ""
 COLOR_WARNING = "\033[33m" if COLOR_ENABLED else ""
 STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 SCAN_REFRESH_SECONDS = 0.8
+DEVICE_STALE_SECONDS = 45.0
 
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 BTCTL_EVENT_PATTERN = re.compile(r"^(?:\[[A-Z]+\]\s+)?Device\s+([0-9A-Fa-f:]{17})(?:\s+(.*))?$")
@@ -579,6 +581,19 @@ def sorted_devices(devices: Dict[str, BluetoothDevice]) -> List[BluetoothDevice]
     )
 
 
+def prune_stale_devices(devices: Dict[str, BluetoothDevice], stale_after_seconds: float) -> None:
+    if stale_after_seconds <= 0:
+        return
+    now = time.time()
+    stale_keys = [
+        key
+        for key, device in devices.items()
+        if (now - device.last_seen) > stale_after_seconds
+    ]
+    for key in stale_keys:
+        devices.pop(key, None)
+
+
 def render_scan_live(
     devices: Dict[str, BluetoothDevice],
     started_at: float,
@@ -702,6 +717,7 @@ def scan_bt_devices_live(interface: str) -> List[BluetoothDevice]:
                 last_enrich = now
 
             with lock:
+                prune_stale_devices(devices, DEVICE_STALE_SECONDS)
                 snapshot = {k: BluetoothDevice(**vars(v)) for k, v in devices.items()}
             render_scan_live(snapshot, started_at, ", ".join(active_backend_names) or "none")
             time.sleep(SCAN_REFRESH_SECONDS)
@@ -719,6 +735,7 @@ def scan_bt_devices_live(interface: str) -> List[BluetoothDevice]:
         restore_signal(previous_sigint)
 
     with lock:
+        prune_stale_devices(devices, DEVICE_STALE_SECONDS)
         return sorted_devices(devices)
 
 
