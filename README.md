@@ -43,50 +43,19 @@ Portal files are stored in `html/`. You can add your own custom portals there.
 
 ## Requirements 🧩
 
-Core:
-- Python 3
-- Linux with a wireless adapter that supports monitor mode
-- Root privileges
-- Additional adapters (for example `wlan1`, `wlan2`) for recon/attack workflows
+- Linux + Python 3 + root access
+- Wi-Fi adapter(s) that support monitor mode (recommended: dedicated attack adapter)
+- Runtime Python dependency: `scapy` (launcher checks/installs automatically when possible)
 
-Runtime Python packages (launcher checks/installs on startup):
-- `scapy` (required by Handshaker)
-
-System tools used by launcher/modules:
-- `iw`
-- `ip` (from `iproute2`)
-- `ethtool`
-- `arp-scan`
-- `aireplay-ng` (Aircrack-ng suite)
-- `airodump-ng` (Aircrack-ng suite)
-- `mdk4`
-- `hostapd`
-- `dnsmasq`
-- `iptables`
-- `bluetoothctl` (BlueZ)
-- `btmgmt` (BlueZ)
-
-Extra tools used by specific paths/fallbacks:
-- `iwlist` (wireless-tools fallback scans)
-- `nmcli` (NetworkManager scan fallback)
-- `wpa_supplicant` + DHCP client (`dhclient` or `dhcpcd` or `udhcpc`) as connect fallback in ARP/IP.CAM modules
-- `ifconfig` and `iwconfig` (legacy mode fallback in deauth)
-- `hciconfig` and `hcitool` (Bluetooth legacy operations)
-- `rfkill` (Bluetooth unblock)
-- `systemctl` (Bluetooth service control on systemd hosts)
-
-Optional tools:
-- `bully`
-- `avahi-daemon` (for `<hostname>.local` discovery in local network)
-
-Optional for IP.CAM finder:
-- `rich`
-
-ARP module dependency install (Debian/Ubuntu):
+Debian/Ubuntu quick install:
 ```bash
 sudo apt update
-sudo apt install -y arp-scan
+sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptables bluez rfkill wireless-tools network-manager avahi-daemon bully
 ```
+
+Notes:
+- Dragon Drain has its own in-module installer/build flow.
+- `rich` is optional (only for prettier output in selected modules).
 
 ## Recon vendor lookup (optional)
 

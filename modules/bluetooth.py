@@ -46,13 +46,6 @@ def style(text: str, *styles: str) -> str:
     return f"{prefix}{text}{COLOR_RESET}" if prefix else text
 
 
-def prompt_yes_no(message: str, default_yes: bool = True) -> bool:
-    raw = input(style(message, STYLE_BOLD)).strip().lower()
-    if not raw:
-        return default_yes
-    return raw in {"y", "yes"}
-
-
 def tool_exists(tool: str) -> bool:
     return subprocess.run(
         ["which", tool],
@@ -367,6 +360,18 @@ def hci_index(interface: str) -> int:
     return 9999
 
 
+def hci_is_up(interface: str) -> bool:
+    if not interface.startswith("hci"):
+        return True
+    if not tool_exists("hciconfig"):
+        return True
+    details = run_command(["hciconfig", interface], capture_output=True, timeout=2.0)
+    if details.returncode != 0:
+        return False
+    upper = details.stdout.upper()
+    return "UP RUNNING" in upper or " UP " in upper
+
+
 def hci_device_path(interface: str) -> Optional[str]:
     path = os.path.join("/sys/class/bluetooth", interface, "device")
     if not os.path.exists(path):
@@ -416,12 +421,12 @@ def select_hci_interface(interfaces: List[str]) -> str:
     if prefer_usb:
         ranked = sorted(
             interfaces,
-            key=lambda iface: (not is_usb_controller(iface), hci_index(iface), iface),
+            key=lambda iface: (not hci_is_up(iface), not is_usb_controller(iface), hci_index(iface), iface),
         )
     else:
         ranked = sorted(
             interfaces,
-            key=lambda iface: (is_usb_controller(iface), hci_index(iface), iface),
+            key=lambda iface: (not hci_is_up(iface), is_usb_controller(iface), hci_index(iface), iface),
         )
     selected = ranked[0]
 
@@ -447,7 +452,15 @@ def select_hci_interface(interfaces: List[str]) -> str:
     for index, iface in enumerate(ranked, start=1):
         recommended = " [recommended]" if iface == selected else ""
         label = f"{index}) {iface}"
-        logging.info("  %s (%s)%s", color_text(label, COLOR_HIGHLIGHT), controller_label(iface), recommended)
+        state = "UP" if hci_is_up(iface) else "DOWN"
+        state_color = COLOR_SUCCESS if state == "UP" else COLOR_WARNING
+        logging.info(
+            "  %s (%s | %s)%s",
+            color_text(label, COLOR_HIGHLIGHT),
+            controller_label(iface),
+            color_text(state, state_color),
+            recommended,
+        )
 
     while True:
         choice = input(
@@ -834,15 +847,10 @@ def scan_flow() -> None:
     for index, candidate in enumerate(scan_order):
         if index > 0:
             logging.info("")
-            if not prompt_yes_no(
-                f"No devices on {used_interface}. Try {candidate} now? [Y/n]: ",
-                default_yes=True,
-            ):
-                break
-            logging.info("")
-            input(
-                f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start live BT scan on "
-                f"{interface_display_name(candidate)}..."
+            logging.warning(
+                "No devices on %s. Auto-retrying on %s...",
+                used_interface,
+                candidate,
             )
         used_interface = candidate
         devices = scan_bt_devices_live(candidate)
@@ -852,6 +860,11 @@ def scan_flow() -> None:
     logging.info("")
     if not devices:
         logging.warning("No Bluetooth devices found.")
+        controllers_state = ", ".join(
+            f"{iface}:{'UP' if hci_is_up(iface) else 'DOWN'}" for iface in (scan_order or interfaces)
+        )
+        if controllers_state:
+            logging.warning("Controllers state: %s", controllers_state)
         logging.warning("If this is unexpected, verify: controller powered on, not rfkill-blocked, and BlueZ service active.")
     else:
         logging.info("Detected on interface: %s", style(used_interface, COLOR_SUCCESS, STYLE_BOLD))
