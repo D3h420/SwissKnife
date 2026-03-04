@@ -46,6 +46,13 @@ def style(text: str, *styles: str) -> str:
     return f"{prefix}{text}{COLOR_RESET}" if prefix else text
 
 
+def prompt_yes_no(message: str, default_yes: bool = True) -> bool:
+    raw = input(style(message, STYLE_BOLD)).strip().lower()
+    if not raw:
+        return default_yes
+    return raw in {"y", "yes"}
+
+
 def tool_exists(tool: str) -> bool:
     return subprocess.run(
         ["which", tool],
@@ -387,19 +394,46 @@ def interface_display_name(interface: str) -> str:
     return f"{controller_label(interface)} ({interface})"
 
 
+def is_wlan0_ap_running() -> bool:
+    if not tool_exists("iw"):
+        return False
+    result = run_command(["iw", "dev", "wlan0", "info"], capture_output=True, timeout=2.0)
+    if result.returncode != 0:
+        return False
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip().lower()
+        if line.startswith("type ") and "ap" in line:
+            return True
+    return False
+
+
 def select_hci_interface(interfaces: List[str]) -> str:
     if not interfaces:
         return "hci0"
 
-    ranked = sorted(
-        interfaces,
-        key=lambda iface: (is_usb_controller(iface), hci_index(iface), iface),
-    )
+    prefer_usb = is_wlan0_ap_running()
+    if prefer_usb:
+        ranked = sorted(
+            interfaces,
+            key=lambda iface: (not is_usb_controller(iface), hci_index(iface), iface),
+        )
+    else:
+        ranked = sorted(
+            interfaces,
+            key=lambda iface: (is_usb_controller(iface), hci_index(iface), iface),
+        )
     selected = ranked[0]
 
     if len(ranked) > 1:
         logging.info("")
         logging.info(style("Bluetooth interface auto-selection:", STYLE_BOLD))
+        if prefer_usb:
+            logging.info(
+                color_text(
+                    "Detected wlan0 in AP mode: preferring USB Bluetooth controller for scan stability.",
+                    COLOR_WARNING,
+                )
+            )
         for iface in ranked:
             selected_mark = " [selected]" if iface == selected else ""
             logging.info("  - %s (%s)%s", iface, controller_label(iface), selected_mark)
@@ -761,7 +795,8 @@ def _on_btmgmt_line(line: str, devices: Dict[str, BluetoothDevice], lock: thread
 
 
 def scan_flow() -> None:
-    interface = select_hci_interface(list_hci_interfaces())
+    interfaces = list_hci_interfaces()
+    interface = select_hci_interface(interfaces)
     interface_label = interface_display_name(interface)
 
     logging.info("")
@@ -770,13 +805,33 @@ def scan_flow() -> None:
         f"({style('Enter/Ctrl+C', COLOR_SUCCESS, STYLE_BOLD)} to stop)..."
     )
 
-    devices = scan_bt_devices_live(interface)
+    scan_order = [interface] + [item for item in interfaces if item != interface]
+    devices: List[BluetoothDevice] = []
+    used_interface = interface
+    for index, candidate in enumerate(scan_order):
+        if index > 0:
+            logging.info("")
+            if not prompt_yes_no(
+                f"No devices on {used_interface}. Try {candidate} now? [Y/n]: ",
+                default_yes=True,
+            ):
+                break
+            logging.info("")
+            input(
+                f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start live BT scan on "
+                f"{interface_display_name(candidate)}..."
+            )
+        used_interface = candidate
+        devices = scan_bt_devices_live(candidate)
+        if devices:
+            break
 
     logging.info("")
     if not devices:
         logging.warning("No Bluetooth devices found.")
         logging.warning("If this is unexpected, verify: controller powered on, not rfkill-blocked, and BlueZ service active.")
     else:
+        logging.info("Detected on interface: %s", style(used_interface, COLOR_SUCCESS, STYLE_BOLD))
         logging.info(style("Final discovered devices:", STYLE_BOLD))
         for index, device in enumerate(devices, start=1):
             rssi = f"rssi {device.rssi} dBm" if device.rssi is not None else "rssi ?"
