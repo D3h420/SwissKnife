@@ -361,9 +361,14 @@ def select_interface(interfaces):
 
 
 def sanitize_filename(name):
-    sanitized = name.replace(os.sep, "_")
+    sanitized = (name or "").strip()
+    if not sanitized:
+        sanitized = "portal_capture"
+    sanitized = sanitized.replace(os.sep, "_")
     if os.altsep:
         sanitized = sanitized.replace(os.altsep, "_")
+    if not sanitized.lower().endswith(".txt"):
+        sanitized = f"{sanitized}.txt"
     return sanitized
 
 class CaptivePortalHandler(BaseHTTPRequestHandler):
