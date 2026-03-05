@@ -56,6 +56,54 @@ def is_scan_busy_error(stderr: str) -> bool:
         return False
     lower = stderr.lower()
     return "resource busy" in lower or "device or resource busy" in lower or "(-16)" in lower
+
+
+def service_is_active(service_name: str) -> bool:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", "--quiet", service_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def stop_service_if_active(service_name: str) -> bool:
+    if not service_is_active(service_name):
+        return False
+    subprocess.run(
+        ["systemctl", "stop", service_name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    time.sleep(0.3)
+    return True
+
+
+def collect_dhcp_binders() -> str:
+    try:
+        result = subprocess.run(
+            ["ss", "-lunp"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return ""
+
+    if result.returncode != 0:
+        return ""
+
+    listeners = []
+    for line in result.stdout.splitlines():
+        if ":67 " in line or line.rstrip().endswith(":67"):
+            listeners.append(line.strip())
+    return "\n".join(listeners)
 # Config
 AP_CHANNEL = "6"
 AP_IP = "192.168.100.1"
@@ -64,6 +112,8 @@ NETMASK = "255.255.255.0"
 DHCP_RANGE_START = "192.168.100.100"
 DHCP_RANGE_END = "192.168.100.200"
 LEASE_TIME = "12h"
+HOSTAPD_CONF_PATH = "/tmp/swissknife_portal_hostapd.conf"
+DNSMASQ_CONF_PATH = "/tmp/swissknife_portal_dnsmasq.conf"
 
 MODULE_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.dirname(MODULE_DIR)
@@ -79,6 +129,7 @@ CLI_AP_INTERFACE = ""
 CLI_SCAN_DURATION = 0
 CLI_AP_SSID = ""
 CLI_PORTAL_FILE = ""
+STOPPED_SERVICES = []
 
 
 
@@ -396,7 +447,18 @@ def setup_ap():
     logging.info("Setting up Access Point...")
     
     try:
+        global STOPPED_SERVICES
+        STOPPED_SERVICES = []
+
+        # Prevent DHCP/iface managers from racing with hostapd/dnsmasq.
+        for service_name in ("dnsmasq", "NetworkManager", "wpa_supplicant"):
+            if stop_service_if_active(service_name):
+                STOPPED_SERVICES.append(service_name)
+
         # Remove stale AP daemons from previous/failed runs.
+        subprocess.run(['pkill', '-f', HOSTAPD_CONF_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(['pkill', '-f', DNSMASQ_CONF_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Backward-compatible cleanup for old file names.
         subprocess.run(['pkill', '-f', '/tmp/hostapd.conf'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         subprocess.run(['pkill', '-f', '/tmp/dnsmasq.conf'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         time.sleep(0.4)
@@ -427,11 +489,11 @@ auth_algs=1
 ignore_broadcast_ssid=0
 """
         
-        with open('/tmp/hostapd.conf', 'w') as f:
+        with open(HOSTAPD_CONF_PATH, 'w') as f:
             f.write(hostapd_conf)
         
         # Start hostapd in the background.
-        hostapd_process = subprocess.Popen(['hostapd', '/tmp/hostapd.conf'], 
+        hostapd_process = subprocess.Popen(['hostapd', HOSTAPD_CONF_PATH], 
                                          stdout=subprocess.PIPE, 
                                          stderr=subprocess.PIPE,
                                          text=True)
@@ -446,6 +508,9 @@ ignore_broadcast_ssid=0
         # Configure dnsmasq for DHCP and DNS.
         dnsmasq_conf = f"""
 interface={AP_INTERFACE}
+bind-interfaces
+except-interface=lo
+listen-address={AP_IP}
 dhcp-range={DHCP_RANGE_START},{DHCP_RANGE_END},{NETMASK},{LEASE_TIME}
 dhcp-option=3,{AP_IP}
 dhcp-option=6,{AP_IP}
@@ -455,11 +520,11 @@ log-queries
 log-dhcp
 """
         
-        with open('/tmp/dnsmasq.conf', 'w') as f:
+        with open(DNSMASQ_CONF_PATH, 'w') as f:
             f.write(dnsmasq_conf)
         
         # Start dnsmasq.
-        dnsmasq_process = subprocess.Popen(['dnsmasq', '-C', '/tmp/dnsmasq.conf', '--no-daemon'],
+        dnsmasq_process = subprocess.Popen(['dnsmasq', '-C', DNSMASQ_CONF_PATH, '--no-daemon', '--bind-interfaces'],
                                          stdout=subprocess.PIPE,
                                          stderr=subprocess.PIPE,
                                          text=True)
@@ -469,6 +534,9 @@ log-dhcp
             logging.error("dnsmasq failed to start (exit code %s).", dnsmasq_process.returncode)
             if dnsmasq_log:
                 logging.error("dnsmasq output: %s", dnsmasq_log)
+            binders = collect_dhcp_binders()
+            if binders:
+                logging.error("Current UDP/67 listeners:\n%s", binders)
             try:
                 hostapd_process.terminate()
             except Exception:
@@ -536,13 +604,27 @@ def cleanup():
     subprocess.run(['iptables', '-F'], stderr=subprocess.DEVNULL)
     
     # Stop services.
+    subprocess.run(['pkill', '-f', HOSTAPD_CONF_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(['pkill', '-f', DNSMASQ_CONF_PATH], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     subprocess.run(['pkill', 'hostapd'], stderr=subprocess.DEVNULL)
     subprocess.run(['pkill', 'dnsmasq'], stderr=subprocess.DEVNULL)
     
     # Bring interface down.
-    subprocess.run(['ip', 'link', 'set', AP_INTERFACE, 'down'], stderr=subprocess.DEVNULL)
-    
-    # Restart NetworkManager.
+    if AP_INTERFACE:
+        subprocess.run(['ip', 'link', 'set', AP_INTERFACE, 'down'], stderr=subprocess.DEVNULL)
+
+    # Restore services stopped for AP mode.
+    global STOPPED_SERVICES
+    for service_name in reversed(STOPPED_SERVICES):
+        subprocess.run(
+            ["systemctl", "start", service_name],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    STOPPED_SERVICES = []
+
+    # Keep previous behavior as fallback.
     subprocess.run(['systemctl', 'start', 'NetworkManager'], stderr=subprocess.DEVNULL)
     
     logging.info("Cleanup completed")
