@@ -17,6 +17,23 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 
+try:
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        list_wireless_interfaces as core_list_wireless_interfaces,
+    )
+except ModuleNotFoundError:
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(MODULE_DIR)
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        list_wireless_interfaces as core_list_wireless_interfaces,
+    )
+
 # Rich import with fallback
 try:
     from rich.console import Console, Group
@@ -538,84 +555,18 @@ class WiFiPoet(Module):
         return ":".join(f"{b:02X}" for b in octets)
 
     def _discover_wifi_interfaces(self) -> List[str]:
-        interfaces = []
-        try:
-            out = subprocess.run(["iw", "dev"], capture_output=True, text=True).stdout
-            for line in out.splitlines():
-                if "Interface" in line:
-                    iface = line.split("Interface", 1)[1].strip()
-                    if iface: interfaces.append(iface)
-        except:
-            pass
-        return interfaces
+        return core_list_wireless_interfaces()
 
     def _get_interface_mode(self, iface: str) -> str:
-        try:
-            result = subprocess.run(
-                ["iw", "dev", iface, "info"],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                for raw_line in result.stdout.splitlines():
-                    line = raw_line.strip()
-                    if line.startswith("type "):
-                        return line.split("type", 1)[1].strip().lower()
-        except:
-            pass
-
-        # Fallback for environments where `iw dev <iface> info` is incomplete.
-        try:
-            result = subprocess.run(
-                ["iwconfig", iface],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                for raw_line in result.stdout.splitlines():
-                    if "Mode:" not in raw_line:
-                        continue
-                    mode_part = raw_line.split("Mode:", 1)[1].strip()
-                    mode = mode_part.split()[0].strip().lower()
-                    if mode:
-                        return mode
-        except FileNotFoundError:
-            pass
-
-        # Common monitor naming convention used by airmon-ng.
-        if iface.lower().endswith("mon"):
-            return "monitor"
-        return "unknown"
+        mode = core_get_interface_mode(
+            iface,
+            fallback_iwconfig=True,
+            infer_monitor_suffix=True,
+        )
+        return mode or "unknown"
 
     def _get_interface_chipset(self, iface: str) -> str:
-        try:
-            result = subprocess.run(
-                ["ethtool", "-i", iface],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except FileNotFoundError:
-            return "unknown"
-
-        if result.returncode != 0:
-            return "unknown"
-
-        driver = None
-        bus_info = None
-        for line in result.stdout.splitlines():
-            if line.startswith("driver:"):
-                driver = line.split(":", 1)[1].strip()
-            elif line.startswith("bus-info:"):
-                bus_info = line.split(":", 1)[1].strip()
-
-        if driver and bus_info:
-            return f"{driver} ({bus_info})"
-        if driver:
-            return driver
-        return "unknown"
+        return core_get_interface_chipset(iface)
 
     def _select_interface(self) -> str:
         interfaces = self._discover_wifi_interfaces()

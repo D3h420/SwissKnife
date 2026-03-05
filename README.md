@@ -57,6 +57,13 @@ Notes:
 - Dragon Drain has its own in-module installer/build flow.
 - `rich` is optional (only for prettier output in selected modules).
 
+## Dev architecture 🛠️
+
+Wi-Fi interface primitives are now centralized in `core/wifi_iface.py`
+(`list/get mode/chipset`, monitor/managed switching, restore helpers).
+Attack modules consume this shared layer to reduce duplicated logic and
+keep interface handling behavior consistent.
+
 ## Recon vendor lookup (optional)
 
 If you want vendor names in recon results, add an OUI file at `modules/oui.txt`

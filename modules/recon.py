@@ -12,6 +12,29 @@ import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
+try:
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        list_network_interfaces as core_list_network_interfaces,
+        restore_managed_mode as core_restore_managed_mode,
+        set_interface_type as core_set_interface_type,
+        wait_for_monitor_settle as core_wait_for_monitor_settle,
+    )
+except ModuleNotFoundError:
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(MODULE_DIR)
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        list_network_interfaces as core_list_network_interfaces,
+        restore_managed_mode as core_restore_managed_mode,
+        set_interface_type as core_set_interface_type,
+        wait_for_monitor_settle as core_wait_for_monitor_settle,
+    )
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 COLOR_ENABLED = sys.stdout.isatty()
@@ -76,44 +99,11 @@ def style(text: str, *styles: str) -> str:
 
 
 def list_network_interfaces() -> List[str]:
-    interfaces: List[str] = []
-    ip_link = subprocess.run(["ip", "-o", "link", "show"], stdout=subprocess.PIPE, text=True, check=False)
-    for line in ip_link.stdout.splitlines():
-        if ": " in line:
-            name = line.split(": ", 1)[1].split(":", 1)[0]
-            if name and name != "lo":
-                interfaces.append(name)
-    return interfaces
+    return core_list_network_interfaces()
 
 
 def get_interface_chipset(interface: str) -> str:
-    try:
-        result = subprocess.run(
-            ["ethtool", "-i", interface],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return "unknown"
-
-    if result.returncode != 0:
-        return "unknown"
-
-    driver = None
-    bus_info = None
-    for line in result.stdout.splitlines():
-        if line.startswith("driver:"):
-            driver = line.split(":", 1)[1].strip()
-        if line.startswith("bus-info:"):
-            bus_info = line.split(":", 1)[1].strip()
-
-    if driver and bus_info and bus_info != "":
-        return f"{driver} ({bus_info})"
-    if driver:
-        return driver
-    return "unknown"
+    return core_get_interface_chipset(interface)
 
 
 def select_interface(interfaces: List[str]) -> str:
@@ -144,22 +134,7 @@ def select_interface(interfaces: List[str]) -> str:
 
 
 def get_interface_mode(interface: str) -> Optional[str]:
-    result = subprocess.run(
-        ["iw", "dev", interface, "info"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if line.startswith("type "):
-            parts = line.split()
-            if len(parts) >= 2:
-                return parts[1]
-    return None
+    return core_get_interface_mode(interface, fallback_iwconfig=False)
 
 
 def is_monitor_mode(interface: str) -> bool:
@@ -167,46 +142,25 @@ def is_monitor_mode(interface: str) -> bool:
 
 
 def wait_for_monitor_settle(interface: str) -> None:
-    if MONITOR_SETTLE_SECONDS <= 0:
-        return
-    time.sleep(MONITOR_SETTLE_SECONDS)
+    _ = interface
+    core_wait_for_monitor_settle(MONITOR_SETTLE_SECONDS)
 
 
 def set_interface_type(interface: str, mode: str) -> bool:
-    try:
-        subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
-        result = subprocess.run(
-            ["iw", "dev", interface, "set", "type", mode],
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            logging.error("Failed to set %s mode: %s", mode, result.stderr.strip() or "unknown error")
-            return False
-        subprocess.run(["ip", "link", "set", interface, "up"], check=False, stderr=subprocess.DEVNULL)
-        if mode == "monitor":
-            # Best-effort: some drivers require this to capture frames from other BSSIDs.
-            subprocess.run(
-                ["iw", "dev", interface, "set", "monitor", "otherbss"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        time.sleep(0.5)
+    ok, error = core_set_interface_type(
+        interface,
+        mode,
+        enable_otherbss=(mode == "monitor"),
+        settle_seconds=0.5,
+    )
+    if ok:
         return True
-    except Exception as exc:
-        logging.error("Failed to set %s mode: %s", mode, exc)
-        return False
+    logging.error("Failed to set %s mode: %s", mode, error or "unknown error")
+    return False
 
 
 def restore_managed_mode(interface: str) -> None:
-    try:
-        subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
-        subprocess.run(["iw", "dev", interface, "set", "type", "managed"], check=False, stderr=subprocess.DEVNULL)
-        subprocess.run(["ip", "link", "set", interface, "up"], check=False, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    core_restore_managed_mode(interface)
 
 
 def freq_to_channel(freq: float) -> Optional[int]:

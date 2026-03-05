@@ -12,6 +12,21 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 import logging
 from urllib.parse import parse_qs
 
+try:
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        list_network_interfaces as core_list_network_interfaces,
+    )
+except ModuleNotFoundError:
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(MODULE_DIR)
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        list_network_interfaces as core_list_network_interfaces,
+    )
+
 # Logging config
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 
@@ -126,44 +141,11 @@ def select_portal_html_file():
 
 
 def get_interface_chipset(interface):
-    try:
-        result = subprocess.run(
-            ["ethtool", "-i", interface],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return "unknown"
-
-    if result.returncode != 0:
-        return "unknown"
-
-    driver = None
-    bus_info = None
-    for line in result.stdout.splitlines():
-        if line.startswith("driver:"):
-            driver = line.split(":", 1)[1].strip()
-        if line.startswith("bus-info:"):
-            bus_info = line.split(":", 1)[1].strip()
-
-    if driver and bus_info and bus_info != "":
-        return f"{driver} ({bus_info})"
-    if driver:
-        return driver
-    return "unknown"
+    return core_get_interface_chipset(interface)
 
 
 def list_network_interfaces():
-    interfaces = []
-    ip_link = subprocess.run(['ip', '-o', 'link', 'show'], stdout=subprocess.PIPE, text=True, check=False)
-    for line in ip_link.stdout.splitlines():
-        if ": " in line:
-            name = line.split(": ", 1)[1].split(":", 1)[0]
-            if name and name != "lo":
-                interfaces.append(name)
-    return interfaces
+    return core_list_network_interfaces()
 
 
 def scan_wireless_networks(interface, duration_seconds=15, show_progress=False):

@@ -15,6 +15,31 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+try:
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        is_interface_up as core_is_interface_up,
+        list_network_interfaces as core_list_network_interfaces,
+        restore_managed_mode as core_restore_managed_mode,
+        set_interface_type as core_set_interface_type,
+        wait_for_interface_ready as core_wait_for_interface_ready,
+    )
+except ModuleNotFoundError:
+    MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+    PROJECT_ROOT = os.path.dirname(MODULE_DIR)
+    if PROJECT_ROOT not in sys.path:
+        sys.path.insert(0, PROJECT_ROOT)
+    from core.wifi_iface import (
+        get_interface_chipset as core_get_interface_chipset,
+        get_interface_mode as core_get_interface_mode,
+        is_interface_up as core_is_interface_up,
+        list_network_interfaces as core_list_network_interfaces,
+        restore_managed_mode as core_restore_managed_mode,
+        set_interface_type as core_set_interface_type,
+        wait_for_interface_ready as core_wait_for_interface_ready,
+    )
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 COLOR_ENABLED = sys.stdout.isatty()
@@ -107,44 +132,11 @@ def missing_tools(tools: List[str]) -> List[str]:
 
 
 def list_network_interfaces() -> List[str]:
-    interfaces: List[str] = []
-    ip_link = subprocess.run(["ip", "-o", "link", "show"], stdout=subprocess.PIPE, text=True, check=False)
-    for line in ip_link.stdout.splitlines():
-        if ": " in line:
-            name = line.split(": ", 1)[1].split(":", 1)[0]
-            if name and name != "lo":
-                interfaces.append(name)
-    return interfaces
+    return core_list_network_interfaces()
 
 
 def get_interface_chipset(interface: str) -> str:
-    try:
-        result = subprocess.run(
-            ["ethtool", "-i", interface],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return "unknown"
-
-    if result.returncode != 0:
-        return "unknown"
-
-    driver = None
-    bus_info = None
-    for line in result.stdout.splitlines():
-        if line.startswith("driver:"):
-            driver = line.split(":", 1)[1].strip()
-        if line.startswith("bus-info:"):
-            bus_info = line.split(":", 1)[1].strip()
-
-    if driver and bus_info and bus_info != "":
-        return f"{driver} ({bus_info})"
-    if driver:
-        return driver
-    return "unknown"
+    return core_get_interface_chipset(interface)
 
 
 def select_interface(interfaces: List[str]) -> str:
@@ -174,64 +166,28 @@ def select_interface(interfaces: List[str]) -> str:
 
 
 def get_interface_mode(interface: str) -> Optional[str]:
-    result = subprocess.run(
-        ["iw", "dev", interface, "info"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return None
-
-    for raw_line in result.stdout.splitlines():
-        line = raw_line.strip()
-        if line.startswith("type "):
-            parts = line.split()
-            if len(parts) >= 2:
-                return parts[1]
-    return None
+    return core_get_interface_mode(interface, fallback_iwconfig=False)
 
 
 def is_interface_up(interface: str) -> bool:
-    result = subprocess.run(
-        ["ip", "link", "show", interface],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        return False
-    return "state UP" in result.stdout
+    return core_is_interface_up(interface)
 
 
 def wait_for_interface_ready(interface: str, target_mode: str, timeout_seconds: float = 6.0) -> bool:
-    end_time = time.time() + max(0.5, timeout_seconds)
-    while time.time() < end_time:
-        if get_interface_mode(interface) == target_mode and is_interface_up(interface):
-            return True
-        time.sleep(0.2)
-    return False
+    return core_wait_for_interface_ready(
+        interface,
+        target_mode,
+        timeout_seconds=timeout_seconds,
+        fallback_iwconfig=False,
+    )
 
 
 def set_interface_type(interface: str, mode: str) -> bool:
-    try:
-        subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
-        result = subprocess.run(
-            ["iw", "dev", interface, "set", "type", mode],
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if result.returncode != 0:
-            logging.error("Failed to set %s mode: %s", mode, result.stderr.strip() or "unknown error")
-            return False
-        subprocess.run(["ip", "link", "set", interface, "up"], check=False, stderr=subprocess.DEVNULL)
+    ok, error = core_set_interface_type(interface, mode, settle_seconds=0.0)
+    if ok:
         return True
-    except Exception as exc:
-        logging.error("Failed to set %s mode: %s", mode, exc)
-        return False
+    logging.error("Failed to set %s mode: %s", mode, error or "unknown error")
+    return False
 
 
 def set_interface_mode(interface: str, mode: str) -> bool:
@@ -248,12 +204,7 @@ def set_interface_mode(interface: str, mode: str) -> bool:
 
 
 def restore_managed_mode(interface: str) -> None:
-    try:
-        subprocess.run(["ip", "link", "set", interface, "down"], check=False, stderr=subprocess.DEVNULL)
-        subprocess.run(["iw", "dev", interface, "set", "type", "managed"], check=False, stderr=subprocess.DEVNULL)
-        subprocess.run(["ip", "link", "set", interface, "up"], check=False, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    core_restore_managed_mode(interface)
 
 
 def is_valid_mac(mac_address: str) -> bool:
