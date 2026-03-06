@@ -4,7 +4,7 @@
 
 Wireless "swiss knife" that bundles multiple workflows into one menu-driven tool.
 The main entry point is `swiss_knife.py`. Control the chaos with
-[Lab5](https://github.com/C5Lab) (responsibly).
+[Lab5](https://github.com/C5Lab).
 
 ## Functions ✨
 
