@@ -342,6 +342,7 @@ class IpCamFinder(Module):
         interface: str = "auto",
         preferred_ssid: str = "",
         password: str = "",
+        scan_duration: int = 0,
         rounds: int = 2,
         max_hosts: int = 384,
         ping_timeout: float = 0.8,
@@ -350,6 +351,7 @@ class IpCamFinder(Module):
         self.interface = (interface or "auto").strip()
         self.preferred_ssid = preferred_ssid.strip()
         self.password = password
+        self.scan_duration = max(0, int(scan_duration))
         self.rounds = max(1, int(rounds))
         self.max_hosts = max(32, int(max_hosts))
         self.ping_timeout = max(0.1, float(ping_timeout))
@@ -386,8 +388,9 @@ class IpCamFinder(Module):
             iface = self._select_interface()
             self._selected_interface = iface
             self._ensure_client_mode(iface)
+            scan_duration = self._resolve_scan_duration()
 
-            networks = self._scan_wifi_networks(iface)
+            networks = self._scan_wifi_networks(iface, scan_duration)
             if not networks:
                 raise RuntimeError("No Wi-Fi networks detected on selected interface.")
 
@@ -663,15 +666,90 @@ class IpCamFinder(Module):
 
         raise KeyboardInterrupt
 
-    def _scan_wifi_networks(self, interface: str) -> List[WiFiNetwork]:
-        self.console.print(f"[cyan]Scanning nearby Wi-Fi on {interface}...[/cyan]")
-        nmcli_rows = self._scan_wifi_networks_nmcli(interface)
-        if nmcli_rows:
-            return nmcli_rows
-        return self._scan_wifi_networks_iw(interface)
+    def _resolve_scan_duration(self) -> int:
+        if self.scan_duration > 0:
+            self.console.print(
+                f"[green]Using scan duration from args:[/green] {self.scan_duration}s"
+            )
+            return self.scan_duration
 
-    def _scan_wifi_networks_nmcli(self, interface: str) -> List[WiFiNetwork]:
-        run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=10.0)
+        raw = Prompt.ask("Scan duration in seconds", default="15", console=self.console).strip()
+        try:
+            value = int(raw) if raw else 15
+        except ValueError:
+            self.console.print("[yellow]Invalid duration. Using 15 seconds.[/yellow]")
+            value = 15
+        if value < 1:
+            self.console.print("[yellow]Scan duration too short. Using 1 second.[/yellow]")
+            value = 1
+        return value
+
+    @staticmethod
+    def _merge_network_rows(rows: Dict[str, WiFiNetwork], fresh_rows: List[WiFiNetwork]) -> None:
+        for entry in fresh_rows:
+            existing = rows.get(entry.bssid)
+            if not existing:
+                rows[entry.bssid] = entry
+                continue
+            old_signal = existing.signal if existing.signal is not None else -999
+            new_signal = entry.signal if entry.signal is not None else -999
+            if new_signal > old_signal:
+                rows[entry.bssid] = entry
+
+    @staticmethod
+    def _is_transient_scan_error(error_text: str) -> bool:
+        lower = (error_text or "").lower()
+        return (
+            "network is down" in lower
+            or "resource busy" in lower
+            or "device or resource busy" in lower
+            or "temporary failure" in lower
+        )
+
+    def _recover_scan_interface(self, interface: str) -> None:
+        run_command(["nmcli", "radio", "wifi", "on"], timeout=8.0)
+        run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
+        run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
+        time.sleep(0.6)
+
+    def _scan_wifi_networks(self, interface: str, duration_seconds: int) -> List[WiFiNetwork]:
+        duration_seconds = max(1, int(duration_seconds))
+        self.console.print(f"[cyan]Scanning nearby Wi-Fi on {interface} for {duration_seconds}s...[/cyan]")
+        self._prepare_network_manager(interface)
+
+        deadline = time.time() + duration_seconds
+        rows: Dict[str, WiFiNetwork] = {}
+        last_error = ""
+        while time.time() < deadline and self.running:
+            nmcli_rows, nmcli_error = self._scan_wifi_networks_nmcli(interface)
+            self._merge_network_rows(rows, nmcli_rows)
+            if nmcli_error:
+                last_error = nmcli_error
+
+            iw_rows, iw_error = self._scan_wifi_networks_iw(interface)
+            self._merge_network_rows(rows, iw_rows)
+            if iw_error:
+                last_error = iw_error
+                if self._is_transient_scan_error(iw_error):
+                    self._recover_scan_interface(interface)
+
+            remaining = deadline - time.time()
+            if remaining > 0:
+                time.sleep(min(1.0, remaining))
+
+        ordered = list(rows.values())
+        ordered.sort(key=lambda item: item.signal if item.signal is not None else -999, reverse=True)
+        if ordered:
+            return ordered
+        if last_error:
+            raise RuntimeError(last_error)
+        return []
+
+    def _scan_wifi_networks_nmcli(self, interface: str) -> Tuple[List[WiFiNetwork], str]:
+        rescan = run_command(["nmcli", "device", "wifi", "rescan", "ifname", interface], timeout=10.0)
+        if rescan.returncode != 0:
+            err = (rescan.stderr or rescan.stdout or "").strip()
+            return [], err
         time.sleep(1.0)
         result = run_command(
             [
@@ -690,7 +768,8 @@ class IpCamFinder(Module):
             timeout=12.0,
         )
         if result.returncode != 0:
-            return []
+            err = (result.stderr or result.stdout or "").strip()
+            return [], err
 
         rows: Dict[str, WiFiNetwork] = {}
         for raw_line in result.stdout.splitlines():
@@ -729,24 +808,17 @@ class IpCamFinder(Module):
                 channel=channel,
                 security=security_value,
             )
-            existing = rows.get(bssid)
-            if not existing:
-                rows[bssid] = entry
-                continue
-            old_signal = existing.signal if existing.signal is not None else -999
-            new_signal = entry.signal if entry.signal is not None else -999
-            if new_signal > old_signal:
-                rows[bssid] = entry
+            self._merge_network_rows(rows, [entry])
 
         ordered = list(rows.values())
         ordered.sort(key=lambda item: item.signal if item.signal is not None else -999, reverse=True)
-        return ordered
+        return ordered, ""
 
-    def _scan_wifi_networks_iw(self, interface: str) -> List[WiFiNetwork]:
+    def _scan_wifi_networks_iw(self, interface: str) -> Tuple[List[WiFiNetwork], str]:
         result = run_command(["iw", "dev", interface, "scan"], timeout=25.0)
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
-            raise RuntimeError(stderr or "Wi-Fi scan failed.")
+            return [], stderr or "Wi-Fi scan failed."
 
         rows: Dict[str, WiFiNetwork] = {}
         current: Dict[str, object] = {}
@@ -762,14 +834,7 @@ class IpCamFinder(Module):
                 channel=current.get("channel") if isinstance(current.get("channel"), int) else None,
                 security=str(current.get("security") or "OPEN"),
             )
-            existing = rows.get(bssid)
-            if not existing:
-                rows[bssid] = entry
-                return
-            old_signal = existing.signal if existing.signal is not None else -999
-            new_signal = entry.signal if entry.signal is not None else -999
-            if new_signal > old_signal:
-                rows[bssid] = entry
+            self._merge_network_rows(rows, [entry])
 
         for raw_line in result.stdout.splitlines():
             line = raw_line.strip()
@@ -830,7 +895,7 @@ class IpCamFinder(Module):
 
         ordered = list(rows.values())
         ordered.sort(key=lambda item: item.signal if item.signal is not None else -999, reverse=True)
-        return ordered
+        return ordered, ""
 
     def _render_networks_table(self, networks: List[WiFiNetwork]) -> None:
         table = Table(title="Nearby Wi-Fi Networks", box=box.SIMPLE_HEAVY)
@@ -1629,6 +1694,7 @@ class IpCamFinder(Module):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="SwissKnife IP camera finder")
     parser.add_argument("--interface", default="auto", help="Wi-Fi interface to use (default: auto)")
+    parser.add_argument("--scan-duration", type=int, default=0, help="Wi-Fi scan duration in seconds")
     parser.add_argument("--ssid", default="", help="Preferred SSID to join")
     parser.add_argument("--password", default="", help="Wi-Fi password (optional)")
     parser.add_argument("--rounds", type=int, default=2, help="Number of LAN sweep rounds (default: 2)")
@@ -1643,6 +1709,7 @@ def main() -> None:
         interface=args.interface,
         preferred_ssid=args.ssid,
         password=args.password,
+        scan_duration=args.scan_duration,
         rounds=args.rounds,
         max_hosts=args.max_hosts,
         ping_timeout=args.ping_timeout,

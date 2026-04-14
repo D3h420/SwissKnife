@@ -59,7 +59,7 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `swiss_knife.py` - main launcher, menus, dependency checks
 - `modules/` - all attack/workflow modules
 - `core/wifi_iface.py` - shared Wi-Fi interface helpers
-- `html/` - Web UI / portal templates
+- `html/` - portal templates
 - `log/` - captured submissions, handshakes, wardrive logs
 
 ## Notes 📝
