@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="SwissKnife Hero" src="https://github.com/user-attachments/assets/d56f9519-c044-4daf-a3f7-2de0f2e82a32" />
+  <img width="1536" height="1024" alt="swissknife_banner" src="https://github.com/user-attachments/assets/fab355b9-d7d0-4431-b486-61795bdfee6d" />
 </p>
 
 <p align="center">
