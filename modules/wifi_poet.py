@@ -544,7 +544,7 @@ class WiFiPoet(Module):
     def _build_fake_aps(self):
         rng = random.Random(self.seed if self.seed else int(time.time()))
         self._fake_aps = []
-        source_lines = self._ssid_lines or list(SSID_SETS["invocation"]["lines"])
+        source_lines = self._ssid_lines or list(SSID_SETS["chaos"]["lines"])
         for idx, ssid in enumerate(source_lines[:self.count]):
             mac = self._generate_mac(rng, idx)
             self._fake_aps.append(FakeAP(ssid=ssid, bssid=mac, channel=self._current_channel))
@@ -589,7 +589,7 @@ class WiFiPoet(Module):
 
     def _set_ssid_set(self, set_key: str) -> None:
         if set_key not in SSID_SETS:
-            set_key = "invocation"
+            set_key = "chaos"
         self.ssid_set = set_key
         self._ssid_lines = list(SSID_SETS[self.ssid_set]["lines"])
 

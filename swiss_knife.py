@@ -11,7 +11,7 @@ import sys
 import shutil
 import platform
 import importlib.util
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -58,7 +58,7 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "WiFi Poet", "file": os.path.join("modules", "wifi_poet.py")},
     "6": {"name": "Dragon Drain", "file": os.path.join("modules", "dragon_drain.py")},
-    "7": {"name": "Karma (under construction)", "file": "", "disabled": True},
+    "7": {"name": "Karma (MVP)", "file": os.path.join("modules", "karma.py")},
     "spacer_after_basic": {"name": "", "separator": True},
     "inside": {"name": "-INSIDE-", "separator": True},
     "8": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
@@ -78,6 +78,8 @@ REQUIRED_TOOLS: List[str] = [
     "iw",
     "ip",
     "ethtool",
+    "nmcli",
+    "ping",
     "arp-scan",
     "aireplay-ng",
     "airodump-ng",
@@ -89,48 +91,104 @@ REQUIRED_TOOLS: List[str] = [
     "iptables",
 ]
 
+RECOMMENDED_TOOLS: List[str] = [
+    "airmon-ng",
+    "bully",
+    "hcitool",
+    "git",
+    "autoreconf",
+    "automake",
+    "libtool",
+    "make",
+    "gcc",
+    "pkg-config",
+]
+
 PACKAGE_MAPS = {
     "apt": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute2",
+        "nmcli": "network-manager",
+        "ping": "iputils-ping",
+        "hcitool": "bluez",
+        "autoreconf": "autoconf",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute2",
+        "nmcli": "network-manager",
+        "ping": "iputils-ping",
+        "hcitool": "bluez",
+        "autoreconf": "autoconf",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute",
+        "nmcli": "NetworkManager",
+        "ping": "iputils",
+        "hcitool": "bluez",
+        "autoreconf": "autoconf",
+        "pkg-config": "pkgconf-pkg-config",
     },
     "yum": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute",
+        "nmcli": "NetworkManager",
+        "ping": "iputils",
+        "hcitool": "bluez",
+        "autoreconf": "autoconf",
+        "pkg-config": "pkgconf-pkg-config",
     },
     "pacman": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute2",
+        "nmcli": "networkmanager",
+        "ping": "iputils",
+        "hcitool": "bluez-utils",
+        "pkg-config": "pkgconf",
     },
     "zypper": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
         "bluetoothctl": "bluez",
         "btmgmt": "bluez",
         "ip": "iproute2",
+        "nmcli": "NetworkManager",
+        "ping": "iputils",
+        "hcitool": "bluez",
+        "autoreconf": "autoconf",
+    },
+    "apk": {
+        "aireplay-ng": "aircrack-ng",
+        "airodump-ng": "aircrack-ng",
+        "airmon-ng": "aircrack-ng",
+        "ip": "iproute2",
+        "ping": "iputils",
+        "nmcli": "networkmanager",
+        "bluetoothctl": "bluez",
+        "btmgmt": "bluez",
+        "pkg-config": "pkgconf",
     },
 }
 
@@ -307,42 +365,72 @@ def ensure_runtime_python_dependencies() -> bool:
     return True
 
 
-def report_dependencies() -> List[str]:
-    missing = []
-    print_banner()
-    print(style("Dependency check:", STYLE_BOLD))
-
-    for tool in REQUIRED_TOOLS:
+def report_tool_group(title: str, tools: List[str]) -> List[str]:
+    missing: List[str] = []
+    print(style(title, STYLE_BOLD))
+    for tool in tools:
         if tool_exists(tool):
             status = color_text("OK", COLOR_SUCCESS)
         else:
             status = color_text("missing", COLOR_ERROR)
             missing.append(tool)
         print(f"- {tool.ljust(12)} {status}")
-
     print()
     return missing
 
 
+def report_dependencies() -> Tuple[List[str], List[str]]:
+    print_banner()
+    print(style("Dependency check:", STYLE_BOLD))
+    print()
+
+    missing_required = report_tool_group("Required tools:", REQUIRED_TOOLS)
+    missing_recommended = report_tool_group(
+        "Recommended tools (full feature coverage):",
+        RECOMMENDED_TOOLS,
+    )
+    return missing_required, missing_recommended
+
+
 def ensure_dependencies(is_root: bool) -> None:
-    missing = report_dependencies()
-    if not missing:
-        print(color_text("All required tools are available.\n", COLOR_SUCCESS))
+    missing_required, missing_recommended = report_dependencies()
+    if not missing_required and not missing_recommended:
+        print(color_text("All required and recommended tools are available.\n", COLOR_SUCCESS))
         return
 
     if not is_root:
-        print(color_text("Run as root to allow automatic installation of missing tools.\n", COLOR_HIGHLIGHT))
+        if missing_required:
+            print(color_text("Run as root to allow automatic installation of missing required tools.\n", COLOR_HIGHLIGHT))
+        if missing_recommended:
+            print(color_text("Recommended tools are missing; some optional module features may be unavailable.\n", COLOR_HIGHLIGHT))
         return
 
-    if not prompt_yes_no("Install missing tools now? [Y/n]: "):
-        print(color_text("Proceeding without installation may lead to runtime failures.\n", COLOR_HIGHLIGHT))
-        return
+    installed_any = False
 
-    installed = install_missing_tools(missing)
-    if installed:
-        report_dependencies()
-    else:
-        print(color_text("Could not install all tools automatically. Please handle manually.\n", COLOR_HIGHLIGHT))
+    if missing_required:
+        if prompt_yes_no("Install missing required tools now? [Y/n]: "):
+            installed = install_missing_tools(missing_required)
+            if installed:
+                installed_any = True
+            else:
+                print(color_text("Could not install all required tools automatically. Please handle manually.\n", COLOR_HIGHLIGHT))
+        else:
+            print(color_text("Proceeding without required tools may lead to runtime failures.\n", COLOR_HIGHLIGHT))
+
+    if missing_recommended:
+        if prompt_yes_no("Install missing recommended tools for full module coverage? [Y/n]: "):
+            installed = install_missing_tools(missing_recommended)
+            if installed:
+                installed_any = True
+            else:
+                print(color_text("Could not install all recommended tools automatically.\n", COLOR_HIGHLIGHT))
+
+    if installed_any:
+        final_required, final_recommended = report_dependencies()
+        if not final_required:
+            print(color_text("Required tools check passed.\n", COLOR_SUCCESS))
+        if final_recommended:
+            print(color_text("Some recommended tools are still missing.\n", COLOR_HIGHLIGHT))
 
 
 def script_path(filename: str) -> str:
