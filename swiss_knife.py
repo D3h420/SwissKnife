@@ -46,7 +46,7 @@ wireless swiss knife
 MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon"},
     "2": {"name": "Attacks", "action": "attacks"},
-    "3": {"name": "Bluetooth", "action": "bluetooth"},
+    "3": {"name": "Wardrive", "action": "wardrive"},
     "0": {"name": "Exit", "action": "exit"},
 }
 
@@ -58,17 +58,29 @@ ATTACKS_MENU: Dict[str, Dict[str, str]] = {
     "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
     "5": {"name": "WiFi Poet", "file": os.path.join("modules", "wifi_poet.py")},
     "6": {"name": "Dragon Drain", "file": os.path.join("modules", "dragon_drain.py")},
-    "7": {"name": "Karma (MVP)", "file": os.path.join("modules", "karma.py")},
     "spacer_after_basic": {"name": "", "separator": True},
     "inside": {"name": "-INSIDE-", "separator": True},
-    "8": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
-    "9": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
+    "7": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
+    "8": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
     "spacer": {"name": "", "separator": True},
     "0": {"name": "Back", "file": ""},
 }
 
+WARDRIVE_MENU: Dict[str, Dict[str, str]] = {
+    "1": {
+        "name": "Start Wardrive",
+        "file": os.path.join("modules", "wardrive.py"),
+        "args": ["--start"],
+    },
+    "2": {
+        "name": "GPS setup",
+        "file": os.path.join("modules", "wardrive.py"),
+        "args": ["--gps-setup"],
+    },
+    "0": {"name": "Back", "file": ""},
+}
+
 RECON_SCRIPT = os.path.join("modules", "recon.py")
-BLUETOOTH_SCRIPT = os.path.join("modules", "bluetooth.py")
 RUNTIME_REQUIREMENTS = "requirements.txt"
 RUNTIME_REQUIRED_PY_MODULES: List[str] = [
     "scapy",
@@ -84,17 +96,15 @@ REQUIRED_TOOLS: List[str] = [
     "aireplay-ng",
     "airodump-ng",
     "mdk4",
-    "bluetoothctl",
-    "btmgmt",
     "hostapd",
     "dnsmasq",
     "iptables",
+    "lsusb",
 ]
 
 RECOMMENDED_TOOLS: List[str] = [
     "airmon-ng",
     "bully",
-    "hcitool",
     "git",
     "autoreconf",
     "automake",
@@ -109,36 +119,30 @@ PACKAGE_MAPS = {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute2",
         "nmcli": "network-manager",
         "ping": "iputils-ping",
-        "hcitool": "bluez",
+        "lsusb": "usbutils",
         "autoreconf": "autoconf",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute2",
         "nmcli": "network-manager",
         "ping": "iputils-ping",
-        "hcitool": "bluez",
+        "lsusb": "usbutils",
         "autoreconf": "autoconf",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute",
         "nmcli": "NetworkManager",
         "ping": "iputils",
-        "hcitool": "bluez",
+        "lsusb": "usbutils",
         "autoreconf": "autoconf",
         "pkg-config": "pkgconf-pkg-config",
     },
@@ -146,12 +150,10 @@ PACKAGE_MAPS = {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute",
         "nmcli": "NetworkManager",
         "ping": "iputils",
-        "hcitool": "bluez",
+        "lsusb": "usbutils",
         "autoreconf": "autoconf",
         "pkg-config": "pkgconf-pkg-config",
     },
@@ -159,24 +161,20 @@ PACKAGE_MAPS = {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute2",
         "nmcli": "networkmanager",
         "ping": "iputils",
-        "hcitool": "bluez-utils",
+        "lsusb": "usbutils",
         "pkg-config": "pkgconf",
     },
     "zypper": {
         "aireplay-ng": "aircrack-ng",
         "airodump-ng": "aircrack-ng",
         "airmon-ng": "aircrack-ng",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
         "ip": "iproute2",
         "nmcli": "NetworkManager",
         "ping": "iputils",
-        "hcitool": "bluez",
+        "lsusb": "usbutils",
         "autoreconf": "autoconf",
     },
     "apk": {
@@ -186,8 +184,7 @@ PACKAGE_MAPS = {
         "ip": "iproute2",
         "ping": "iputils",
         "nmcli": "networkmanager",
-        "bluetoothctl": "bluez",
-        "btmgmt": "bluez",
+        "lsusb": "usbutils",
         "pkg-config": "pkgconf",
     },
 }
@@ -486,7 +483,7 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (0-9): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (0-8): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
@@ -504,6 +501,25 @@ def attacks_menu() -> None:
             run_child(ATTACKS_MENU[choice]["file"], extra_args)
         else:
             run_child(ATTACKS_MENU[choice]["file"])
+
+
+def wardrive_menu() -> None:
+    while True:
+        print_header("Wardrive:", WARDRIVE_MENU)
+        choice = input(style("Your choice (0-2): ", STYLE_BOLD)).strip()
+
+        if choice not in WARDRIVE_MENU:
+            print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
+            continue
+
+        if choice == "0":
+            break
+
+        extra_args = WARDRIVE_MENU[choice].get("args")
+        if isinstance(extra_args, list):
+            run_child(WARDRIVE_MENU[choice]["file"], extra_args)
+        else:
+            run_child(WARDRIVE_MENU[choice]["file"])
 
 
 def main() -> None:
@@ -541,7 +557,7 @@ def main() -> None:
             continue
 
         if choice == "3":
-            run_child(BLUETOOTH_SCRIPT)
+            wardrive_menu()
             continue
 
 

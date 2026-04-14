@@ -4,14 +4,14 @@
 
 <p align="center">
   <img alt="Python" src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" />
-  <img alt="Linux" src="https://img.shields.io/badge/OS-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" />
-  <img alt="Root Required" src="https://img.shields.io/badge/Privileges-root_required-CC0000?style=for-the-badge&logo=gnu-bash&logoColor=white" />
-  <img alt="Auto Dependencies" src="https://img.shields.io/badge/Dependencies-auto_check_%26_install-0A7E07?style=for-the-badge" />
+  <img alt="OS" src="https://img.shields.io/badge/OS-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" />
+  <img alt="Root" src="https://img.shields.io/badge/Privileges-root_required-CC0000?style=for-the-badge&logo=gnu-bash&logoColor=white" />
+  <img alt="Deps" src="https://img.shields.io/badge/Dependencies-auto_check_%26_install-0A7E07?style=for-the-badge" />
 </p>
 
 # SwissKnife 🧰
 
-SwissKnife is a menu-driven wireless security toolkit that combines recon, Wi-Fi attacks, captive portal workflows, Bluetooth scanning, and LAN-side utilities in one place. ⚡
+SwissKnife is a menu-driven wireless security toolkit for recon, attack workflows, captive portals, and wardriving in one place. ⚡
 
 ## Attacks & Features 🔥
 
@@ -23,8 +23,7 @@ SwissKnife is a menu-driven wireless security toolkit that combines recon, Wi-Fi
 | `Evil Twin` | Captive + Deauth | ✅ | Deauth + cloned AP + portal workflow with restart loop. |
 | `Handshaker` | Capture | ✅ | 4-way handshake capture to PCAP (Scapy-based validation). |
 | `Dragon Drain` | WPA3 | ✅ | Bootstrap/build + single-target Dragon Drain workflow. |
-| `Bluetooth` | BT Recon | ✅ | Live Bluetooth scan (`bluetoothctl`/`btmgmt` backends). |
-| `Karma` | Rogue AP | 🟡 MVP | SSID impersonation helper + captive portal launch flow. |
+| `Wardrive` | GPS + Wi-Fi Survey | ✅ | Wigle-format logging (`wardrive_1.log`, `wardrive_2.log`, ...) with GPS fix validation. |
 | `ARP Scan` | LAN Internal | ✅ | ARP host discovery with vendor lookup support. |
 | `IP.CAM Finder` | LAN Internal | ✅ | Camera candidate detection by OUI/SSID + LAN correlation. |
 | `WiFi Poet` | Beacon Spam | 🧪 | Test-edition SSID beacon spam (chaos/custom sets). |
@@ -44,6 +43,7 @@ sudo python3 swiss_knife.py
 - Python `3.10+`
 - Root privileges
 - Wi-Fi adapter(s) with monitor mode support
+- USB GPS dongle (for wardrive GPS tagging)
 - Python runtime dependency: `scapy`
 - Missing tools are auto-detected at startup and can be installed automatically.
 
@@ -51,16 +51,24 @@ Debian/Ubuntu example:
 
 ```bash
 sudo apt update
-sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptables bluez rfkill wireless-tools network-manager avahi-daemon bully
+sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptables usbutils rfkill wireless-tools network-manager avahi-daemon bully
 ```
 
 ## Project Layout 📁
 
 - `swiss_knife.py` - main launcher, menus, dependency checks
-- `modules/` - all workflows/modules
+- `modules/` - all attack/workflow modules
 - `core/wifi_iface.py` - shared Wi-Fi interface helpers
-- `html/` - captive portal templates
-- `log/` - captured submissions, handshakes, and runtime artifacts
+- `html/` - Web UI / portal templates
+- `log/` - captured submissions, handshakes, wardrive logs
+
+## Web UI Status 🌐
+
+Current Web UI work is still in the template stage:
+- `html/router_update_V1.html`
+- `html/router_update_V2.html`
+
+Both are static portal-style pages (Polish language), already wired for `POST /save` with `wifi_password` field, but there is no standalone frontend app/build system yet.
 
 ## Notes 📝
 
