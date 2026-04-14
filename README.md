@@ -62,14 +62,6 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `html/` - Web UI / portal templates
 - `log/` - captured submissions, handshakes, wardrive logs
 
-## Web UI Status 🌐
-
-Current Web UI work is still in the template stage:
-- `html/router_update_V1.html`
-- `html/router_update_V2.html`
-
-Both are static portal-style pages (Polish language), already wired for `POST /save` with `wifi_password` field, but there is no standalone frontend app/build system yet.
-
 ## Notes 📝
 
 - `Dragon Drain` keeps its own build/install flow inside the module.
