@@ -366,6 +366,8 @@ class IpCamFinder(Module):
         self._connected_interface: str = ""
         self._interface_profiles: Dict[str, InterfaceProfile] = {}
         self._connected_subnet: str = ""
+        self._connected_bssid: str = ""
+        self._connected_gateway_ip: str = ""
         self._error: Optional[str] = None
         self._wpa_managed_interface: str = ""
         self._wpa_pid_file: str = ""
@@ -418,10 +420,10 @@ class IpCamFinder(Module):
             self._selected_interface = iface
             self._connected_interface = iface
             self._connected_subnet = str(subnet)
-
-            wifi_hits = self._collect_camera_candidates_from_wifi(networks)
-            for hit in wifi_hits:
-                self._remember_hit(hit)
+            current_bssid, _ = self._read_iw_link(iface)
+            self._connected_bssid = normalize_mac(current_bssid) if current_bssid else ""
+            self._connected_gateway_ip = self._default_gateway_ip(iface)
+            self.console.print("[dim]IP.CAM candidates are taken from connected LAN devices only.[/dim]")
 
             self.console.print(
                 f"[bold cyan]IP camera scan in progress... (Ctrl+C to stop)[/bold cyan]\n"
@@ -958,9 +960,21 @@ class IpCamFinder(Module):
             return self.password
         return Prompt.ask(
             f"Password for [bold]{network.ssid or network.bssid}[/bold]",
-            password=True,
+            password=False,
             console=self.console,
         )
+
+    def _should_skip_lan_candidate(self, ip_addr: str, mac: str) -> bool:
+        current_mac = normalize_mac(mac)
+        if not current_mac:
+            return True
+        if current_mac == "FF:FF:FF:FF:FF:FF":
+            return True
+        if self._connected_bssid and current_mac == self._connected_bssid:
+            return True
+        if self._connected_gateway_ip and ip_addr == self._connected_gateway_ip:
+            return True
+        return False
 
     def _connect_to_network(self, interface: str, network: WiFiNetwork, password: str) -> None:
         self.console.print(f"[cyan]Connecting {interface} to {network.ssid or network.bssid}...[/cyan]")
@@ -1373,6 +1387,20 @@ class IpCamFinder(Module):
                     return parts[idx + 1].strip()
         return ""
 
+    def _default_gateway_ip(self, interface: str) -> str:
+        result = run_command(["ip", "route", "show", "default", "dev", interface], timeout=3.0)
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if not parts or parts[0] != "default":
+                continue
+            if "via" in parts:
+                idx = parts.index("via")
+                if idx + 1 < len(parts):
+                    return parts[idx + 1].strip()
+        return ""
+
     def _find_interface_for_target(self, target: WiFiNetwork, preferred: str) -> str:
         interfaces = [preferred] + [iface for iface in self._list_wifi_interfaces() if iface != preferred]
         target_bssid = normalize_mac(target.bssid)
@@ -1445,24 +1473,6 @@ class IpCamFinder(Module):
         run_command(["nmcli", "device", "set", interface, "managed", "yes"], timeout=8.0)
         run_command(["ip", "link", "set", interface, "up"], timeout=5.0)
 
-    def _collect_camera_candidates_from_wifi(self, networks: List[WiFiNetwork]) -> List[CameraHit]:
-        hits: List[CameraHit] = []
-        for item in networks:
-            vendor = camera_vendor_from_mac(item.bssid) or camera_vendor_from_ssid(item.ssid)
-            if not vendor:
-                continue
-            hits.append(
-                CameraHit(
-                    source="WIFI",
-                    ip="-",
-                    mac=item.bssid,
-                    vendor=vendor,
-                    rssi=item.signal,
-                    ssid=item.ssid,
-                )
-            )
-        return hits
-
     def _scan_lan_for_cameras(self, interface: str, subnet: ipaddress.IPv4Network) -> None:
         hosts = self._hosts_for_sweep(interface, subnet)
         arp_scan_error_shown = False
@@ -1525,6 +1535,8 @@ class IpCamFinder(Module):
 
             ip_addr = match.group("ip")
             mac = normalize_mac(match.group("mac"))
+            if self._should_skip_lan_candidate(ip_addr, mac):
+                continue
             if mac in seen_macs:
                 continue
             seen_macs.add(mac)
@@ -1615,6 +1627,8 @@ class IpCamFinder(Module):
                 continue
             ip_address = match.group("ip")
             mac = normalize_mac(match.group("mac"))
+            if self._should_skip_lan_candidate(ip_address, mac):
+                continue
             vendor = camera_vendor_from_mac(mac)
             if not vendor:
                 continue
@@ -1636,8 +1650,6 @@ class IpCamFinder(Module):
             existing.rssi = hit.rssi
         if not existing.ssid and hit.ssid:
             existing.ssid = hit.ssid
-        if existing.source == "WIFI" and hit.source == "LAN":
-            existing.source = "WIFI+LAN"
 
     def _render_summary(self, elapsed_sec: int) -> None:
         table = Table(title="IP Camera Candidates", box=box.SIMPLE_HEAVY)
@@ -1651,7 +1663,6 @@ class IpCamFinder(Module):
         hits = sorted(
             self._camera_hits.values(),
             key=lambda item: (
-                0 if item.source == "WIFI+LAN" else 1,
                 item.vendor,
                 item.mac,
             ),

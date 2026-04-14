@@ -899,7 +899,7 @@ class ArpScanner(Module):
             return self.password
         return Prompt.ask(
             f"Password for [bold]{network.ssid or network.bssid}[/bold]",
-            password=True,
+            password=False,
             console=self.console,
         )
 
