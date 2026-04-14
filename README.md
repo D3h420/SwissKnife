@@ -11,7 +11,7 @@
 
 # SwissKnife 🧰
 
-SwissKnife is a menu-driven wireless security toolkit for recon, attack workflows, captive portals, and wardriving in one place. ⚡
+SwissKnife is a menu-driven wireless security toolkit for recon, attack workflows, captive portals, and wardriving in one place ⚡
 
 ## Attacks & Features 🔥
 
