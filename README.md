@@ -70,6 +70,13 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 
 ## Legal ⚠️
 
-Use only on infrastructure you own or have explicit permission to test.
+This toolkit is for authorized security testing, research, and lab use only.
+
+By using SwissKnife, you agree that:
+- You will test only systems you own or have explicit written authorization to assess.
+- You are solely responsible for complying with local, national, and international laws.
+- You accept full responsibility for any misuse, damage, service disruption, or legal consequences.
+
+If you are unsure whether you are authorized, do not run the tool.
 
 /LAB5/
