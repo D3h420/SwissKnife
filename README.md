@@ -68,6 +68,64 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `rich` is optional (used for nicer output in selected modules).
 - Vendor lookups can be backed by `modules/oui.txt`.
 
+## Troubleshooting: DHCP/AP Conflict on Raspberry Pi 🧯
+
+If `Evil Twin`/`Portal` fails with:
+
+`dnsmasq: failed to bind DHCP server socket: Address already in use`
+
+you are usually running into a double-DHCP situation:
+- one `dnsmasq` already runs for Raspberry AP/hotspot (`wlan0`),
+- second `dnsmasq` is started by the module for another interface.
+
+In short: one port `67/udp`, two services, zero chill 😅
+
+### What happened (real-world pain summary)
+
+- AP on built-in `wlan0` was active (`rpi-ap` via NetworkManager).
+- `dnsmasq` was already listening on `0.0.0.0:67`.
+- attack module tried to spawn another `dnsmasq`.
+- result: instant fail + evening burned in terminal 🔥🫠
+
+### Quick diagnostics
+
+```bash
+sudo ss -lunp 'sport = :67'
+sudo lsof -nP -iUDP:67
+nmcli device status
+nmcli -t -f NAME,TYPE connection show
+```
+
+### Stable fix path (Ethernet-only operation)
+
+Use this when you want zero AP/hotspot conflicts and operate only over `eth0`:
+
+```bash
+sudo nmcli con down rpi-ap 2>/dev/null || true
+sudo nmcli con delete rpi-ap 2>/dev/null || true
+sudo systemctl stop hostapd dnsmasq 2>/dev/null || true
+sudo systemctl disable hostapd dnsmasq 2>/dev/null || true
+sudo pkill -f hostapd 2>/dev/null || true
+sudo pkill -f dnsmasq 2>/dev/null || true
+sudo ss -lunp 'sport = :67'
+ip -br a show eth0
+ip route
+ping -c 3 8.8.8.8
+```
+
+Expected:
+- no listener on `:67`,
+- `eth0` has IP and default route,
+- ping works.
+
+### Recommended interface model
+
+- `wlan0` (built-in): optional management AP only.
+- `wlan1`/`wlan2` (USB): tooling interfaces (`unmanaged` in NM).
+- `eth0`: primary stable control path.
+
+If you mix multiple AP/DHCP managers at once, chaos engineering will mix you back 🤖💥
+
 ## Legal ⚠️
 
 This toolkit is for authorized security testing, research, and lab use only.
