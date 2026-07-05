@@ -91,6 +91,13 @@ DEFAULT_LIVE_UPDATE_INTERVAL = 0.5
 MONITOR_SETTLE_SECONDS = 2.0
 DEFAULT_DEAUTH_BURST_ON_SEC = 3.0
 DEFAULT_DEAUTH_BURST_CYCLE_SEC = 12.0
+ON_RUN_FAST_CHANNELS = list(range(1, 15))
+ON_RUN_DEFAULT_SCAN_WINDOW_SEC = 6
+ON_RUN_DEFAULT_HOP_INTERVAL = 0.25
+ON_RUN_LIVE_UPDATE_INTERVAL = 0.25
+ON_RUN_SCAN_PAUSE_SEC = 0.5
+ON_RUN_DISPLAY_LIMIT = 12
+ON_RUN_CONFIRM_PHRASE = "AUTHORIZED"
 
 try:
     from scapy.all import (  # type: ignore
@@ -225,6 +232,14 @@ def prompt_float(prompt: str, default: float, minimum: float = 0.1) -> float:
     if value < minimum:
         return minimum
     return value
+
+
+def prompt_yes_no(prompt: str, default: bool = False) -> bool:
+    default_label = "Y/n" if default else "y/N"
+    raw = input(f"{prompt} ({default_label}): ").strip().lower()
+    if not raw:
+        return default
+    return raw in {"y", "yes", "t", "true", "1"}
 
 
 def build_box(lines: List[str]) -> str:
@@ -612,25 +627,26 @@ def scan_networks(
         hopper_thread.start()
 
     end_time = time.time() + max(1, duration_seconds)
-    while time.time() < end_time:
-        if sniffer is None or not getattr(sniffer, "running", False):
-            start_sniffer()
-        with aps_lock:
-            networks = len(aps)
-            clients = sum(len(ap.clients) for ap in aps.values())
-        remaining = max(0, int(end_time - time.time()))
-        display_scan_live(networks, clients, interface, status, remaining)
-        time.sleep(max(0.2, update_interval))
-
-    stop_event.set()
     try:
-        if sniffer and getattr(sniffer, "running", False):
-            sniffer.stop()
-    except Scapy_Exception:
-        pass
+        while time.time() < end_time:
+            if sniffer is None or not getattr(sniffer, "running", False):
+                start_sniffer()
+            with aps_lock:
+                networks = len(aps)
+                clients = sum(len(ap.clients) for ap in aps.values())
+            remaining = max(0, int(end_time - time.time()))
+            display_scan_live(networks, clients, interface, status, remaining)
+            time.sleep(max(0.2, update_interval))
+    finally:
+        stop_event.set()
+        try:
+            if sniffer and getattr(sniffer, "running", False):
+                sniffer.stop()
+        except Scapy_Exception:
+            pass
 
-    if hopper_thread:
-        hopper_thread.join(timeout=2)
+        if hopper_thread:
+            hopper_thread.join(timeout=2)
 
     if DEBUG_CLIENTS:
         logging.info("")
@@ -651,12 +667,39 @@ def sorted_access_points(aps: Dict[str, AccessPoint]) -> List[AccessPoint]:
     return sorted(aps.values(), key=lambda ap: len(ap.clients), reverse=True)
 
 
-def format_network_lines(sorted_aps: List[AccessPoint]) -> List[str]:
+def merge_access_point_snapshots(
+    cumulative: Dict[str, AccessPoint],
+    latest: Dict[str, AccessPoint],
+) -> None:
+    for bssid, incoming in latest.items():
+        current = cumulative.get(bssid)
+        if current is None:
+            cumulative[bssid] = AccessPoint(
+                ssid=incoming.ssid,
+                bssid=incoming.bssid,
+                security=incoming.security,
+                channel=incoming.channel,
+                clients=set(incoming.clients),
+                seen_stations=set(incoming.seen_stations),
+                probing_stations=set(incoming.probing_stations),
+            )
+            continue
+        if current.ssid == "<hidden>" and incoming.ssid != "<hidden>":
+            current.ssid = incoming.ssid
+        current.update_security(incoming.security)
+        current.update_channel(incoming.channel)
+        current.clients.update(incoming.clients)
+        current.seen_stations.update(incoming.seen_stations)
+        current.probing_stations.update(incoming.probing_stations)
+
+
+def format_network_lines(sorted_aps: List[AccessPoint], max_items: Optional[int] = None) -> List[str]:
     if not sorted_aps:
         return [color_text("No networks found.", COLOR_WARNING)]
 
     lines: List[str] = [style("Observed networks (sorted by clients):", STYLE_BOLD)]
-    for index, ap in enumerate(sorted_aps, start=1):
+    visible_aps = sorted_aps[:max_items] if max_items else sorted_aps
+    for index, ap in enumerate(visible_aps, start=1):
         ssid_label = format_ssid(ap.ssid)
         channel_label = str(ap.channel) if ap.channel else "?"
 
@@ -678,6 +721,8 @@ def format_network_lines(sorted_aps: List[AccessPoint]) -> List[str]:
         label = f"{index}) {ssid_label} ({ap.bssid}) -"
         details = f"ch {channel_label} | {security_label} | {client_label}"
         lines.append(f"  {color_text(label, COLOR_HIGHLIGHT)} {details}")
+    if max_items and len(sorted_aps) > max_items:
+        lines.append(color_text(f"  ... +{len(sorted_aps) - max_items} more", COLOR_DIM))
     return lines
 
 
@@ -693,6 +738,42 @@ def select_access_point(sorted_aps: List[AccessPoint]) -> Optional[AccessPoint]:
             if 1 <= idx <= len(sorted_aps):
                 return sorted_aps[idx - 1]
         logging.warning("Invalid selection. Try again.")
+
+
+def select_handshaker_mode() -> str:
+    logging.info(style("Mode:", STYLE_BOLD))
+    logging.info("  %s Classic handshaker", color_text("[1]", COLOR_HIGHLIGHT))
+    logging.info("      Scan, select one authorized AP, then capture.")
+    logging.info("  %s ON RUN handshaker", color_text("[2]", COLOR_HIGHLIGHT))
+    logging.info("      Continuous passive survey ranked by active clients.")
+    logging.info("")
+
+    while True:
+        choice = input(f"{style('Select mode', STYLE_BOLD)} (1/2): ").strip().lower()
+        if choice in ("1", "classic", "c"):
+            return "classic"
+        if choice in ("2", "onrun", "on-run", "on run", "run", "r"):
+            return "on_run"
+        logging.warning("Invalid selection. Try again.")
+
+
+def confirm_on_run_disclaimer() -> bool:
+    logging.info("")
+    logging.info(style("ON RUN safety gate:", COLOR_WARNING, STYLE_BOLD))
+    logging.info(
+        "This mode observes nearby wireless traffic and ranks APs by visible activity."
+    )
+    logging.info(
+        "Automated deauth bursts against arbitrary surrounding networks are not supported."
+    )
+    logging.info(
+        "Continue only for networks and equipment you own or have explicit written authorization to assess."
+    )
+    logging.info("")
+    answer = input(
+        f"Type {style(ON_RUN_CONFIRM_PHRASE, COLOR_SUCCESS, STYLE_BOLD)} to continue: "
+    ).strip()
+    return answer == ON_RUN_CONFIRM_PHRASE
 
 
 def set_interface_channel(interface: str, channel: int) -> bool:
@@ -1273,9 +1354,185 @@ def capture_full_handshakes(
     }
 
 
+def run_classic_handshaker(interface: str) -> None:
+    logging.info("")
+    scan_duration = prompt_int(
+        f"{style('Scan duration', STYLE_BOLD)} (seconds) "
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = 15s): ",
+        default=15
+    )
+
+    logging.info("")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start scanning...")
+    aps = scan_networks(
+        interface,
+        scan_duration,
+        channels=DEFAULT_MONITOR_CHANNELS,
+        hop_interval=DEFAULT_HOP_INTERVAL,
+        update_interval=DEFAULT_LIVE_UPDATE_INTERVAL,
+    )
+
+    sorted_aps = sorted_access_points(aps)
+    logging.info("")
+    for line in format_network_lines(sorted_aps):
+        logging.info("%s", line)
+
+    if not sorted_aps:
+        logging.info("No networks found.")
+        return
+
+    logging.info("")
+    target_ap = select_access_point(sorted_aps)
+    if target_ap is None:
+        logging.info("No target selected. Exiting.")
+        return
+
+    logging.info("")
+    logging.info("Selected: %s (%s)", format_ssid(target_ap.ssid), target_ap.bssid)
+    if target_ap.channel:
+        logging.info("Channel: %s", target_ap.channel)
+        set_interface_channel(interface, target_ap.channel)
+    else:
+        logging.warning("AP channel unknown; staying on the current channel.")
+
+    logging.info("")
+    logging.info(style("Capture mode:", STYLE_BOLD))
+    logging.info("Runs until a full 4-way handshake is validated or you press Ctrl+C.")
+
+    deauth_burst_on_sec = 0.0
+    deauth_burst_cycle_sec = DEFAULT_DEAUTH_BURST_CYCLE_SEC
+    if DEAUTH_AVAILABLE:
+        logging.info("")
+        raw_burst_on = input(
+            f"{style('Deauth burst ON time', STYLE_BOLD)} in seconds "
+            f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_ON_SEC:.1f}, 0=disable): "
+        ).strip()
+        if not raw_burst_on:
+            deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+        else:
+            try:
+                deauth_burst_on_sec = float(raw_burst_on)
+            except ValueError:
+                deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+
+        if deauth_burst_on_sec < 0:
+            deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
+
+        if deauth_burst_on_sec > 0:
+            min_cycle = deauth_burst_on_sec + 0.5
+            deauth_burst_cycle_sec = prompt_float(
+                f"{style('Deauth burst cycle', STYLE_BOLD)} in seconds "
+                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
+                default=DEFAULT_DEAUTH_BURST_CYCLE_SEC,
+                minimum=min_cycle,
+            )
+            if deauth_burst_cycle_sec <= deauth_burst_on_sec:
+                deauth_burst_cycle_sec = deauth_burst_on_sec + 0.5
+        else:
+            logging.info("Deauth bursts disabled.")
+
+    logging.info("")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start deauth + capture...")
+
+    output_dir = DEFAULT_HANDSHAKE_DIR
+    summary = capture_full_handshakes(
+        interface=interface,
+        ap=target_ap,
+        total_duration_sec=None,
+        deauth_burst_on_sec=deauth_burst_on_sec,
+        deauth_burst_cycle_sec=deauth_burst_cycle_sec,
+        stop_on_first_handshake=True,
+        output_dir=output_dir
+    )
+
+    if summary:
+        logging.info("")
+        logging.info(style("Saved to:", STYLE_BOLD))
+        logging.info(f"  -> {summary['path']}")
+        logging.info("  Detected full handshakes: %s", summary["detected_handshakes"])
+        logging.info("Open in Wireshark and filter: eapol")
+
+
+def run_on_run_handshaker(interface: str) -> None:
+    logging.info("")
+    logging.info(style("ON RUN handshaker:", STYLE_BOLD))
+    logging.info("Passive survey mode. Press Ctrl+C to stop.")
+    logging.info("Active deauth bursts are disabled in this mode.")
+    logging.info(
+        "Walking defaults: %ss window, %.2fs hop, %.2fs refresh.",
+        ON_RUN_DEFAULT_SCAN_WINDOW_SEC,
+        ON_RUN_DEFAULT_HOP_INTERVAL,
+        ON_RUN_LIVE_UPDATE_INTERVAL,
+    )
+    logging.info("")
+
+    scan_window = prompt_int(
+        f"{style('Observation window', STYLE_BOLD)} (seconds) "
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_SCAN_WINDOW_SEC}s): ",
+        default=ON_RUN_DEFAULT_SCAN_WINDOW_SEC,
+    )
+    hop_interval = prompt_float(
+        f"{style('Channel dwell', STYLE_BOLD)} in seconds "
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_HOP_INTERVAL:.2f}s): ",
+        default=ON_RUN_DEFAULT_HOP_INTERVAL,
+        minimum=0.1,
+    )
+    include_5ghz = prompt_yes_no(
+        f"{style('Include 5 GHz channels', STYLE_BOLD)}",
+        default=False,
+    )
+    channels = DEFAULT_MONITOR_CHANNELS if include_5ghz else ON_RUN_FAST_CHANNELS
+
+    logging.info("")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ON RUN survey...")
+
+    scan_round = 1
+    cumulative_aps: Dict[str, AccessPoint] = {}
+    try:
+        while True:
+            logging.info("")
+            logging.info(style(f"ON RUN round {scan_round}", STYLE_BOLD))
+            aps = scan_networks(
+                interface,
+                scan_window,
+                channels=channels,
+                hop_interval=hop_interval,
+                update_interval=ON_RUN_LIVE_UPDATE_INTERVAL,
+            )
+            merge_access_point_snapshots(cumulative_aps, aps)
+            sorted_aps = sorted_access_points(aps)
+            sorted_cumulative_aps = sorted_access_points(cumulative_aps)
+            active_aps = [ap for ap in sorted_aps if ap.clients]
+            active_cumulative_aps = [ap for ap in sorted_cumulative_aps if ap.clients]
+
+            logging.info("")
+            for line in format_network_lines(sorted_aps, max_items=ON_RUN_DISPLAY_LIMIT):
+                logging.info("%s", line)
+
+            logging.info("")
+            logging.info(style("ON RUN summary:", STYLE_BOLD))
+            logging.info("  Current window:          %s APs, %s with clients", len(sorted_aps), len(active_aps))
+            logging.info(
+                "  Session total:           %s APs, %s with clients",
+                len(sorted_cumulative_aps),
+                len(active_cumulative_aps),
+            )
+            logging.info("  Channel profile:         %s", "2.4 + 5 GHz" if include_5ghz else "2.4 GHz fast")
+            logging.info("  Active bursts attempted: 0")
+            logging.info(
+                "Use Classic mode for one explicitly authorized AP when active capture is required."
+            )
+
+            scan_round += 1
+            time.sleep(ON_RUN_SCAN_PAUSE_SEC)
+    except KeyboardInterrupt:
+        logging.info("")
+        logging.info("ON RUN stopped by user.")
+
+
 def main() -> None:
     logging.info(color_text("Handshaker Wizard", COLOR_HEADER))
-    logging.info("Scan → select AP → deauth → capture handshakes (PCAP)")
+    logging.info("Classic target capture + ON RUN passive survey")
     logging.info("")
 
     if os.geteuid() != 0:
@@ -1300,8 +1557,15 @@ def main() -> None:
     logging.info("Use only on networks you own or have explicit permission to test!")
     logging.info("")
 
+    mode = select_handshaker_mode()
+    logging.info("")
+
     interfaces = list_network_interfaces()
     interface = select_interface(interfaces)
+
+    if mode == "on_run" and not confirm_on_run_disclaimer():
+        logging.info("ON RUN disclaimer not confirmed. Exiting.")
+        return
 
     original_mode = get_interface_mode(interface)
     changed_to_monitor = False
@@ -1316,102 +1580,10 @@ def main() -> None:
             changed_to_monitor = True
             wait_for_monitor_settle(interface)
 
-        logging.info("")
-        scan_duration = prompt_int(
-            f"{style('Scan duration', STYLE_BOLD)} (seconds) "
-            f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = 15s): ",
-            default=15
-        )
-
-        logging.info("")
-        input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start scanning...")
-        aps = scan_networks(
-            interface,
-            scan_duration,
-            channels=DEFAULT_MONITOR_CHANNELS,
-            hop_interval=DEFAULT_HOP_INTERVAL,
-            update_interval=DEFAULT_LIVE_UPDATE_INTERVAL,
-        )
-
-        sorted_aps = sorted_access_points(aps)
-        logging.info("")
-        for line in format_network_lines(sorted_aps):
-            logging.info("%s", line)
-
-        if not sorted_aps:
-            logging.info("No networks found.")
-            return
-
-        logging.info("")
-        target_ap = select_access_point(sorted_aps)
-        if target_ap is None:
-            logging.info("No target selected. Exiting.")
-            return
-
-        logging.info("")
-        logging.info("Selected: %s (%s)", format_ssid(target_ap.ssid), target_ap.bssid)
-        if target_ap.channel:
-            logging.info("Channel: %s", target_ap.channel)
-            set_interface_channel(interface, target_ap.channel)
+        if mode == "classic":
+            run_classic_handshaker(interface)
         else:
-            logging.warning("AP channel unknown; staying on the current channel.")
-
-        logging.info("")
-        logging.info(style("Capture mode:", STYLE_BOLD))
-        logging.info("Runs until a full 4-way handshake is validated or you press Ctrl+C.")
-
-        deauth_burst_on_sec = 0.0
-        deauth_burst_cycle_sec = DEFAULT_DEAUTH_BURST_CYCLE_SEC
-        if DEAUTH_AVAILABLE:
-            logging.info("")
-            raw_burst_on = input(
-                f"{style('Deauth burst ON time', STYLE_BOLD)} in seconds "
-                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_ON_SEC:.1f}, 0=disable): "
-            ).strip()
-            if not raw_burst_on:
-                deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
-            else:
-                try:
-                    deauth_burst_on_sec = float(raw_burst_on)
-                except ValueError:
-                    deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
-
-            if deauth_burst_on_sec < 0:
-                deauth_burst_on_sec = DEFAULT_DEAUTH_BURST_ON_SEC
-
-            if deauth_burst_on_sec > 0:
-                min_cycle = deauth_burst_on_sec + 0.5
-                deauth_burst_cycle_sec = prompt_float(
-                    f"{style('Deauth burst cycle', STYLE_BOLD)} in seconds "
-                    f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
-                    default=DEFAULT_DEAUTH_BURST_CYCLE_SEC,
-                    minimum=min_cycle,
-                )
-                if deauth_burst_cycle_sec <= deauth_burst_on_sec:
-                    deauth_burst_cycle_sec = deauth_burst_on_sec + 0.5
-            else:
-                logging.info("Deauth bursts disabled.")
-
-        logging.info("")
-        input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start deauth + capture...")
-
-        output_dir = DEFAULT_HANDSHAKE_DIR
-        summary = capture_full_handshakes(
-            interface=interface,
-            ap=target_ap,
-            total_duration_sec=None,
-            deauth_burst_on_sec=deauth_burst_on_sec,
-            deauth_burst_cycle_sec=deauth_burst_cycle_sec,
-            stop_on_first_handshake=True,
-            output_dir=output_dir
-        )
-
-        if summary:
-            logging.info("")
-            logging.info(style("Saved to:", STYLE_BOLD))
-            logging.info(f"  → {summary['path']}")
-            logging.info("  Detected full handshakes: %s", summary["detected_handshakes"])
-            logging.info("Open in Wireshark and filter: eapol")
+            run_on_run_handshaker(interface)
 
     finally:
         if changed_to_monitor:
