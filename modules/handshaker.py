@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import os
 import queue
 import re
@@ -98,6 +100,7 @@ ON_RUN_LIVE_UPDATE_INTERVAL = 0.25
 ON_RUN_SCAN_PAUSE_SEC = 0.5
 ON_RUN_DISPLAY_LIMIT = 12
 ON_RUN_CONFIRM_PHRASE = "AUTHORIZED"
+ON_RUN_STATUS_REFRESH_SEC = 0.5
 
 try:
     from scapy.all import (  # type: ignore
@@ -262,6 +265,93 @@ def display_scan_live(networks: int, clients: int, interface: str, status: str, 
         sys.stdout.write("\033[2J\033[H" + output + "\n")
     else:
         sys.stdout.write(output + "\n")
+    sys.stdout.flush()
+
+
+def truncate_text(text: str, width: int) -> str:
+    if len(text) <= width:
+        return text
+    if width <= 3:
+        return text[:width]
+    return text[: width - 3] + "..."
+
+
+def format_on_run_dashboard(
+    *,
+    interface: str,
+    elapsed: int,
+    current_channel: Optional[int],
+    channel_profile: str,
+    status: str,
+    aps: Dict[str, AccessPoint],
+    ap_stats: Dict[str, Dict],
+    completed_handshakes: List[Dict[str, str]],
+    total_packets: int,
+    eapol_packets: int,
+) -> str:
+    sorted_aps = sorted_access_points(aps)
+    active_aps = [ap for ap in sorted_aps if ap.clients]
+    channel_label = str(current_channel) if current_channel else "?"
+    lines = [
+        "ON RUN HANDSHAKER",
+        f"Interface: {interface} | Status: {status} | Channel: {channel_label} | Profile: {channel_profile}",
+        f"Elapsed: {elapsed}s | APs: {len(sorted_aps)} | APs with clients: {len(active_aps)} | Packets: {total_packets} | EAPOL: {eapol_packets}",
+        "",
+        "Observed APs",
+        " #  SSID                 BSSID              CH  SEC   CL  EAPOL  M1 M2 M3 M4  HS",
+        " -- -------------------- ------------------ --- ----- --- ------ -- -- -- -- ---",
+    ]
+
+    for idx, ap in enumerate(sorted_aps[:ON_RUN_DISPLAY_LIMIT], start=1):
+        stats = ap_stats.get(ap.bssid, {})
+        counters = stats.get("messages", {})
+        lines.append(
+            f"{idx:>2}  "
+            f"{truncate_text(format_ssid(ap.ssid, 20), 20):<20} "
+            f"{ap.bssid:<18} "
+            f"{str(ap.channel or '?'):>3} "
+            f"{truncate_text(ap.security, 5):<5} "
+            f"{len(ap.clients):>3} "
+            f"{int(stats.get('eapol', 0)):>6} "
+            f"{int(counters.get(1, 0)):>2} "
+            f"{int(counters.get(2, 0)):>2} "
+            f"{int(counters.get(3, 0)):>2} "
+            f"{int(counters.get(4, 0)):>2} "
+            f"{int(stats.get('handshakes', 0)):>3}"
+        )
+    if len(sorted_aps) > ON_RUN_DISPLAY_LIMIT:
+        lines.append(f"    ... +{len(sorted_aps) - ON_RUN_DISPLAY_LIMIT} more APs")
+
+    lines.extend(
+        [
+            "",
+            "Completed full 4-way PCAPs",
+            " #  SSID                 BSSID              CLIENT             FILE",
+            " -- -------------------- ------------------ ------------------ ------------------------------",
+        ]
+    )
+    recent_completed = completed_handshakes[-ON_RUN_DISPLAY_LIMIT:]
+    if recent_completed:
+        for idx, item in enumerate(recent_completed, start=1):
+            lines.append(
+                f"{idx:>2}  "
+                f"{truncate_text(item.get('ssid', '<hidden>'), 20):<20} "
+                f"{item.get('bssid', '?'):<18} "
+                f"{item.get('client', '?'):<18} "
+                f"{truncate_text(os.path.basename(item.get('path', '')), 30):<30}"
+            )
+    else:
+        lines.append("    No complete 4-way handshakes captured yet.")
+
+    lines.extend(["", "Ctrl+C stops ON RUN and closes PCAP writers."])
+    return "\n".join(lines)
+
+
+def render_on_run_dashboard(text: str) -> None:
+    if COLOR_ENABLED:
+        sys.stdout.write("\033[2J\033[H" + text + "\n")
+    else:
+        sys.stdout.write(text + "\n")
     sys.stdout.flush()
 
 
@@ -1456,21 +1546,15 @@ def run_classic_handshaker(interface: str) -> None:
 def run_on_run_handshaker(interface: str) -> None:
     logging.info("")
     logging.info(style("ON RUN handshaker:", STYLE_BOLD))
-    logging.info("Passive survey mode. Press Ctrl+C to stop.")
+    logging.info("Live passive survey + EAPOL capture. Press Ctrl+C to stop.")
     logging.info("Active deauth bursts are disabled in this mode.")
     logging.info(
-        "Walking defaults: %ss window, %.2fs hop, %.2fs refresh.",
-        ON_RUN_DEFAULT_SCAN_WINDOW_SEC,
+        "Walking defaults: %.2fs hop, %.2fs dashboard refresh.",
         ON_RUN_DEFAULT_HOP_INTERVAL,
-        ON_RUN_LIVE_UPDATE_INTERVAL,
+        ON_RUN_STATUS_REFRESH_SEC,
     )
     logging.info("")
 
-    scan_window = prompt_int(
-        f"{style('Observation window', STYLE_BOLD)} (seconds) "
-        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_SCAN_WINDOW_SEC}s): ",
-        default=ON_RUN_DEFAULT_SCAN_WINDOW_SEC,
-    )
     hop_interval = prompt_float(
         f"{style('Channel dwell', STYLE_BOLD)} in seconds "
         f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_HOP_INTERVAL:.2f}s): ",
@@ -1482,52 +1566,204 @@ def run_on_run_handshaker(interface: str) -> None:
         default=False,
     )
     channels = DEFAULT_MONITOR_CHANNELS if include_5ghz else ON_RUN_FAST_CHANNELS
+    channel_profile = "2.4 + 5 GHz" if include_5ghz else "2.4 GHz fast"
 
     logging.info("")
-    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ON RUN survey...")
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ON RUN live dashboard...")
 
-    scan_round = 1
-    cumulative_aps: Dict[str, AccessPoint] = {}
+    os.makedirs(DEFAULT_HANDSHAKE_DIR, exist_ok=True)
+
+    aps: Dict[str, AccessPoint] = {}
+    ap_stats: Dict[str, Dict] = {}
+    writers: Dict[str, PcapWriter] = {}
+    eapol_states_by_bssid: Dict[str, Dict[str, HandshakeProgress]] = {}
+    completed_pairs: Set[Tuple[str, str]] = set()
+    completed_handshakes: List[Dict[str, str]] = []
+    status = "starting"
+    current_channel: Optional[int] = None
+    total_packets = 0
+    eapol_packets = 0
+
+    state_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def get_ap_stats(bssid: str) -> Dict:
+        stats = ap_stats.get(bssid)
+        if stats is None:
+            stats = {
+                "eapol": 0,
+                "messages": {1: 0, 2: 0, 3: 0, 4: 0},
+                "handshakes": 0,
+                "path": "",
+            }
+            ap_stats[bssid] = stats
+        return stats
+
+    def get_writer(ap: AccessPoint):
+        writer = writers.get(ap.bssid)
+        if writer is not None:
+            return writer
+        pcap_path = next_handshake_pcap_path(DEFAULT_HANDSHAKE_DIR, ap.ssid)
+        writer = PcapWriter(pcap_path, append=False, sync=True)
+        writers[ap.bssid] = writer
+        get_ap_stats(ap.bssid)["path"] = pcap_path
+        return writer
+
+    def live_channel_hopper() -> None:
+        nonlocal current_channel
+        while not stop_event.is_set():
+            for channel in channels:
+                if stop_event.is_set():
+                    break
+                subprocess.run(
+                    ["iw", "dev", interface, "set", "channel", str(channel)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+                with state_lock:
+                    current_channel = channel
+                time.sleep(hop_interval)
+
+    def handle_packet(packet) -> None:
+        nonlocal total_packets, eapol_packets, status
+        if not packet.haslayer(Dot11):
+            return
+        dot11 = packet[Dot11]
+
+        with state_lock:
+            total_packets += 1
+
+            if packet.haslayer(Dot11Beacon) or packet.haslayer(Dot11ProbeResp):
+                bssid = normalize_mac(dot11.addr3 or dot11.addr2)
+                if bssid and is_valid_mac(bssid):
+                    ssid = extract_ssid(packet)
+                    security = extract_security(packet)
+                    channel = extract_channel(packet)
+                    ap = aps.get(bssid)
+                    if ap is None:
+                        aps[bssid] = AccessPoint(
+                            ssid=ssid,
+                            bssid=bssid,
+                            security=security,
+                            channel=channel,
+                        )
+                    else:
+                        if ap.ssid == "<hidden>" and ssid != "<hidden>":
+                            ap.ssid = ssid
+                        ap.update_security(security)
+                        ap.update_channel(channel)
+
+            observe_client_for_ap(aps, dot11)
+
+            if not packet.haslayer(EAPOL):
+                return
+            eapol_packets += 1
+            matching_aps = [
+                ap for ap in aps.values()
+                if packet_matches_bssid(packet, ap.bssid)
+            ]
+            for ap in matching_aps:
+                frame = parse_eapol_key_frame(packet, ap.bssid)
+                if not frame:
+                    continue
+                stats = get_ap_stats(ap.bssid)
+                stats["eapol"] += 1
+                writer = get_writer(ap)
+                writer.write(packet)
+
+                states = eapol_states_by_bssid.setdefault(ap.bssid, {})
+                advanced, completed, message_number = update_handshake_progress(states, frame)
+                if message_number in stats["messages"]:
+                    stats["messages"][message_number] += 1
+                if advanced:
+                    status = f"EAPOL M{message_number} {format_ssid(ap.ssid, 18)}"
+                if completed:
+                    pair = (ap.bssid, frame.client)
+                    if pair not in completed_pairs:
+                        completed_pairs.add(pair)
+                        stats["handshakes"] += 1
+                        completed_handshakes.append(
+                            {
+                                "ssid": format_ssid(ap.ssid, 20),
+                                "bssid": ap.bssid,
+                                "client": frame.client,
+                                "path": stats.get("path", ""),
+                            }
+                        )
+                    status = f"FULL 4-way PCAP {format_ssid(ap.ssid, 18)}"
+
+    sniffer = None
+    hopper_thread = threading.Thread(target=live_channel_hopper, daemon=True)
+    start_time = time.time()
     try:
+        subprocess.run(
+            ["iw", "dev", interface, "set", "monitor", "otherbss"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        hopper_thread.start()
+        sniffer = AsyncSniffer(iface=interface, prn=handle_packet, store=False)
+        sniffer.start()
+        with state_lock:
+            status = "scanning + capturing"
+
         while True:
-            logging.info("")
-            logging.info(style(f"ON RUN round {scan_round}", STYLE_BOLD))
-            aps = scan_networks(
-                interface,
-                scan_window,
-                channels=channels,
-                hop_interval=hop_interval,
-                update_interval=ON_RUN_LIVE_UPDATE_INTERVAL,
-            )
-            merge_access_point_snapshots(cumulative_aps, aps)
-            sorted_aps = sorted_access_points(aps)
-            sorted_cumulative_aps = sorted_access_points(cumulative_aps)
-            active_aps = [ap for ap in sorted_aps if ap.clients]
-            active_cumulative_aps = [ap for ap in sorted_cumulative_aps if ap.clients]
-
-            logging.info("")
-            for line in format_network_lines(sorted_aps, max_items=ON_RUN_DISPLAY_LIMIT):
-                logging.info("%s", line)
-
-            logging.info("")
-            logging.info(style("ON RUN summary:", STYLE_BOLD))
-            logging.info("  Current window:          %s APs, %s with clients", len(sorted_aps), len(active_aps))
-            logging.info(
-                "  Session total:           %s APs, %s with clients",
-                len(sorted_cumulative_aps),
-                len(active_cumulative_aps),
-            )
-            logging.info("  Channel profile:         %s", "2.4 + 5 GHz" if include_5ghz else "2.4 GHz fast")
-            logging.info("  Active bursts attempted: 0")
-            logging.info(
-                "Use Classic mode for one explicitly authorized AP when active capture is required."
-            )
-
-            scan_round += 1
-            time.sleep(ON_RUN_SCAN_PAUSE_SEC)
+            with state_lock:
+                dashboard = format_on_run_dashboard(
+                    interface=interface,
+                    elapsed=int(time.time() - start_time),
+                    current_channel=current_channel,
+                    channel_profile=channel_profile,
+                    status=status,
+                    aps=dict(aps),
+                    ap_stats={
+                        bssid: {
+                            "eapol": stats.get("eapol", 0),
+                            "messages": dict(stats.get("messages", {})),
+                            "handshakes": stats.get("handshakes", 0),
+                            "path": stats.get("path", ""),
+                        }
+                        for bssid, stats in ap_stats.items()
+                    },
+                    completed_handshakes=list(completed_handshakes),
+                    total_packets=total_packets,
+                    eapol_packets=eapol_packets,
+                )
+            render_on_run_dashboard(dashboard)
+            time.sleep(ON_RUN_STATUS_REFRESH_SEC)
     except KeyboardInterrupt:
         logging.info("")
         logging.info("ON RUN stopped by user.")
+    except Exception as exc:
+        logging.error("ON RUN failed: %s", exc)
+    finally:
+        stop_event.set()
+        if sniffer:
+            try:
+                sniffer.stop()
+            except Scapy_Exception:
+                pass
+        hopper_thread.join(timeout=2)
+        for writer in writers.values():
+            try:
+                writer.close()
+            except Exception:
+                pass
+        logging.info("")
+        logging.info(style("ON RUN completed PCAPs:", STYLE_BOLD))
+        if completed_handshakes:
+            for item in completed_handshakes:
+                logging.info(
+                    "  %s (%s) client %s -> %s",
+                    item["ssid"],
+                    item["bssid"],
+                    item["client"],
+                    item["path"],
+                )
+        else:
+            logging.info("  No complete 4-way handshakes captured.")
 
 
 def main() -> None:
