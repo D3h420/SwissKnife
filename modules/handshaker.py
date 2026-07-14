@@ -94,7 +94,7 @@ MONITOR_SETTLE_SECONDS = 2.0
 DEFAULT_DEAUTH_BURST_ON_SEC = 3.0
 DEFAULT_DEAUTH_BURST_CYCLE_SEC = 12.0
 ON_RUN_FAST_CHANNELS = list(range(1, 15))
-ON_RUN_DEFAULT_SCAN_WINDOW_SEC = 6
+ON_RUN_DEFAULT_SCAN_WINDOW_SEC = 15
 ON_RUN_DEFAULT_HOP_INTERVAL = 0.25
 ON_RUN_LIVE_UPDATE_INTERVAL = 0.25
 ON_RUN_SCAN_PAUSE_SEC = 0.5
@@ -839,9 +839,9 @@ def select_access_point(sorted_aps: List[AccessPoint]) -> Optional[AccessPoint]:
 def select_handshaker_mode() -> str:
     logging.info(style("Mode:", STYLE_BOLD))
     logging.info("  %s Classic handshaker", color_text("[1]", COLOR_HIGHLIGHT))
-    logging.info("      Scan, select one authorized AP, then capture.")
+    logging.info("      Scan, select & capture.")
     logging.info("  %s ON RUN handshaker", color_text("[2]", COLOR_HIGHLIGHT))
-    logging.info("      Continuous passive survey ranked by active clients.")
+    logging.info("      All networks sorted by active clients.")
     logging.info("")
 
     while True:
