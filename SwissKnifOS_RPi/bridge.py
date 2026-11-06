@@ -41,6 +41,11 @@ class ModuleProcess:
     def returncode(self) -> int | None:
         return self._process.poll() if self._process is not None else None
 
+    @property
+    def output_complete(self) -> bool:
+        """True only after the process and its output pipes have finished."""
+        return self.returncode is not None and not self._selector.get_map()
+
     def start(self) -> None:
         if self._process is not None:
             raise RuntimeError("module already started")

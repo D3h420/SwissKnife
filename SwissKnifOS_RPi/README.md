@@ -49,7 +49,7 @@ Root access is needed by SwissKnife's networking workflows. If the interface sta
 | Joystick up/down | Move through the current list |
 | Joystick left/right | Move between options or keyboard keys |
 | Joystick center | Select / OK |
-| K1 | Back or show the current log |
+| K1 | Back or show the current log; toggle QR on About |
 | K2 | Open the on-screen keyboard when text is requested |
 | K3 | Interrupt the active workflow |
 | K4 | Enter / confirm |
@@ -59,7 +59,7 @@ At the logo screen, any button opens the main menu. In menus, the active item is
 
 ## System and Pi Commands
 
-**System → About** shows the project address and “D3h420 from LAB5”. Press **Down**, **Right**, or **R** to show a scannable QR code for `https://github.com/D3h420/SwissKnife`; **Up** returns to the text. **K1** returns to System.
+**System → About** shows the project address and “D3h420 from LAB5”. Press **K1** to show a scannable QR code for `https://github.com/D3h420/SwissKnife`; press **K1** again to close it. **Left** returns to System from either page. The QR image is loaded once; a missing or damaged asset displays a fallback message instead of restarting the interface.
 
 **System → Pi Commands** includes:
 
@@ -73,13 +73,15 @@ At the logo screen, any button opens the main menu. In menus, the active item is
 | Activate network | Activate a saved profile on a selected interface |
 | Disconnect | Disconnect a selected interface after confirmation |
 
-These actions run as root under the existing service. Wi-Fi passwords are concealed on the LCD; NetworkManager's `wifi connect ... password ...` command briefly receives them as process arguments. The Wi-Fi connection action covers open and personal-password networks. Enterprise Wi-Fi configuration and the full `sudo nmtui` editor require an SSH terminal: `nmtui` uses curses and does not fit the 128 × 128 LCD. The LCD actions use `nmcli` for the same common connection tasks. Changing or disconnecting the interface used for SSH can drop the SSH session; the LCD interface remains available.
+These actions execute the actual `lsusb`, `ip`, and `nmcli` binaries on the Raspberry Pi, as root under the existing service. The LCD prints each command and its result, or a clear missing-tool/error message. Wi-Fi passwords are concealed on the LCD; NetworkManager's `wifi connect ... password ...` command briefly receives them as process arguments. The Wi-Fi connection action covers open and personal-password networks. Enterprise Wi-Fi configuration and the full `sudo nmtui` editor require an SSH terminal: `nmtui` uses curses and does not fit the 128 × 128 LCD. Changing or disconnecting the interface used for SSH can drop the SSH session; the LCD interface remains available.
 
 On the on-screen keyboard, use the joystick to select a character and press the center button to type it. **K3** deletes the last character, **K4** inserts a space, and **R** confirms the entry. **K1** shows the log while keeping the question open; press **K2** to return to the keyboard. In a workflow's numbered list, **K4** submits an empty answer, which lets the module use its default. To interrupt a workflow while typing, first press **K1**, then **K3**. The screen is only 128 × 128 pixels, so long output appears in pages or a scrollable log.
 
 The LCD presents scanned networks as separate blocks: SSID, BSSID, radio details and client count appear on distinct lines. The live Recon sniffer refreshes one compact status screen rather than stacking terminal boxes. Use **Up/Down** to scroll previous result rows and **L/R** to move faster. Choice screens show three large options at a time.
 
 Common CLI questions are mapped to buttons throughout the modules. **Portal → SSID source** offers **Scan** and **Manual SSID**; **Scan duration** offers **5, 15, 30 and 60 seconds**. Network selections include **Rescan**, **Manual SSID** and **Exit** where the underlying module supports them. Yes/no questions and common capture windows also use choices. The keyboard remains for free-form data such as a manually entered SSID, a new Wi-Fi password, custom multi-target selections and the Handshaker confirmation phrase; **K2** is available as an advanced manual entry option on a choice screen.
+
+ARP scanner and IP.CAM finder print their interface and scanned-network lists in a plain numbered format when launched from the LCD. This lets the joystick select an interface or network even when Rich terminal formatting is installed on the Pi.
 
 ## Start automatically at boot
 
@@ -94,7 +96,7 @@ sudo systemctl status swissknifos.service
 
 For startup errors, inspect `journalctl -u swissknifos.service -b`. Use `sudo systemctl disable --now swissknifos.service` to stop automatic startup.
 
-To deploy this update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, and `modules/recon.py` into the matching locations under `/opt/SwissKnife`. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
+To deploy this update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, plus `modules/recon.py`, `modules/arp_scanner.py`, and `modules/ipcam_finder.py` into the matching locations under `/opt/SwissKnife`. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
 
 ## Status and scope
 

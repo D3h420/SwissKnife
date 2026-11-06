@@ -573,22 +573,29 @@ class ArpScanner(Module):
                 self.console.print(f"[green]Selected interface:[/green] {display_name}")
             return ordered[0]
 
-        self.console.print("")
-        self.console.print("[bold]Available interfaces:[/bold]")
-        for idx, iface in enumerate(ordered, start=1):
-            profile = self._interface_profiles.get(iface)
-            if not profile:
-                display_name = f"{iface} (AP running)" if iface == "wlan0" else iface
-                self.console.print(f"  {idx}) {display_name} - unknown [unknown]")
-                continue
-            display_name = f"{profile.name} (AP running)" if profile.name == "wlan0" else profile.name
-            details = f"{profile.chipset} [{profile.mode.lower()} | {profile.state}]"
-            self.console.print(
-                f"  [magenta]{idx}) {display_name} -[/magenta] {details}"
-            )
+        if os.environ.get("SWISSKNIFOS_LCD"):
+            print("\nAvailable interfaces:", flush=True)
+            for idx, iface in enumerate(ordered, start=1):
+                profile = self._interface_profiles.get(iface)
+                mode = profile.mode if profile else "unknown"
+                print(f"  [{idx}] {iface} - {mode}", flush=True)
+        else:
+            self.console.print("")
+            self.console.print("[bold]Available interfaces:[/bold]")
+            for idx, iface in enumerate(ordered, start=1):
+                profile = self._interface_profiles.get(iface)
+                if not profile:
+                    display_name = f"{iface} (AP running)" if iface == "wlan0" else iface
+                    self.console.print(f"  {idx}) {display_name} - unknown [unknown]")
+                    continue
+                display_name = f"{profile.name} (AP running)" if profile.name == "wlan0" else profile.name
+                details = f"{profile.chipset} [{profile.mode.lower()} | {profile.state}]"
+                self.console.print(
+                    f"  [magenta]{idx}) {display_name} -[/magenta] {details}"
+                )
 
         while self.running:
-            raw = Prompt.ask("Select interface (number)", default="1", console=self.console)
+            raw = input("Select interface (number): ") if os.environ.get("SWISSKNIFOS_LCD") else Prompt.ask("Select interface (number)", default="1", console=self.console)
             try:
                 picked = int(raw)
             except ValueError:
@@ -840,6 +847,11 @@ class ArpScanner(Module):
         return ordered, ""
 
     def _render_networks_table(self, networks: List[WiFiNetwork]) -> None:
+        if os.environ.get("SWISSKNIFOS_LCD"):
+            print("\nNearby Wi-Fi Networks:", flush=True)
+            for idx, net in enumerate(networks, start=1):
+                print(f"  [{idx}] {net.ssid or '<hidden>'} - {net.signal if net.signal is not None else '?'} dBm", flush=True)
+            return
         table = Table(title="Nearby Wi-Fi Networks", box=box.SIMPLE_HEAVY)
         table.add_column("#", justify="right", style="cyan", no_wrap=True)
         table.add_column("SSID", style="bold")
@@ -875,7 +887,7 @@ class ArpScanner(Module):
             )
 
         while self.running:
-            raw = Prompt.ask("Choose network number", default="1", console=self.console)
+            raw = input("Choose network number: ") if os.environ.get("SWISSKNIFOS_LCD") else Prompt.ask("Choose network number", default="1", console=self.console)
             try:
                 idx = int(raw)
             except ValueError:

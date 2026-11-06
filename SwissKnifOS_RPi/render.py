@@ -49,6 +49,14 @@ class Renderer:
                 resized.thumbnail((SIZE, SIZE), Image.Resampling.LANCZOS)
                 self.logo = Image.new("RGB", (SIZE, SIZE), "black")
                 self.logo.paste(resized, ((SIZE - resized.width) // 2, (SIZE - resized.height) // 2))
+        self.qr = None
+        qr_path = ASSETS / "github-qr.png"
+        try:
+            with Image.open(qr_path) as original:
+                original.load()
+                self.qr = original.convert("RGB")
+        except (OSError, ValueError):
+            pass
 
     def _canvas(self):
         image = Image.new("RGB", (SIZE, SIZE), BG)
@@ -109,18 +117,16 @@ class Renderer:
         draw.text((7, 51), "D3h420 from LAB5", font=self.small, fill=TEXT)
         draw.text((7, 68), "github.com/", font=self.body, fill=MUTED)
         draw.text((7, 82), "D3h420/SwissKnife", font=self.small, fill=TEXT)
-        self._footer(draw, "DOWN: GitHub QR")
+        self._footer(draw, "K1: show QR  LEFT: back")
         return image
 
     def about_qr(self) -> Image.Image:
         image, draw = self._canvas()
         draw.rectangle((0, 0, 127, 13), fill=PANEL)
         draw.text((4, 1), "GITHUB QR", font=self.small, fill=ACCENT)
-        draw.text((108, 1), "UP", font=self.small, fill=TEXT)
-        qr = ASSETS / "github-qr.png"
-        if qr.exists():
-            with Image.open(qr) as original:
-                image.paste(original.convert("RGB"), (8, 16))
+        draw.text((77, 1), "K1 close", font=self.small, fill=TEXT)
+        if self.qr is not None:
+            image.paste(self.qr, (8, 16))
         else:
             draw.text((8, 48), "QR unavailable", font=self.body, fill=TEXT)
         return image

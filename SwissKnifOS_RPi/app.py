@@ -87,6 +87,7 @@ class SwissKnifOS:
         self.menu_selection: dict[str, int] = {name: 0 for name in MENUS}
         self.module: ModuleProcess | None = None
         self.module_name = ""
+        self.pi_command = False
         self.output = TerminalBuffer()
         self.scroll = 0
         self.pending_reads = 0
@@ -112,6 +113,7 @@ class SwissKnifOS:
 
     def _launch(self, item: MenuItem) -> None:
         self.module_name = item.label
+        self.pi_command = item.script == "SwissKnifOS_RPi/pi_commands.py"
         self.output = TerminalBuffer()
         self.scroll = 0
         self.pending_reads = 0
@@ -173,15 +175,16 @@ class SwissKnifOS:
                 self.stopping_since = 0.0
                 self.output.feed("\nStopped after cleanup timeout.\n")
                 self.dirty = True
-        if self.module.returncode is not None and not self.module_done:
-            # The process may exit before its last pipe bytes are delivered.
-            for kind, value in self.module.poll():
-                if kind == "text":
-                    self.output.feed(str(value))
+        if self.module.returncode is not None and not self.module_done and (
+            not self.pi_command or getattr(self.module, "output_complete", True)
+        ):
             self.pending_reads = 0
             if self.screen in {"keyboard", "choices"}:
                 self.screen = "output"
-            self.output.feed(f"\nExit code: {self.module.returncode}\n")
+            if not self.pi_command:
+                self.output.feed(f"\nExit code: {self.module.returncode}\n")
+            elif self.module.returncode and not any(line.startswith("Error:") for line in self.output.visible_lines()):
+                self.output.feed(f"\nCommand failed (code {self.module.returncode}).\n")
             self.module_done = True
             self.dirty = True
 
@@ -313,11 +316,9 @@ class SwissKnifOS:
             self.menu_selection[name] = selected
             self.dirty = True
         elif self.screen == "about":
-            if key in {"DOWN", "RIGHT", "R"}:
-                self.about_page = 1
-            elif key in {"UP", "L"}:
-                self.about_page = 0
-            elif key in {"OK", "K4", "K1", "LEFT"}:
+            if key == "K1":
+                self.about_page = 1 - self.about_page
+            elif key in {"OK", "K4", "LEFT"}:
                 self.screen = "menu"
             self.dirty = True
         else:

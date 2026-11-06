@@ -1,9 +1,11 @@
 """Protocol tests for the CLI-to-LCD process bridge (no GPIO required)."""
 
 from pathlib import Path
+import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 from SwissKnifOS_RPi.bridge import ModuleProcess
 
@@ -20,6 +22,24 @@ def collect_until(process: ModuleProcess, predicate, timeout: float = 5.0):
 
 
 class BridgeTests(unittest.TestCase):
+    def test_pi_command_runs_os_binary_and_returns_its_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "lsusb"
+            binary.write_text("#!/bin/sh\necho 'Bus 001 Device 002: USB WiFi'\n", encoding="utf-8")
+            binary.chmod(0o755)
+            script = Path(__file__).with_name("pi_commands.py")
+            with patch.dict(os.environ, {"PATH": directory + os.pathsep + os.environ.get("PATH", "")}):
+                process = ModuleProcess(script, ["usb"])
+                process.start()
+            try:
+                events = collect_until(process, lambda events, rc: rc is not None and "USB WiFi" in "".join(value for kind, value in events if kind == "text"))
+                output = "".join(value for kind, value in events if kind == "text")
+                self.assertIn("$ lsusb", output)
+                self.assertIn("Bus 001 Device 002: USB WiFi", output)
+                self.assertEqual(process.returncode, 0)
+            finally:
+                process.terminate()
+
     def script(self, directory: str, source: str) -> Path:
         path = Path(directory) / "fixture.py"
         path.write_text(source, encoding="utf-8")

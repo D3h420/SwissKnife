@@ -48,10 +48,14 @@ class AppTests(unittest.TestCase):
         app._handle_key("OK")
         self.assertEqual((app.screen, app.about_page), ("about", 0))
         app._handle_key("DOWN")
-        self.assertEqual(app.about_page, 1)
-        app._handle_key("UP")
         self.assertEqual(app.about_page, 0)
         app._handle_key("K1")
+        self.assertEqual(app.about_page, 1)
+        app._handle_key("K1")
+        self.assertEqual(app.about_page, 0)
+        app._handle_key("K1")
+        self.assertEqual(app.about_page, 1)
+        app._handle_key("LEFT")
         self.assertEqual(app.screen, "menu")
         app._handle_key("DOWN")
         app._handle_key("OK")
@@ -129,6 +133,17 @@ class AppTests(unittest.TestCase):
         app._handle_key("DOWN")
         app._handle_key("OK")
         self.assertEqual(app.module.sent, ["m", "15"])
+
+    def test_pi_command_result_keeps_command_output(self):
+        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
+        app.screen = "output"
+        app.pi_command = True
+        app.module = FakeProcess(None, None)
+        app.module.events = [("text", "$ lsusb\nBus 001 Device 002: USB WiFi\n")]
+        app.module.rc = 0
+        app._poll_module()
+        self.assertIn("Bus 001 Device 002: USB WiFi", app.output.visible_lines())
+        self.assertFalse(any("Exit code" in line for line in app.output.visible_lines()))
 
     def test_scroll_stops_at_available_output(self):
         app = SwissKnifOS(hardware=None, renderer=FakeRenderer())

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import shlex
 import subprocess
 from dataclasses import dataclass
 
@@ -34,6 +35,11 @@ class Profile:
 
 
 def command(*args: str, timeout: int = 30) -> str:
+    visible_args = list(args)
+    for index, value in enumerate(visible_args[:-1]):
+        if value == "password":
+            visible_args[index + 1] = "********"
+    print("$ " + shlex.join(visible_args), flush=True)
     try:
         result = subprocess.run(args, capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
     except FileNotFoundError as exc:
@@ -108,11 +114,14 @@ def profiles() -> list[Profile]:
 
 
 def show_usb() -> None:
-    print(command("lsusb"))
+    print(command("lsusb") or "No USB devices reported.")
 
 
 def show_interfaces() -> None:
-    for index, device in enumerate(devices(), 1):
+    found = devices()
+    if not found:
+        print("NetworkManager reported no interfaces.")
+    for index, device in enumerate(found, 1):
         print(f"{index}) {device.name} - {device.kind} / {device.state}")
     print("\nIP addresses:")
     print(command("ip", "-br", "address"))
