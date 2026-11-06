@@ -1,0 +1,14 @@
+[Unit]
+Description=SwissKnifOS LCD interface
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/SwissKnife
+ExecStart=/usr/bin/python3 /opt/SwissKnife/SwissKnifOS_RPi/app.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

@@ -37,6 +37,8 @@ sudo chmod +x swiss_knife.py
 sudo python3 swiss_knife.py
 ```
 
+For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [SwissKnifOS_RPi](SwissKnifOS_RPi/README.md) for the screen, buttons, installation, and startup instructions.
+
 ## Requirements ✅
 
 - Linux
@@ -61,6 +63,7 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `core/wifi_iface.py` - shared Wi-Fi interface helpers
 - `html/` - portal templates
 - `log/` - captured submissions, handshakes, wardrive logs
+- `SwissKnifOS_RPi/` - LCD and button interface for Raspberry Pi Zero 2 W
 
 ## Notes 📝
 
