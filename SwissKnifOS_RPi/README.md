@@ -1,6 +1,6 @@
 # SwissKnifOS_RPi
 
-SwissKnifOS_RPi is the small-screen interface for SwissKnife on a Raspberry Pi Zero 2 W. It shows a splash screen, lets you browse menus with the HAT's joystick, and provides an on-screen keyboard where a workflow needs text input. The existing SwissKnife modules still perform the actual work; their external Wi-Fi adapter and tool requirements remain in force.
+SwissKnifOS_RPi is the small-screen interface for SwissKnife on a Raspberry Pi Zero 2 W. It shows the project logo until any button is pressed, lets you browse menus with the HAT's joystick, and provides an on-screen keyboard where a workflow needs text input. The existing SwissKnife modules still perform the actual work; their external Wi-Fi adapter and tool requirements remain in force.
 
 The target HAT is the **Seengreat 1.44-inch LCD Display for Raspberry Pi**, with a 128 × 128 ST7735S panel, SPI interface, six buttons, and a five-direction joystick. It is a different HAT from the Waveshare display used by RaspyJack. Pin numbers below use **BCM GPIO numbering**, as in the [Seengreat hardware guide](https://seengreat.com/wiki/68/1-44inch-lcd-display).
 
@@ -25,7 +25,7 @@ From the repository root, install the display and Python dependencies:
 
 ```bash
 sudo apt update
-sudo apt install -y python3-pil python3-spidev python3-lgpio python3-scapy
+sudo apt install -y python3-pil python3-spidev python3-lgpio python3-scapy fonts-dejavu-core
 ```
 
 SwissKnife modules also need the system tools listed in the [main README](../README.md#requirements-). Install the tools used by your workflows and connect a supported external Wi-Fi adapter. Some modules have additional setup requirements, such as a GPS receiver for wardriving or a module-specific build step for Dragon Drain. The Pi's built-in Wi-Fi can serve as a management connection, while compatible external adapters handle workflows that need monitor mode.
@@ -37,6 +37,8 @@ sudo python3 SwissKnifOS_RPi/app.py
 ```
 
 To inspect sample screens without SPI or GPIO, run `python3 SwissKnifOS_RPi/app.py --preview /tmp/swissknifos-preview`. This saves five PNG files and requires Pillow. The module bridge and menu logic can be checked with `python3 -m unittest discover -s SwissKnifOS_RPi -p 'test_*.py'`.
+
+The bundled intro image is `SwissKnifOS_RPi/assets/logo-128.png`, prepared at the LCD's native 128 × 128 resolution. The current asset was reconstructed from the shared logo preview. For an exact match, save the original PNG as `SwissKnifOS_RPi/assets/logo-source.png`; the interface automatically prefers it and scales it to fit the display. Text is drawn in whole pixels with a monospaced font and no grayscale antialiasing, which makes the small display sharper. The intro stays visible until **any** button is pressed; that press only opens the menu and does not activate its first item.
 
 Root access is needed by SwissKnife's networking workflows. If the interface starts but the display stays blank, first check SPI, the HAT seating, and the GPIO map. Hardware behavior still needs validation on the physical Seengreat HAT.
 
@@ -53,6 +55,8 @@ Root access is needed by SwissKnife's networking workflows. If the interface sta
 | K4 | Enter / confirm |
 | L / R | Previous / next page |
 
+At the logo screen, any button opens the main menu. In menus, the active item is orange; the number at the top right shows its position in the list.
+
 On the on-screen keyboard, use the joystick to select a character and press the center button to type it. **K3** deletes the last character, **K4** inserts a space, and **R** confirms the entry. **K1** shows the log while keeping the question open; press **K2** to return to the keyboard. In a workflow's numbered list, **K4** submits an empty answer, which lets the module use its default. To interrupt a workflow while typing, first press **K1**, then **K3**. The screen is only 128 × 128 pixels, so long output appears in pages or a scrollable log.
 
 ## Start automatically at boot
@@ -67,6 +71,8 @@ sudo systemctl status swissknifos.service
 ```
 
 For startup errors, inspect `journalctl -u swissknifos.service -b`. Use `sudo systemctl disable --now swissknifos.service` to stop automatic startup.
+
+To deploy a UI update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, into the existing `/opt/SwissKnife/SwissKnifOS_RPi` installation. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
 
 ## Status and scope
 

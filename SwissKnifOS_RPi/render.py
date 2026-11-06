@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PIL import Image, ImageDraw, ImageFont
 
 if __package__:
@@ -10,31 +12,45 @@ else:
     from logic import Choice, Keyboard, TerminalBuffer
 
 SIZE = 128
-BG = "#091425"
-PANEL = "#142741"
-ACCENT = "#49d6e8"
-TEXT = "#edf6ff"
-MUTED = "#9bb3c9"
+BG = "#030604"
+PANEL = "#142014"
+ACCENT = "#a6ff3d"
+HIGHLIGHT = "#ff7b19"
+TEXT = "#fff6d8"
+MUTED = "#bdcda8"
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 
 def _font(size: int):
     try:
-        return ImageFont.truetype("DejaVuSans.ttf", size)
+        return ImageFont.truetype("DejaVuSansMono.ttf", size)
     except OSError:
         return ImageFont.load_default()
 
 
 class Renderer:
     def __init__(self) -> None:
-        self.small = _font(8)
-        self.body = _font(10)
-        self.large = _font(17)
+        self.small = _font(9)
+        self.body = _font(11)
+        self.large = _font(16)
         self._char_widths: dict[str, int] = {}
         self._scroll_cache: tuple[TerminalBuffer, int, int] | None = None
+        source = ASSETS / "logo-source.png"
+        prepared = ASSETS / "logo-128.png"
+        logo = source if source.exists() else prepared
+        self.logo = None
+        if logo.exists():
+            with Image.open(logo) as original:
+                resized = original.convert("RGB")
+                resized.thumbnail((SIZE, SIZE), Image.Resampling.LANCZOS)
+                self.logo = Image.new("RGB", (SIZE, SIZE), "black")
+                self.logo.paste(resized, ((SIZE - resized.width) // 2, (SIZE - resized.height) // 2))
 
     def _canvas(self):
         image = Image.new("RGB", (SIZE, SIZE), BG)
-        return image, ImageDraw.Draw(image)
+        draw = ImageDraw.Draw(image)
+        draw.fontmode = "1"  # No grey antialias pixels at the LCD's native resolution.
+        return image, draw
 
     @staticmethod
     def _width(draw: ImageDraw.ImageDraw, value: str, font) -> int:
@@ -55,46 +71,52 @@ class Renderer:
         return value[:low] + "…"
 
     def _header(self, draw: ImageDraw.ImageDraw, title: str, state: str = "") -> None:
-        draw.rectangle((0, 0, 127, 16), fill=PANEL)
-        draw.rectangle((0, 0, 3, 16), fill=ACCENT)
-        draw.text((8, 3), self._fit(draw, title, 94, self.body), font=self.body, fill=TEXT)
+        draw.rectangle((0, 0, 127, 17), fill=PANEL)
+        draw.rectangle((0, 16, 127, 17), fill=ACCENT)
+        draw.rectangle((3, 4, 10, 11), fill=ACCENT)
+        draw.text((15, 3), self._fit(draw, title, 82, self.body), font=self.body, fill=TEXT)
         if state:
-            state = self._fit(draw, state, 28, self.small)
+            state = self._fit(draw, state, 29, self.small)
             draw.text((126 - self._width(draw, state, self.small), 4), state, font=self.small, fill=ACCENT)
 
     def _footer(self, draw: ImageDraw.ImageDraw, hint: str) -> None:
         draw.rectangle((0, 114, 127, 127), fill=PANEL)
-        draw.text((3, 116), self._fit(draw, hint, 123, self.small), font=self.small, fill=MUTED)
+        draw.rectangle((0, 113, 127, 113), fill="#45692b")
+        draw.text((3, 115), self._fit(draw, hint, 123, self.small), font=self.small, fill=MUTED)
 
     def boot(self) -> Image.Image:
         image, draw = self._canvas()
-        draw.rounded_rectangle((37, 10, 91, 64), radius=12, fill=PANEL, outline=ACCENT, width=2)
-        draw.polygon([(49, 48), (75, 22), (82, 29), (56, 55)], fill=ACCENT)
-        draw.polygon([(75, 22), (87, 17), (82, 29)], fill=TEXT)
-        draw.ellipse((45, 48, 55, 58), fill=BG, outline=TEXT)
-        for word, y, font, color in (
-            ("SWISS", 72, self.large, TEXT),
-            ("KNIFOS", 91, self.large, ACCENT),
-            ("Raspberry Pi", 116, self.small, MUTED),
-        ):
-            x = (SIZE - self._width(draw, word, font)) // 2
-            draw.text((x, y), word, font=font, fill=color)
+        if self.logo is not None:
+            image.paste(self.logo, (0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.fontmode = "1"
+        else:
+            draw.text((15, 48), "SWISSKNIFE", font=self.large, fill=TEXT)
+        draw.rectangle((0, 114, 127, 127), fill=BG)
+        hint = "PRESS ANY KEY"
+        draw.text(((SIZE - self._width(draw, hint, self.small)) // 2, 116), hint, font=self.small, fill=ACCENT)
         return image
 
     def menu(self, title: str, items: list[str], selected: int) -> Image.Image:
         image, draw = self._canvas()
-        self._header(draw, title)
-        count = 6
-        first = max(0, min(selected - 4, len(items) - count))
+        self._header(draw, title, f"{selected + 1}/{len(items)}")
+        count = 5
+        first = max(0, min(selected - 3, len(items) - count))
         first = max(0, first)
         for offset, index in enumerate(range(first, min(first + count, len(items)))):
-            y = 20 + 15 * offset
+            y = 22 + 18 * offset
             active = index == selected
             if active:
-                draw.rounded_rectangle((3, y - 1, 124, y + 13), radius=3, fill=ACCENT)
-            draw.text((6, y), ">" if active else " ", font=self.body, fill=BG if active else MUTED)
-            draw.text((17, y), self._fit(draw, items[index], 105, self.body), font=self.body, fill=BG if active else TEXT)
-        self._footer(draw, "U/D move  OK go  K1 back")
+                draw.rectangle((2, y, 125, y + 16), fill=HIGHLIGHT)
+                draw.rectangle((2, y, 5, y + 16), fill=ACCENT)
+            else:
+                draw.rectangle((2, y, 125, y + 16), fill=PANEL)
+                draw.rectangle((2, y, 3, y + 16), fill="#426028")
+            number = f"{index + 1:02d}"
+            draw.text((9, y + 2), number, font=self.small, fill=BG if active else ACCENT)
+            draw.text((30, y + 1), self._fit(draw, items[index], 87, self.body), font=self.body, fill=BG if active else TEXT)
+            draw.text((117, y + 2), ">", font=self.small, fill=BG if active else ACCENT)
+        self._footer(draw, "UP/DN select  OK open")
         return image
 
     def choices(self, title: str, prompt: str, options: list[Choice], selected: int) -> Image.Image:

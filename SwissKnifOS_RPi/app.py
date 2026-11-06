@@ -74,7 +74,6 @@ class SwissKnifOS:
         self.hardware = hardware
         self.renderer = renderer if renderer is not None else _renderer()
         self.screen = "boot"
-        self.boot_until = time.monotonic() + 1.6
         self.menu_stack = ["SwissKnifOS"]
         self.menu_selection: dict[str, int] = {name: 0 for name in MENUS}
         self.module: ModuleProcess | None = None
@@ -288,9 +287,8 @@ class SwissKnifOS:
 
     def _handle_key(self, key: str) -> None:
         if self.screen == "boot":
-            if key in {"OK", "K4"}:
-                self.screen = "menu"
-                self.dirty = True
+            self.screen = "menu"
+            self.dirty = True
             return
         if self.screen == "menu":
             name = self.menu_name
@@ -345,9 +343,6 @@ class SwissKnifOS:
     def run(self) -> None:
         try:
             while self.running:
-                if self.screen == "boot" and time.monotonic() >= self.boot_until:
-                    self.screen = "menu"
-                    self.dirty = True
                 self._poll_module()
                 for key in self.hardware.poll():
                     self._handle_key(key)

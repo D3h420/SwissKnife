@@ -40,6 +40,14 @@ class FakeRenderer:
 
 
 class AppTests(unittest.TestCase):
+    def test_intro_waits_for_any_button(self):
+        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
+        self.assertEqual(app.screen, "boot")
+        self.assertFalse(hasattr(app, "boot_until"))
+        app._handle_key("K2")
+        self.assertEqual(app.screen, "menu")
+        self.assertEqual(app.menu_selection["SwissKnifOS"], 0)
+
     def test_menu_prompt_keyboard_and_return(self):
         app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
         app.screen = "menu"
