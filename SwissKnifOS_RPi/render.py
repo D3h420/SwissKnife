@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -19,6 +20,9 @@ HIGHLIGHT = "#ff7b19"
 TEXT = "#fff6d8"
 MUTED = "#bdcda8"
 ASSETS = Path(__file__).resolve().parent / "assets"
+OUTPUT_ROWS = 6
+_NETWORK_ROW = re.compile(r"^\s*(\d{1,2})[).]\s+(.+?)\s+\(([0-9A-Fa-f:]{17})\)\s*-\s*(.*)$")
+_NUMBERED_ROW = re.compile(r"^\s*(\d{1,2})[).]\s+(.+?)\s+-\s+(.+)$")
 
 
 def _font(size: int):
@@ -34,7 +38,7 @@ class Renderer:
         self.body = _font(11)
         self.large = _font(16)
         self._char_widths: dict[str, int] = {}
-        self._scroll_cache: tuple[TerminalBuffer, int, int] | None = None
+        self._visual_cache: tuple[TerminalBuffer, int, list[tuple[str, str]]] | None = None
         source = ASSETS / "logo-source.png"
         prepared = ASSETS / "logo-128.png"
         logo = source if source.exists() else prepared
@@ -97,6 +101,30 @@ class Renderer:
         draw.text(((SIZE - self._width(draw, hint, self.small)) // 2, 116), hint, font=self.small, fill=ACCENT)
         return image
 
+    def about_info(self) -> Image.Image:
+        image, draw = self._canvas()
+        self._header(draw, "About", "1/2")
+        draw.text((7, 23), "SWISSKNIFE", font=self.large, fill=ACCENT)
+        draw.rectangle((7, 45, 120, 45), fill=HIGHLIGHT)
+        draw.text((7, 51), "D3h420 from LAB5", font=self.small, fill=TEXT)
+        draw.text((7, 68), "github.com/", font=self.body, fill=MUTED)
+        draw.text((7, 82), "D3h420/SwissKnife", font=self.small, fill=TEXT)
+        self._footer(draw, "DOWN: GitHub QR")
+        return image
+
+    def about_qr(self) -> Image.Image:
+        image, draw = self._canvas()
+        draw.rectangle((0, 0, 127, 13), fill=PANEL)
+        draw.text((4, 1), "GITHUB QR", font=self.small, fill=ACCENT)
+        draw.text((108, 1), "UP", font=self.small, fill=TEXT)
+        qr = ASSETS / "github-qr.png"
+        if qr.exists():
+            with Image.open(qr) as original:
+                image.paste(original.convert("RGB"), (8, 16))
+        else:
+            draw.text((8, 48), "QR unavailable", font=self.body, fill=TEXT)
+        return image
+
     def menu(self, title: str, items: list[str], selected: int) -> Image.Image:
         image, draw = self._canvas()
         self._header(draw, title, f"{selected + 1}/{len(items)}")
@@ -124,17 +152,36 @@ class Renderer:
         self._header(draw, title, "IN")
         prompt = self._fit(draw, prompt, 124, self.small)
         draw.text((3, 19), prompt, font=self.small, fill=MUTED)
-        count = 6
-        first = max(0, min(selected - 4, len(options) - count))
+        compact = len(options) <= 4 and all(
+            " - " not in option.label and not _NETWORK_ROW.match(f"1) {option.label}")
+            for option in options
+        )
+        count = 4 if compact else 3
+        first = max(0, min(selected - 1, len(options) - count))
         first = max(0, first)
         for offset, index in enumerate(range(first, min(first + count, len(options)))):
-            y = 32 + 13 * offset
+            y = 31 + 20 * offset if compact else 29 + 27 * offset
+            height = 18 if compact else 24
             active = index == selected
             if active:
-                draw.rounded_rectangle((2, y - 1, 125, y + 11), radius=2, fill=ACCENT)
-            label = f"{options[index].key} {options[index].label}"
-            draw.text((5, y), self._fit(draw, label, 119, self.small), font=self.small, fill=BG if active else TEXT)
-        self._footer(draw, "OK pick  K2 type  K1 log")
+                draw.rectangle((2, y, 125, y + height), fill=HIGHLIGHT)
+            else:
+                draw.rectangle((2, y, 125, y + height), fill=PANEL)
+            key = options[index].key
+            label = options[index].label
+            network = _NETWORK_ROW.match(f"1) {label}")
+            if network:
+                label = network.group(2)
+                detail = f"{network.group(3)} {network.group(4)}"
+            elif " - " in label:
+                label, detail = label.split(" - ", 1)
+            else:
+                detail = ""
+            draw.text((5, y + (4 if compact else 3)), self._fit(draw, key, 18, self.small), font=self.small, fill=BG if active else ACCENT)
+            draw.text((25, y + (3 if compact else 1)), self._fit(draw, label, 98, self.body), font=self.body, fill=BG if active else TEXT)
+            if detail and not compact:
+                draw.text((25, y + 13), self._fit(draw, detail, 98, self.small), font=self.small, fill=BG if active else MUTED)
+        self._footer(draw, "UP/DN choose  OK select")
         return image
 
     def _wrap(self, draw: ImageDraw.ImageDraw, line: str, width: int) -> list[str]:
@@ -158,32 +205,63 @@ class Renderer:
             parts.append(current)
         return parts
 
+    def _output_rows(self, draw: ImageDraw.ImageDraw, buffer: TerminalBuffer) -> list[tuple[str, str]]:
+        cache = self._visual_cache
+        if cache is not None and cache[0] is buffer and cache[1] == buffer.version:
+            return cache[2]
+        rows: list[tuple[str, str]] = []
+
+        def add(value: str, role: str = "plain") -> None:
+            for part in self._wrap(draw, value.strip(), 121):
+                if part:
+                    rows.append((part, role))
+
+        for raw in buffer.visible_lines():
+            line = raw.strip()
+            if not line or re.fullmatch(r"[=+\-|\s]{4,}", line):
+                continue
+            if line.startswith("|") and line.endswith("|"):
+                line = line[1:-1].strip()
+            network = _NETWORK_ROW.match(line)
+            if network:
+                number, ssid, bssid, details = network.groups()
+                rows.append((self._fit(draw, f"{number}. {ssid}", 121, self.small), "title"))
+                add(f"MAC {bssid}", "detail")
+                parts = [part.strip() for part in details.split("|")]
+                add("  ".join(parts[:3]), "detail")
+                if len(parts) > 3:
+                    add(parts[3].split("(", 1)[0].strip(), "detail")
+                continue
+            numbered = _NUMBERED_ROW.match(line)
+            if numbered:
+                number, name, details = numbered.groups()
+                add(f"{number}. {name}", "title")
+                add(details, "detail")
+                continue
+            role = "section" if line.endswith(":") and len(line) < 36 else "plain"
+            add(line, role)
+        self._visual_cache = (buffer, buffer.version, rows)
+        return rows
+
     def output(self, title: str, buffer: TerminalBuffer, scroll: int, hint: str, state: str = "") -> Image.Image:
         image, draw = self._canvas()
         self._header(draw, title, state)
-        visual_reverse: list[str] = []
-        for line in reversed(buffer.visible_lines()):
-            visual_reverse.extend(reversed(self._wrap(draw, line, 122)))
-            if len(visual_reverse) >= scroll + 8:
-                break
-        visual = list(reversed(visual_reverse))
-        scroll = min(scroll, max(0, len(visual) - 8))
-        end = max(0, len(visual) - scroll)
-        visible = visual[max(0, end - 8):end]
-        for index, line in enumerate(visible):
-            draw.text((3, 19 + 11 * index), line, font=self.small, fill=TEXT)
+        rows = self._output_rows(draw, buffer)
+        scroll = min(scroll, max(0, len(rows) - OUTPUT_ROWS))
+        end = max(0, len(rows) - scroll)
+        visible = rows[max(0, end - OUTPUT_ROWS):end]
+        for index, (line, role) in enumerate(visible):
+            y = 19 + 15 * index
+            color = ACCENT if role == "section" else HIGHLIGHT if role == "title" else MUTED if role == "detail" else TEXT
+            if role == "title":
+                draw.rectangle((0, y + 1, 2, y + 11), fill=HIGHLIGHT)
+            draw.text((5, y), line, font=self.small, fill=color)
         self._footer(draw, hint)
         return image
 
     def max_scroll(self, buffer: TerminalBuffer) -> int:
-        cache = self._scroll_cache
-        if cache is not None and cache[0] is buffer and cache[1] == buffer.version:
-            return cache[2]
         _, draw = self._canvas()
-        count = sum(len(self._wrap(draw, line, 122)) for line in buffer.visible_lines())
-        result = max(0, count - 8)
-        self._scroll_cache = (buffer, buffer.version, result)
-        return result
+        return max(0, len(self._output_rows(draw, buffer)) - OUTPUT_ROWS)
 
     def keyboard(self, prompt: str, keyboard: Keyboard) -> Image.Image:
         image, draw = self._canvas()

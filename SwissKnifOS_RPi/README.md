@@ -25,7 +25,7 @@ From the repository root, install the display and Python dependencies:
 
 ```bash
 sudo apt update
-sudo apt install -y python3-pil python3-spidev python3-lgpio python3-scapy fonts-dejavu-core
+sudo apt install -y python3-pil python3-spidev python3-lgpio python3-scapy fonts-dejavu-core usbutils network-manager
 ```
 
 SwissKnife modules also need the system tools listed in the [main README](../README.md#requirements-). Install the tools used by your workflows and connect a supported external Wi-Fi adapter. Some modules have additional setup requirements, such as a GPS receiver for wardriving or a module-specific build step for Dragon Drain. The Pi's built-in Wi-Fi can serve as a management connection, while compatible external adapters handle workflows that need monitor mode.
@@ -36,7 +36,7 @@ Start the LCD interface from the repository root:
 sudo python3 SwissKnifOS_RPi/app.py
 ```
 
-To inspect sample screens without SPI or GPIO, run `python3 SwissKnifOS_RPi/app.py --preview /tmp/swissknifos-preview`. This saves five PNG files and requires Pillow. The module bridge and menu logic can be checked with `python3 -m unittest discover -s SwissKnifOS_RPi -p 'test_*.py'`.
+To inspect sample screens without SPI or GPIO, run `python3 SwissKnifOS_RPi/app.py --preview /tmp/swissknifos-preview`. This saves sample PNG files and requires Pillow. The module bridge and menu logic can be checked with `python3 -m unittest discover -s SwissKnifOS_RPi -p 'test_*.py'`.
 
 The bundled intro image is `SwissKnifOS_RPi/assets/logo-128.png`, prepared at the LCD's native 128 × 128 resolution. The current asset was reconstructed from the shared logo preview. For an exact match, save the original PNG as `SwissKnifOS_RPi/assets/logo-source.png`; the interface automatically prefers it and scales it to fit the display. Text is drawn in whole pixels with a monospaced font and no grayscale antialiasing, which makes the small display sharper. The intro stays visible until **any** button is pressed; that press only opens the menu and does not activate its first item.
 
@@ -57,7 +57,29 @@ Root access is needed by SwissKnife's networking workflows. If the interface sta
 
 At the logo screen, any button opens the main menu. In menus, the active item is orange; the number at the top right shows its position in the list.
 
+## System and Pi Commands
+
+**System → About** shows the project address and “D3h420 from LAB5”. Press **Down**, **Right**, or **R** to show a scannable QR code for `https://github.com/D3h420/SwissKnife`; **Up** returns to the text. **K1** returns to System.
+
+**System → Pi Commands** includes:
+
+| Item | Action |
+| --- | --- |
+| USB devices | Show `lsusb` output |
+| Interfaces | Show NetworkManager devices and IP addresses |
+| WiFi scan | Scan available SSIDs on a selected Wi-Fi adapter |
+| WiFi connect | Choose an SSID or type one, then enter its password on the LCD keyboard |
+| Saved networks | Show saved NetworkManager profiles |
+| Activate network | Activate a saved profile on a selected interface |
+| Disconnect | Disconnect a selected interface after confirmation |
+
+These actions run as root under the existing service. Wi-Fi passwords are concealed on the LCD; NetworkManager's `wifi connect ... password ...` command briefly receives them as process arguments. The Wi-Fi connection action covers open and personal-password networks. Enterprise Wi-Fi configuration and the full `sudo nmtui` editor require an SSH terminal: `nmtui` uses curses and does not fit the 128 × 128 LCD. The LCD actions use `nmcli` for the same common connection tasks. Changing or disconnecting the interface used for SSH can drop the SSH session; the LCD interface remains available.
+
 On the on-screen keyboard, use the joystick to select a character and press the center button to type it. **K3** deletes the last character, **K4** inserts a space, and **R** confirms the entry. **K1** shows the log while keeping the question open; press **K2** to return to the keyboard. In a workflow's numbered list, **K4** submits an empty answer, which lets the module use its default. To interrupt a workflow while typing, first press **K1**, then **K3**. The screen is only 128 × 128 pixels, so long output appears in pages or a scrollable log.
+
+The LCD presents scanned networks as separate blocks: SSID, BSSID, radio details and client count appear on distinct lines. The live Recon sniffer refreshes one compact status screen rather than stacking terminal boxes. Use **Up/Down** to scroll previous result rows and **L/R** to move faster. Choice screens show three large options at a time.
+
+Common CLI questions are mapped to buttons throughout the modules. **Portal → SSID source** offers **Scan** and **Manual SSID**; **Scan duration** offers **5, 15, 30 and 60 seconds**. Network selections include **Rescan**, **Manual SSID** and **Exit** where the underlying module supports them. Yes/no questions and common capture windows also use choices. The keyboard remains for free-form data such as a manually entered SSID, a new Wi-Fi password, custom multi-target selections and the Handshaker confirmation phrase; **K2** is available as an advanced manual entry option on a choice screen.
 
 ## Start automatically at boot
 
@@ -72,8 +94,8 @@ sudo systemctl status swissknifos.service
 
 For startup errors, inspect `journalctl -u swissknifos.service -b`. Use `sudo systemctl disable --now swissknifos.service` to stop automatic startup.
 
-To deploy a UI update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, into the existing `/opt/SwissKnife/SwissKnifOS_RPi` installation. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
+To deploy this update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, and `modules/recon.py` into the matching locations under `/opt/SwissKnife`. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
 
 ## Status and scope
 
-This interface is being developed in the repository. It has not been tested on the physical Seengreat HAT in this session. Check display orientation and button behavior on your hardware before field use. Use SwissKnife only on networks and devices you own or are explicitly authorized to test.
+The user has confirmed the boot screen and menu update on a physical Pi. The new About and Pi Commands screens still need a hardware check. Use SwissKnife only on networks and devices you own or are explicitly authorized to test.

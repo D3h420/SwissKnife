@@ -10,6 +10,8 @@ class LogicTests(unittest.TestCase):
         buffer = TerminalBuffer()
         buffer.feed("\x1b[31mScanning 1\rScanning 2\r\nReady\n")
         self.assertEqual(buffer.visible_lines(), ["Scanning 2", "Ready"])
+        buffer.feed("old result\n\fPackets: 12\n")
+        self.assertEqual(buffer.visible_lines(), ["Packets: 12"])
 
     def test_numbered_menu_and_network_table(self) -> None:
         buffer = TerminalBuffer()
@@ -41,8 +43,25 @@ class LogicTests(unittest.TestCase):
         buffer.feed("Press Enter to start scan...")
         self.assertEqual(input_mode(buffer), ("enter", []))
         buffer = TerminalBuffer()
+        buffer.feed("OK: stop sniffer")
+        self.assertEqual(input_mode(buffer), ("enter", []))
+        buffer = TerminalBuffer()
         buffer.feed("Scan duration (Enter for 12): ")
-        self.assertEqual(input_mode(buffer), ("keyboard", []))
+        mode, options = input_mode(buffer)
+        self.assertEqual(mode, "choices")
+        self.assertEqual([option.key for option in options], ["5", "15", "30", "60"])
+
+        buffer = TerminalBuffer()
+        buffer.feed("SSID source - Scan (S) or Manual (M): ")
+        mode, options = input_mode(buffer)
+        self.assertEqual(mode, "choices")
+        self.assertEqual([option.key for option in options], ["s", "m"])
+
+        buffer = TerminalBuffer()
+        buffer.feed("  1) Lab AP - -54 dBm\nSelect network (number, R to rescan, M for manual, E to exit): ")
+        mode, options = input_mode(buffer)
+        self.assertEqual(mode, "choices")
+        self.assertEqual([option.key for option in options], ["1", "r", "m", "e"])
 
         keyboard = Keyboard(secret=True)
         self.assertEqual(keyboard.keys[0], "a")

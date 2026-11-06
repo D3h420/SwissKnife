@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import re
 import signal
-import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,8 +53,17 @@ MENUS: dict[str, tuple[MenuItem, ...]] = {
     ),
     "System": (
         MenuItem("About", "about"),
-        MenuItem("Exit interface", "exit"),
-        MenuItem("Power off Pi", "poweroff"),
+        MenuItem("Pi Commands", "Pi Commands"),
+        MenuItem("Back", "back"),
+    ),
+    "Pi Commands": (
+        MenuItem("USB devices", "module", "SwissKnifOS_RPi/pi_commands.py", ("usb",)),
+        MenuItem("Interfaces", "module", "SwissKnifOS_RPi/pi_commands.py", ("interfaces",)),
+        MenuItem("WiFi scan", "module", "SwissKnifOS_RPi/pi_commands.py", ("wifi-scan",)),
+        MenuItem("WiFi connect", "module", "SwissKnifOS_RPi/pi_commands.py", ("wifi-connect",)),
+        MenuItem("Saved networks", "module", "SwissKnifOS_RPi/pi_commands.py", ("profiles",)),
+        MenuItem("Activate network", "module", "SwissKnifOS_RPi/pi_commands.py", ("activate",)),
+        MenuItem("Disconnect", "module", "SwissKnifOS_RPi/pi_commands.py", ("disconnect",)),
         MenuItem("Back", "back"),
     ),
 }
@@ -74,6 +82,7 @@ class SwissKnifOS:
         self.hardware = hardware
         self.renderer = renderer if renderer is not None else _renderer()
         self.screen = "boot"
+        self.about_page = 0
         self.menu_stack = ["SwissKnifOS"]
         self.menu_selection: dict[str, int] = {name: 0 for name in MENUS}
         self.module: ModuleProcess | None = None
@@ -130,12 +139,8 @@ class SwissKnifOS:
             self.screen = "menu"
             self.dirty = True
         elif item.target == "about":
+            self.about_page = 0
             self.screen = "about"
-            self.dirty = True
-        elif item.target == "exit":
-            self.running = False
-        elif item.target == "poweroff":
-            self.screen = "poweroff"
             self.dirty = True
 
     def _poll_module(self) -> None:
@@ -308,14 +313,11 @@ class SwissKnifOS:
             self.menu_selection[name] = selected
             self.dirty = True
         elif self.screen == "about":
-            if key in {"OK", "K4", "K1", "LEFT"}:
-                self.screen = "menu"
-                self.dirty = True
-        elif self.screen == "poweroff":
-            if key in {"K1", "LEFT"}:
-                self.screen = "menu"
-            elif key in {"OK", "K4"}:
-                subprocess.run(["systemctl", "poweroff"], check=False)
+            if key in {"DOWN", "RIGHT", "R"}:
+                self.about_page = 1
+            elif key in {"UP", "L"}:
+                self.about_page = 0
+            elif key in {"OK", "K4", "K1", "LEFT"}:
                 self.screen = "menu"
             self.dirty = True
         else:
@@ -328,15 +330,20 @@ class SwissKnifOS:
             items = MENUS[self.menu_name]
             return self.renderer.menu(self.menu_name, [item.label for item in items], self.menu_selection[self.menu_name])
         if self.screen == "about":
-            return self.renderer.message("SwissKnifOS", ["SwissKnife on Pi Zero 2 W", "Seengreat LCD 1.44", "Use only in your lab."], "OK back")
-        if self.screen == "poweroff":
-            return self.renderer.message("Power off Pi?", ["Press OK to shut down.", "K1 to cancel."], "OK power off  K1 cancel")
+            return self.renderer.about_qr() if self.about_page else self.renderer.about_info()
         if self.screen == "choices":
             return self.renderer.choices(self.module_name, self.prompt, self.choices, self.choice_selection)
         if self.screen == "keyboard":
             return self.renderer.keyboard(self.prompt, self.keyboard)
         finished = self.module is None or self.module.returncode is not None
-        hint = "OK back  ↑↓ scroll" if finished else ("OK Enter  K2 type  K3 stop" if self.pending_reads else "↑↓ scroll  K3 stop")
+        if finished:
+            hint = "OK back  UP/DN scroll"
+        elif self.pending_reads and "stop" in self.prompt.casefold():
+            hint = "OK stop  UP/DN scroll"
+        elif self.pending_reads:
+            hint = "OK continue  K2 input"
+        else:
+            hint = "UP/DN scroll  K3 stop"
         state = "END" if finished else ("IN" if self.pending_reads else "RUN")
         return self.renderer.output(self.module_name, self.output, self.scroll, hint, state)
 
@@ -371,6 +378,16 @@ def preview(path: Path) -> None:
     keyboard = Keyboard()
     keyboard.value = "wlan1"
     renderer.keyboard("Enter SSID:", keyboard).save(path / "keyboard.png")
+    renderer.about_info().save(path / "about.png")
+    renderer.about_qr().save(path / "about-qr.png")
+    renderer.choices("Portal", "SSID source:", [Choice("s", "Scan networks"), Choice("m", "Manual SSID")], 0).save(path / "portal-mode.png")
+    renderer.choices("Portal", "Scan duration:", [Choice(str(value), f"{value} seconds") for value in (5, 15, 30, 60)], 1).save(path / "scan-duration.png")
+    networks = TerminalBuffer()
+    networks.feed("Observed networks:\n  1) Lab AP (AA:BB:CC:DD:EE:FF) - ch 6 | WPA2 | -54 dBm | clients 3\n")
+    renderer.output("Recon", networks, 0, "UP/DN scroll  OK back", "END").save(path / "scan-results.png")
+    sniffer = TerminalBuffer()
+    sniffer.feed("\fSniffer on wlan1\nPackets: 234\nProbes: 12\nUnique SSIDs: 5\nStatus: RUNNING\nOK: stop sniffer\n")
+    renderer.output("Recon", sniffer, 0, "OK stop  UP/DN scroll", "RUN").save(path / "sniffer-live.png")
 
 
 def main() -> None:

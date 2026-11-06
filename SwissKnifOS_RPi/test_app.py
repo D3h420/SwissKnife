@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from SwissKnifOS_RPi.app import SwissKnifOS
+from SwissKnifOS_RPi.app import MENUS, SwissKnifOS
 
 
 class FakeProcess:
@@ -40,6 +40,23 @@ class FakeRenderer:
 
 
 class AppTests(unittest.TestCase):
+    def test_system_about_and_pi_commands(self):
+        self.assertEqual([item.label for item in MENUS["System"]], ["About", "Pi Commands", "Back"])
+        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
+        app.screen = "menu"
+        app.menu_stack.append("System")
+        app._handle_key("OK")
+        self.assertEqual((app.screen, app.about_page), ("about", 0))
+        app._handle_key("DOWN")
+        self.assertEqual(app.about_page, 1)
+        app._handle_key("UP")
+        self.assertEqual(app.about_page, 0)
+        app._handle_key("K1")
+        self.assertEqual(app.screen, "menu")
+        app._handle_key("DOWN")
+        app._handle_key("OK")
+        self.assertEqual(app.menu_name, "Pi Commands")
+
     def test_intro_waits_for_any_button(self):
         app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
         self.assertEqual(app.screen, "boot")
@@ -94,6 +111,24 @@ class AppTests(unittest.TestCase):
         app._handle_key("K3")
         self.assertTrue(app.module.interrupted)
         self.assertEqual(app.pending_reads, 0)
+
+    def test_portal_buttons_and_scan_duration(self):
+        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
+        app.screen = "output"
+        app.module = FakeProcess(None, None)
+        app.module.events = [("text", "SSID source - Scan (S) or Manual (M): "), ("input", False)]
+        app._poll_module()
+        self.assertEqual((app.screen, [choice.key for choice in app.choices]), ("choices", ["s", "m"]))
+        app._handle_key("DOWN")
+        app._handle_key("OK")
+        self.assertEqual(app.module.sent, ["m"])
+
+        app.module.events = [("text", "Scan duration in seconds (Enter for 15): "), ("input", False)]
+        app._poll_module()
+        self.assertEqual(app.screen, "choices")
+        app._handle_key("DOWN")
+        app._handle_key("OK")
+        self.assertEqual(app.module.sent, ["m", "15"])
 
     def test_scroll_stops_at_available_output(self):
         app = SwissKnifOS(hardware=None, renderer=FakeRenderer())

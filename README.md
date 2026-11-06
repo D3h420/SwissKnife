@@ -37,7 +37,7 @@ sudo chmod +x swiss_knife.py
 sudo python3 swiss_knife.py
 ```
 
-For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [SwissKnifOS_RPi](SwissKnifOS_RPi/README.md) for the screen, buttons, installation, and startup instructions.
+For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [SwissKnifOS_RPi](SwissKnifOS_RPi/README.md) for the screen, buttons, installation, startup instructions, GitHub QR, and Pi Commands network controls.
 
 ## Requirements ✅
 

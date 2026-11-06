@@ -904,6 +904,12 @@ def display_scan_live_update(
     remaining: int,
     interface: str,
 ) -> None:
+    if os.environ.get("SWISSKNIFOS_LCD"):
+        sys.stdout.write("\f" + f"Scanning on {interface}\n{remaining}s remaining\n")
+        for line in format_scan_results_lines(aps, vendors):
+            sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        return
     header = style(f"Scaner on {interface}", STYLE_BOLD)
     progress = (
         f"{style('Scanning', STYLE_BOLD)}... "
@@ -971,6 +977,18 @@ def display_sniffer_live(
     status: str,
     control_hint: Optional[str] = None,
 ) -> None:
+    if os.environ.get("SWISSKNIFOS_LCD"):
+        sys.stdout.write(
+            "\f"
+            f"Sniffer on {interface}\n"
+            f"Packets: {packet_count}\n"
+            f"Probes: {probe_total}\n"
+            f"Unique SSIDs: {probe_unique}\n"
+            f"Status: {status.upper()}\n"
+            "OK: stop sniffer\n"
+        )
+        sys.stdout.flush()
+        return
     if control_hint is None:
         control_hint = style("Press Enter to stop.", COLOR_SUCCESS, STYLE_BOLD)
     lines = [
@@ -1198,7 +1216,7 @@ def recon_menu(vendors: Dict[str, str]) -> None:
 
                 def wait_for_stop() -> None:
                     try:
-                        input()
+                        input("Press Enter to stop sniffer: ")
                     except EOFError:
                         pass
                     stop_event.set()

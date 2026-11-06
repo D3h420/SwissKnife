@@ -53,6 +53,7 @@ class ModuleProcess:
             SWISSKNIFE_CONTROL_FD=str(write_fd),
             PYTHONUNBUFFERED="1",
             PYTHONIOENCODING="utf-8:replace",
+            SWISSKNIFOS_LCD="1",
             TERM="dumb",
             NO_COLOR="1",
             CLICOLOR="0",
