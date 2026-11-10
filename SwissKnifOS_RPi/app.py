@@ -6,9 +6,15 @@ from __future__ import annotations
 import argparse
 import re
 import signal
+import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from core.features import features_for
 
 if __package__:
     from .bridge import ModuleProcess
@@ -18,6 +24,18 @@ else:
     from logic import Choice, Keyboard, TerminalBuffer, input_mode
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def git_revision() -> str | None:
+    """Return the checked out revision when the app runs from a Git clone."""
+    try:
+        result = subprocess.run(
+            ["git", "-c", f"safe.directory={ROOT}", "-C", str(ROOT), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=2, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 @dataclass(frozen=True)
@@ -30,25 +48,17 @@ class MenuItem:
 
 MENUS: dict[str, tuple[MenuItem, ...]] = {
     "SwissKnifOS": (
-        MenuItem("Recon", "module", "modules/recon.py"),
+        *(MenuItem(feature.label, "module", feature.script, feature.args) for feature in features_for("Recon")),
         MenuItem("Attacks", "Attacks"),
         MenuItem("Wardrive", "Wardrive"),
         MenuItem("System", "System"),
     ),
     "Attacks": (
-        MenuItem("Deauth", "module", "modules/deauth.py"),
-        MenuItem("Portal", "module", "modules/portal.py"),
-        MenuItem("Evil Twin", "module", "modules/twins.py"),
-        MenuItem("Handshaker", "module", "modules/handshaker.py"),
-        MenuItem("WiFi Poet", "module", "modules/wifi_poet.py"),
-        MenuItem("Dragon Drain", "module", "modules/dragon_drain.py"),
-        MenuItem("ARP scan", "module", "modules/arp_scanner.py"),
-        MenuItem("IP.CAM finder", "module", "modules/ipcam_finder.py"),
+        *(MenuItem(feature.label, "module", feature.script, feature.args) for feature in features_for("Attacks")),
         MenuItem("Back", "back"),
     ),
     "Wardrive": (
-        MenuItem("Start Wardrive", "module", "modules/wardrive.py", ("--start",)),
-        MenuItem("GPS setup", "module", "modules/wardrive.py", ("--gps-setup",)),
+        *(MenuItem(feature.label, "module", feature.script, feature.args) for feature in features_for("Wardrive")),
         MenuItem("Back", "back"),
     ),
     "System": (
@@ -349,9 +359,21 @@ class SwissKnifOS:
         return self.renderer.output(self.module_name, self.output, self.scroll, hint, state)
 
     def run(self) -> None:
+        revision = git_revision()
+        next_revision_check = time.monotonic() + 3
         try:
             while self.running:
                 self._poll_module()
+                now = time.monotonic()
+                if revision and now >= next_revision_check:
+                    next_revision_check = now + 3
+                    updated = git_revision()
+                    if updated and updated != revision and (
+                        self.module is None or self.module.returncode is not None
+                    ):
+                        # systemd Restart=always starts the updated application.
+                        self.running = False
+                        break
                 for key in self.hardware.poll():
                     self._handle_key(key)
                 if self.dirty:

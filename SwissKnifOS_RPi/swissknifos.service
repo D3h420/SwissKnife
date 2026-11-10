@@ -6,9 +6,10 @@ Type=simple
 User=root
 WorkingDirectory=/opt/SwissKnife
 ExecStart=/usr/bin/python3 /opt/SwissKnife/SwissKnifOS_RPi/app.py
-Restart=on-failure
+Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
+Environment=SWISSKNIFE_DATA_DIR=/var/lib/swissknife
 
 [Install]
 WantedBy=multi-user.target

@@ -12,6 +12,7 @@ import shutil
 import platform
 import importlib.util
 from typing import Dict, List, Optional, Tuple
+from core.features import features_for
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -50,37 +51,18 @@ MAIN_MENU: Dict[str, Dict[str, str]] = {
     "0": {"name": "Exit", "action": "exit"},
 }
 
-ATTACKS_MENU: Dict[str, Dict[str, str]] = {
-    "basic": {"name": "-BASIC-", "separator": True},
-    "1": {"name": "Deauth", "file": os.path.join("modules", "deauth.py")},
-    "2": {"name": "Portal", "file": os.path.join("modules", "portal.py")},
-    "3": {"name": "Evil Twin", "file": os.path.join("modules", "twins.py")},
-    "4": {"name": "Handshaker", "file": os.path.join("modules", "handshaker.py")},
-    "5": {"name": "WiFi Poet", "file": os.path.join("modules", "wifi_poet.py")},
-    "6": {"name": "Dragon Drain", "file": os.path.join("modules", "dragon_drain.py")},
-    "spacer_after_basic": {"name": "", "separator": True},
-    "inside": {"name": "-INSIDE-", "separator": True},
-    "7": {"name": "ARP scan", "file": os.path.join("modules", "arp_scanner.py")},
-    "8": {"name": "IP.CAM finder", "file": os.path.join("modules", "ipcam_finder.py")},
-    "spacer": {"name": "", "separator": True},
-    "0": {"name": "Back", "file": ""},
-}
+def workflow_menu(category: str) -> Dict[str, Dict[str, str]]:
+    menu = {
+        str(index): {"name": feature.label, "file": feature.script, "args": list(feature.args)}
+        for index, feature in enumerate(features_for(category), 1)
+    }
+    menu["0"] = {"name": "Back", "file": ""}
+    return menu
 
-WARDRIVE_MENU: Dict[str, Dict[str, str]] = {
-    "1": {
-        "name": "Start Wardrive",
-        "file": os.path.join("modules", "wardrive.py"),
-        "args": ["--start"],
-    },
-    "2": {
-        "name": "GPS setup",
-        "file": os.path.join("modules", "wardrive.py"),
-        "args": ["--gps-setup"],
-    },
-    "0": {"name": "Back", "file": ""},
-}
 
-RECON_SCRIPT = os.path.join("modules", "recon.py")
+ATTACKS_MENU = workflow_menu("Attacks")
+WARDRIVE_MENU = workflow_menu("Wardrive")
+RECON_SCRIPT = features_for("Recon")[0].script
 RUNTIME_REQUIREMENTS = "requirements.txt"
 RUNTIME_REQUIRED_PY_MODULES: List[str] = [
     "scapy",
@@ -483,7 +465,7 @@ def run_child(script_file: str, args: Optional[List[str]] = None) -> None:
 def attacks_menu() -> None:
     while True:
         print_header("Attacks:", ATTACKS_MENU)
-        choice = input(style("Your choice (0-8): ", STYLE_BOLD)).strip()
+        choice = input(style(f"Your choice (0-{len(ATTACKS_MENU)-1}): ", STYLE_BOLD)).strip()
 
         if choice not in ATTACKS_MENU or ATTACKS_MENU[choice].get("separator"):
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
@@ -503,10 +485,23 @@ def attacks_menu() -> None:
             run_child(ATTACKS_MENU[choice]["file"])
 
 
+def recon_menu() -> None:
+    menu = workflow_menu("Recon")
+    while True:
+        print_header("Recon:", menu)
+        choice = input(style(f"Your choice (0-{len(menu)-1}): ", STYLE_BOLD)).strip()
+        if choice == "0":
+            return
+        if choice not in menu:
+            print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
+            continue
+        run_child(menu[choice]["file"], menu[choice]["args"])
+
+
 def wardrive_menu() -> None:
     while True:
         print_header("Wardrive:", WARDRIVE_MENU)
-        choice = input(style("Your choice (0-2): ", STYLE_BOLD)).strip()
+        choice = input(style(f"Your choice (0-{len(WARDRIVE_MENU)-1}): ", STYLE_BOLD)).strip()
 
         if choice not in WARDRIVE_MENU:
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
@@ -549,7 +544,10 @@ def main() -> None:
             break
 
         if choice == "1":
-            run_child(RECON_SCRIPT)
+            if len(features_for("Recon")) == 1:
+                run_child(RECON_SCRIPT)
+            else:
+                recon_menu()
             continue
 
         if choice == "2":

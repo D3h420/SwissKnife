@@ -62,7 +62,7 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `modules/` - all attack/workflow modules
 - `core/wifi_iface.py` - shared Wi-Fi interface helpers
 - `html/` - portal templates
-- `log/` - captured submissions, handshakes, wardrive logs
+- `log/` - local CLI output by default; the installed Pi uses `/var/lib/swissknife/log/`
 - `SwissKnifOS_RPi/` - LCD and button interface for Raspberry Pi Zero 2 W
 
 ## Notes 📝

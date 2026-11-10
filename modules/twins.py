@@ -59,7 +59,8 @@ def style(text: str, *styles: str) -> str:
 
 MODULE_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.dirname(MODULE_DIR)
-LOG_DIR = os.path.join(PROJECT_ROOT, "log")
+from core.paths import LOG_DIR as _LOG_DIR
+LOG_DIR = str(_LOG_DIR)
 HTML_DIR = os.path.join(PROJECT_ROOT, "html")
 AP_CHANNEL = "6"
 AP_IP = "192.168.100.1"

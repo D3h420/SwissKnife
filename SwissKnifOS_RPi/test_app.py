@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import patch
 
+from core.features import features_for
 from SwissKnifOS_RPi.app import MENUS, SwissKnifOS
 
 
@@ -38,8 +39,41 @@ class FakeRenderer:
     def max_scroll(self, _buffer):
         return 2
 
+    def boot(self):
+        return object()
+
+
+class FakeHardware:
+    def __init__(self):
+        self.closed = False
+
+    def poll(self):
+        return []
+
+    def show(self, _frame):
+        pass
+
+    def close(self):
+        self.closed = True
+
 
 class AppTests(unittest.TestCase):
+    def test_git_update_restarts_idle_app(self):
+        hardware = FakeHardware()
+        app = SwissKnifOS(hardware, renderer=FakeRenderer())
+        with patch("SwissKnifOS_RPi.app.git_revision", side_effect=["old", "new"]), \
+             patch("SwissKnifOS_RPi.app.time.monotonic", side_effect=[0, 4]):
+            app.run()
+        self.assertFalse(app.running)
+        self.assertTrue(hardware.closed)
+
+    def test_shared_workflow_catalogue_matches_lcd_menu(self):
+        for category in ("Recon", "Attacks", "Wardrive"):
+            menu_name = "SwissKnifOS" if category == "Recon" else category
+            actual = [(item.label, item.script, item.args) for item in MENUS[menu_name] if item.script.startswith("modules/")]
+            expected = [(feature.label, feature.script, feature.args) for feature in features_for(category)]
+            self.assertEqual(actual, expected)
+
     def test_system_about_and_pi_commands(self):
         self.assertEqual([item.label for item in MENUS["System"]], ["About", "Pi Commands", "Back"])
         app = SwissKnifOS(hardware=None, renderer=FakeRenderer())

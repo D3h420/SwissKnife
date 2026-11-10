@@ -19,16 +19,23 @@ The Seengreat guide labels BCM 19 as a second **DOWN**, but the manufacturer's [
 
 ## Install on Raspberry Pi OS
 
-Use Raspberry Pi OS Bookworm or newer on the Pi Zero 2 W. Enable SPI with `sudo raspi-config` (**Interface Options → SPI → Enable**), then reboot. Confirm that `/dev/spidev0.0` exists. Seengreat recommends `lgpio` for Bookworm, Trixie, and newer releases.
+The installer targets **Raspberry Pi Zero 2 W** with the Seengreat 1.44-inch ST7735S LCD HAT on a Debian-based Raspberry Pi OS. Bookworm and newer are the intended releases. The script checks the Pi model and enables SPI using `raspi-config`; it cannot identify the HAT electronically, so check the board and seating yourself. A reboot is required if SPI was disabled. Confirm `/dev/spidev0.0` after reboot.
 
-From the repository root, install the display and Python dependencies:
+Clone the repository on the Pi and run the installer from the clone:
 
 ```bash
-sudo apt update
-sudo apt install -y python3-pil python3-spidev python3-lgpio python3-scapy fonts-dejavu-core usbutils network-manager
+git clone https://github.com/D3h420/SwissKnife.git
+cd SwissKnife
+sudo bash SwissKnifOS_RPi/install.sh
 ```
 
-SwissKnife modules also need the system tools listed in the [main README](../README.md#requirements-). Install the tools used by your workflows and connect a supported external Wi-Fi adapter. Some modules have additional setup requirements, such as a GPS receiver for wardriving or a module-specific build step for Dragon Drain. The Pi's built-in Wi-Fi can serve as a management connection, while compatible external adapters handle workflows that need monitor mode.
+The installer creates a **Git clone** at `/opt/SwissKnife`, installs required LCD and core workflow packages, and enables `swissknifos.service`. It stores logs, captures, and downloaded Dragon Drain build files under `/var/lib/swissknife` (root-only). The source clone can be removed after installation. If `/opt/SwissKnife` already contains a Git clone, running the installer from a different, updated clone fast-forwards the installed clone from it; running from `/opt/SwissKnife` repairs the dependencies and service. Both clones must be on the same branch and the installed clone must have no local changes. An existing non-Git directory at that path is left untouched and causes an error.
+
+Only committed content is cloned into `/opt/SwissKnife`; commit local edits before first installation. The workflow catalogue lives in `core/features.py`. Adding a workflow there makes its menu entry appear in both terminal and LCD interfaces after an update. Changes to the workflow's prompts or output should still be checked on the 128 × 128 screen.
+
+It does not modify network profiles, DHCP services, or adapter roles. NetworkManager is required for the Pi Commands Wi-Fi actions; if it is absent, install it explicitly with `sudo bash SwissKnifOS_RPi/install.sh --install-network-manager`. This may change how the Pi manages network connections, so use local access when changing network management. Optional `bully` and Dragon Drain build dependencies can be installed with `--with-optional-tools`. Dragon Drain still performs its own source build when selected. Wardrive GPS tagging needs a USB GPS receiver. Wi-Fi workflows need suitable external adapters with monitor mode support.
+
+The required package set is `python3-pil`, `python3-spidev`, `python3-lgpio`, `python3-scapy`, `fonts-dejavu-core`, `aircrack-ng`, `iproute2`, `ethtool`, `arp-scan`, `hostapd`, `dnsmasq`, `iptables`, `iw`, `iputils-ping`, `usbutils`, `rfkill`, `wireless-tools`, and `mdk4`. The optional set is `bully`, `git`, `autoconf`, `automake`, `libtool`, `shtool`, `libssl-dev`, `pkg-config`, and `build-essential`. The installer uses the Raspberry Pi OS Python packages; it does not use `pip --break-system-packages`.
 
 Start the LCD interface from the repository root:
 
@@ -83,20 +90,18 @@ Common CLI questions are mapped to buttons throughout the modules. **Portal → 
 
 ARP scanner and IP.CAM finder print their interface and scanned-network lists in a plain numbered format when launched from the LCD. This lets the joystick select an interface or network even when Rich terminal formatting is installed on the Pi.
 
-## Start automatically at boot
+## Update and service control
 
-The included `swissknifos.service` starts the interface after boot. Its `WorkingDirectory` and `ExecStart` point to `/opt/SwissKnife`; place your clone there or change both paths before installing it:
+After installation, update the **installed clone**, not the original download:
 
 ```bash
-sudo cp SwissKnifOS_RPi/swissknifos.service /etc/systemd/system/swissknifos.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now swissknifos.service
-sudo systemctl status swissknifos.service
+cd /opt/SwissKnife
+git pull
 ```
 
-For startup errors, inspect `journalctl -u swissknifos.service -b`. Use `sudo systemctl disable --now swissknifos.service` to stop automatic startup.
+The running LCD application checks the Git revision. After a successful pull it exits when no workflow is active; systemd starts the new version automatically. An active workflow is allowed to finish or be stopped from the HAT first. The terminal launcher uses the new files on its next invocation. If an update introduces new system packages or changes the service definition, rerun `sudo bash SwissKnifOS_RPi/install.sh` from `/opt/SwissKnife` once. Do not run `git pull` with `sudo`; the installed clone is owned by the user who ran the installer with `sudo`.
 
-To deploy this update to an already running Pi, copy the **entire** `SwissKnifOS_RPi` directory, including its `assets` directory, plus `modules/recon.py`, `modules/arp_scanner.py`, and `modules/ipcam_finder.py` into the matching locations under `/opt/SwissKnife`. Then run `sudo systemctl restart swissknifos.service`. The restart displays the logo and waits for a button again.
+For startup errors, inspect `journalctl -u swissknifos.service -b`. To stop autostart while keeping code and data, use `sudo bash SwissKnifOS_RPi/install.sh --disable-autostart`. To remove only the service, use `sudo bash SwissKnifOS_RPi/install.sh --uninstall-service`. Neither command removes `/opt/SwissKnife` or `/var/lib/swissknife`.
 
 ## Status and scope
 

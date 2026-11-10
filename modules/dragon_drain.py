@@ -54,7 +54,8 @@ STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(MODULE_DIR)
-TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+from core.paths import TOOLS_DIR as _TOOLS_DIR
+TOOLS_DIR = str(_TOOLS_DIR)
 DRAGON_DIR = os.path.join(TOOLS_DIR, "dragondrain-and-time")
 DRAGON_SRC_DIR = os.path.join(DRAGON_DIR, "src")
 DRAGON_BIN_PATH = os.path.join(DRAGON_SRC_DIR, "dragondrain")

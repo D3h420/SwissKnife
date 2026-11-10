@@ -47,7 +47,8 @@ STYLE_BOLD = "\033[1m" if COLOR_ENABLED else ""
 
 MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(MODULE_DIR)
-LOG_DIR = os.path.join(PROJECT_ROOT, "log")
+from core.paths import LOG_DIR as _LOG_DIR
+LOG_DIR = str(_LOG_DIR)
 
 DEFAULT_SCAN_DURATION = 8
 DEFAULT_GPS_PROBE_SECONDS = 2.0
