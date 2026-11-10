@@ -52,7 +52,7 @@ class HardwareTests(unittest.TestCase):
     def test_lcd_frame_and_button(self):
         try:
             from PIL import Image
-            from SwissKnifOS_RPi import hardware
+            from RPi_LCD_HAT import hardware
         except ImportError:
             self.skipTest("Pillow is not installed in this environment")
 

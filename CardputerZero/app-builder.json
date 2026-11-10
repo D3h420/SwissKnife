@@ -1,0 +1,7 @@
+{
+  "package_name": "swissknife-cardputer",
+  "version": "0.1.0",
+  "app_name": "SwissKnife",
+  "bin_name": "swissknife-cardputer",
+  "description": "LAB5 SwissKnife diagnostics for Cardputer Zero"
+}

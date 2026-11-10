@@ -37,7 +37,9 @@ sudo chmod +x swiss_knife.py
 sudo python3 swiss_knife.py
 ```
 
-For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [SwissKnifOS_RPi](SwissKnifOS_RPi/README.md) for the screen, buttons, installation, startup instructions, GitHub QR, and Pi Commands network controls.
+For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [RPi_LCD_HAT](RPi_LCD_HAT/README.md) for the screen, buttons, installation, startup instructions, GitHub QR, and Pi Commands network controls.
+
+For M5Stack Cardputer Zero with Raspberry Pi OS and APPLaunch, see [CardputerZero](CardputerZero/README.md). It packages the same `core/` and `modules/` code with a 320 × 170 keyboard-driven interface.
 
 ## Requirements ✅
 
@@ -63,7 +65,8 @@ sudo apt install -y aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptabl
 - `core/wifi_iface.py` - shared Wi-Fi interface helpers
 - `html/` - portal templates
 - `log/` - local CLI output by default; the installed Pi uses `/var/lib/swissknife/log/`
-- `SwissKnifOS_RPi/` - LCD and button interface for Raspberry Pi Zero 2 W
+- `RPi_LCD_HAT/` - LCD and button interface for Raspberry Pi Zero 2 W
+- `CardputerZero/` - APPLaunch GUI and package for M5Stack Cardputer Zero
 
 ## Notes 📝
 

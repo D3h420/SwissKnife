@@ -67,13 +67,13 @@ MENUS: dict[str, tuple[MenuItem, ...]] = {
         MenuItem("Back", "back"),
     ),
     "Pi Commands": (
-        MenuItem("USB devices", "module", "SwissKnifOS_RPi/pi_commands.py", ("usb",)),
-        MenuItem("Interfaces", "module", "SwissKnifOS_RPi/pi_commands.py", ("interfaces",)),
-        MenuItem("WiFi scan", "module", "SwissKnifOS_RPi/pi_commands.py", ("wifi-scan",)),
-        MenuItem("WiFi connect", "module", "SwissKnifOS_RPi/pi_commands.py", ("wifi-connect",)),
-        MenuItem("Saved networks", "module", "SwissKnifOS_RPi/pi_commands.py", ("profiles",)),
-        MenuItem("Activate network", "module", "SwissKnifOS_RPi/pi_commands.py", ("activate",)),
-        MenuItem("Disconnect", "module", "SwissKnifOS_RPi/pi_commands.py", ("disconnect",)),
+        MenuItem("USB devices", "module", "RPi_LCD_HAT/pi_commands.py", ("usb",)),
+        MenuItem("Interfaces", "module", "RPi_LCD_HAT/pi_commands.py", ("interfaces",)),
+        MenuItem("WiFi scan", "module", "RPi_LCD_HAT/pi_commands.py", ("wifi-scan",)),
+        MenuItem("WiFi connect", "module", "RPi_LCD_HAT/pi_commands.py", ("wifi-connect",)),
+        MenuItem("Saved networks", "module", "RPi_LCD_HAT/pi_commands.py", ("profiles",)),
+        MenuItem("Activate network", "module", "RPi_LCD_HAT/pi_commands.py", ("activate",)),
+        MenuItem("Disconnect", "module", "RPi_LCD_HAT/pi_commands.py", ("disconnect",)),
         MenuItem("Back", "back"),
     ),
 }
@@ -123,7 +123,7 @@ class SwissKnifOS:
 
     def _launch(self, item: MenuItem) -> None:
         self.module_name = item.label
-        self.pi_command = item.script == "SwissKnifOS_RPi/pi_commands.py"
+        self.pi_command = item.script == "RPi_LCD_HAT/pi_commands.py"
         self.output = TerminalBuffer()
         self.scroll = 0
         self.pending_reads = 0

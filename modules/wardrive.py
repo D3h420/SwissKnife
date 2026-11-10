@@ -236,23 +236,35 @@ def finalize_encryption(privacy: bool, wpa: bool, wpa2: bool, wps: bool) -> str:
     return encryption
 
 
-def scan_networks_once(interface: str, timeout_seconds: float = 10.0) -> List[WiFiNetwork]:
+def scan_networks_once(interface: str, timeout_seconds: float = 10.0, cancel_event: Optional[threading.Event] = None, raise_on_error: bool = False) -> List[WiFiNetwork]:
     try:
-        result = subprocess.run(
-            ["iw", "dev", interface, "scan"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout_seconds,
-            check=False,
-        )
+        if cancel_event is not None:
+            from core.process_control import run_cancellable
+            result = run_cancellable(["iw", "dev", interface, "scan"], timeout=timeout_seconds, cancel_event=cancel_event)
+        else:
+            result = subprocess.run(
+                ["iw", "dev", interface, "scan"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout_seconds,
+                check=False,
+            )
     except subprocess.TimeoutExpired:
+        if raise_on_error:
+            raise RuntimeError("Wi-Fi scan timed out")
         return []
     except FileNotFoundError:
+        if raise_on_error:
+            raise RuntimeError("Required tool 'iw' not found")
         logging.error("Required tool 'iw' not found.")
         return []
 
     if result.returncode != 0:
+        if cancel_event is not None and cancel_event.is_set():
+            return []
+        if raise_on_error:
+            raise RuntimeError(f"Wi-Fi scan failed: {result.stderr.strip() or 'unknown error'}")
         return []
 
     best: Dict[str, WiFiNetwork] = {}
@@ -466,7 +478,7 @@ def configure_serial_device(device: str, baud: int) -> None:
     )
 
 
-def read_nmea_lines(device: str, listen_seconds: float) -> List[str]:
+def read_nmea_lines(device: str, listen_seconds: float, cancel_event: Optional[threading.Event] = None) -> List[str]:
     lines: List[str] = []
     buffer = b""
     try:
@@ -476,7 +488,7 @@ def read_nmea_lines(device: str, listen_seconds: float) -> List[str]:
 
     end_time = time.time() + max(0.5, listen_seconds)
     try:
-        while time.time() < end_time:
+        while time.time() < end_time and not (cancel_event is not None and cancel_event.is_set()):
             try:
                 chunk = os.read(fd, NMEA_READ_CHUNK)
             except BlockingIOError:
@@ -485,7 +497,10 @@ def read_nmea_lines(device: str, listen_seconds: float) -> List[str]:
                 break
 
             if not chunk:
-                time.sleep(0.05)
+                if cancel_event is not None:
+                    cancel_event.wait(0.05)
+                else:
+                    time.sleep(0.05)
                 continue
 
             buffer += chunk
@@ -605,12 +620,14 @@ def extract_fix_from_nmea(lines: List[str]) -> Optional[GPSFix]:
     return best or fallback
 
 
-def probe_gps_device(device: str) -> Tuple[Optional[GPSFix], int]:
+def probe_gps_device(device: str, cancel_event: Optional[threading.Event] = None) -> Tuple[Optional[GPSFix], int]:
     sample_rates = [9600, 4800, 38400, 115200]
     total_lines = 0
     for baud in sample_rates:
+        if cancel_event is not None and cancel_event.is_set():
+            break
         configure_serial_device(device, baud)
-        lines = read_nmea_lines(device, listen_seconds=DEFAULT_GPS_PROBE_SECONDS)
+        lines = read_nmea_lines(device, listen_seconds=DEFAULT_GPS_PROBE_SECONDS, cancel_event=cancel_event)
         total_lines += len(lines)
         if not lines:
             continue
@@ -620,7 +637,7 @@ def probe_gps_device(device: str) -> Tuple[Optional[GPSFix], int]:
     return None, total_lines
 
 
-def detect_gps(verbose: bool = True) -> Tuple[Optional[str], Optional[GPSFix]]:
+def detect_gps(verbose: bool = True, cancel_event: Optional[threading.Event] = None) -> Tuple[Optional[str], Optional[GPSFix]]:
     usb_lines = lsusb_lines()
     gps_usb = usb_gps_matches(usb_lines)
     serial_devices = serial_device_candidates()
@@ -642,10 +659,12 @@ def detect_gps(verbose: bool = True) -> Tuple[Optional[str], Optional[GPSFix]]:
             logging.info(color_text("No /dev/ttyUSB* or /dev/ttyACM* candidates found.", COLOR_WARNING))
 
     for device in serial_devices:
+        if cancel_event is not None and cancel_event.is_set():
+            break
         if verbose:
             logging.info("")
             logging.info("Checking %s for NMEA + FIX...", style(device, COLOR_HIGHLIGHT, STYLE_BOLD))
-        fix, nmea_lines = probe_gps_device(device)
+        fix, nmea_lines = probe_gps_device(device, cancel_event=cancel_event)
         if fix is not None:
             if verbose:
                 logging.info(

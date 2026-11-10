@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from modules.arp_scanner import ArpScanner
 from modules.ipcam_finder import IpCamFinder
-from SwissKnifOS_RPi.logic import TerminalBuffer, input_mode
+from RPi_LCD_HAT.logic import TerminalBuffer, input_mode
 
 
 class InterfaceChoicesTests(unittest.TestCase):

@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+APP=/usr/share/APPLaunch/apps/swissknife-cardputer
+export PYTHONPATH="$APP"
+export SWISSKNIFE_DATA_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/swissknife"
+cd "$APP"
+exec /usr/bin/python3 -m CardputerZero.app.main "$@"

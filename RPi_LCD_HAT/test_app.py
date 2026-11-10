@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from core.features import features_for
-from SwissKnifOS_RPi.app import MENUS, SwissKnifOS
+from RPi_LCD_HAT.app import MENUS, SwissKnifOS
 
 
 class FakeProcess:
@@ -61,8 +61,8 @@ class AppTests(unittest.TestCase):
     def test_git_update_restarts_idle_app(self):
         hardware = FakeHardware()
         app = SwissKnifOS(hardware, renderer=FakeRenderer())
-        with patch("SwissKnifOS_RPi.app.git_revision", side_effect=["old", "new"]), \
-             patch("SwissKnifOS_RPi.app.time.monotonic", side_effect=[0, 4]):
+        with patch("RPi_LCD_HAT.app.git_revision", side_effect=["old", "new"]), \
+             patch("RPi_LCD_HAT.app.time.monotonic", side_effect=[0, 4]):
             app.run()
         self.assertFalse(app.running)
         self.assertTrue(hardware.closed)
@@ -111,7 +111,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(app.menu_name, "Attacks")
         self.assertEqual(app.menu_selection["SwissKnifOS"], 1)
 
-        with patch("SwissKnifOS_RPi.app.ModuleProcess", FakeProcess):
+        with patch("RPi_LCD_HAT.app.ModuleProcess", FakeProcess):
             app._handle_key("OK")
         self.assertEqual(app.module_name, "Deauth")
         self.assertEqual(app.screen, "output")

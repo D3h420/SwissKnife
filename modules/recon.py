@@ -293,8 +293,14 @@ def scan_wireless_networks_iw(
     interface: str,
     duration_seconds: int = 15,
     show_progress: bool = False,
+    cancel_event: Optional[threading.Event] = None,
+    allow_mode_change: bool = True,
+    raise_on_error: bool = False,
 ) -> List[Dict[str, Optional[str]]]:
     def run_scan(timeout_seconds: float) -> subprocess.CompletedProcess:
+        if cancel_event is not None:
+            from core.process_control import run_cancellable
+            return run_cancellable(["iw", "dev", interface, "scan"], timeout=timeout_seconds, cancel_event=cancel_event)
         return subprocess.run(
             ["iw", "dev", interface, "scan"],
             stdout=subprocess.PIPE,
@@ -308,6 +314,8 @@ def scan_wireless_networks_iw(
     networks: Dict[str, Dict[str, Optional[str]]] = {}
     last_remaining = None
     while time.time() < end_time:
+        if cancel_event is not None and cancel_event.is_set():
+            break
         if show_progress and COLOR_ENABLED:
             remaining = max(0, int(end_time - time.time()))
             if remaining != last_remaining:
@@ -325,6 +333,8 @@ def scan_wireless_networks_iw(
             timeout_seconds = max(1.0, min(SCAN_COMMAND_TIMEOUT, remaining_time))
             result = run_scan(timeout_seconds)
         except FileNotFoundError:
+            if raise_on_error:
+                raise RuntimeError("Required tool 'iw' not found")
             logging.error("Required tool 'iw' not found!")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
@@ -333,7 +343,9 @@ def scan_wireless_networks_iw(
             time.sleep(0.2)
             continue
 
-        if result.returncode != 0 and is_monitor_mode(interface):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if allow_mode_change and result.returncode != 0 and is_monitor_mode(interface):
             if set_interface_type(interface, "managed"):
                 remaining_time = end_time - time.time()
                 if remaining_time <= 0:
@@ -351,6 +363,8 @@ def scan_wireless_networks_iw(
                 time.sleep(SCAN_BUSY_RETRY_DELAY)
                 continue
             logging.error("Wireless scan failed: %s", err_text or "unknown error")
+            if raise_on_error:
+                raise RuntimeError(f"Wireless scan failed: {err_text or 'unknown error'}")
             if show_progress and COLOR_ENABLED:
                 sys.stdout.write("\n")
             return []

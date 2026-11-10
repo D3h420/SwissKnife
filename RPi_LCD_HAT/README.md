@@ -1,6 +1,6 @@
-# SwissKnifOS_RPi
+# RPi_LCD_HAT
 
-SwissKnifOS_RPi is the small-screen interface for SwissKnife on a Raspberry Pi Zero 2 W. It shows the project logo until any button is pressed, lets you browse menus with the HAT's joystick, and provides an on-screen keyboard where a workflow needs text input. The existing SwissKnife modules still perform the actual work; their external Wi-Fi adapter and tool requirements remain in force.
+RPi_LCD_HAT is the small-screen interface for SwissKnife on a Raspberry Pi Zero 2 W. It shows the project logo until any button is pressed, lets you browse menus with the HAT's joystick, and provides an on-screen keyboard where a workflow needs text input. The existing SwissKnife modules still perform the actual work; their external Wi-Fi adapter and tool requirements remain in force.
 
 The target HAT is the **Seengreat 1.44-inch LCD Display for Raspberry Pi**, with a 128 × 128 ST7735S panel, SPI interface, six buttons, and a five-direction joystick. It is a different HAT from the Waveshare display used by RaspyJack. Pin numbers below use **BCM GPIO numbering**, as in the [Seengreat hardware guide](https://seengreat.com/wiki/68/1-44inch-lcd-display).
 
@@ -26,26 +26,28 @@ Clone the repository on the Pi and run the installer from the clone:
 ```bash
 git clone https://github.com/D3h420/SwissKnife.git
 cd SwissKnife
-sudo bash SwissKnifOS_RPi/install.sh
+sudo bash RPi_LCD_HAT/install.sh
 ```
 
 The installer creates a **Git clone** at `/opt/SwissKnife`, installs required LCD and core workflow packages, and enables `swissknifos.service`. It stores logs, captures, and downloaded Dragon Drain build files under `/var/lib/swissknife` (root-only). The source clone can be removed after installation. If `/opt/SwissKnife` already contains a Git clone, running the installer from a different, updated clone fast-forwards the installed clone from it; running from `/opt/SwissKnife` repairs the dependencies and service. Both clones must be on the same branch and the installed clone must have no local changes. An existing non-Git directory at that path is left untouched and causes an error.
 
+The old `SwissKnifOS_RPi` path remains as a compatibility symlink to `RPi_LCD_HAT`. It lets an already installed service continue to start after `git pull`; rerunning the installer updates the service to the new path. If Git refuses the rename because of untracked files in the old directory (for example a custom logo), move those files into the corresponding location under `RPi_LCD_HAT` before pulling.
+
 Only committed content is cloned into `/opt/SwissKnife`; commit local edits before first installation. The workflow catalogue lives in `core/features.py`. Adding a workflow there makes its menu entry appear in both terminal and LCD interfaces after an update. Changes to the workflow's prompts or output should still be checked on the 128 × 128 screen.
 
-It does not modify network profiles, DHCP services, or adapter roles. NetworkManager is required for the Pi Commands Wi-Fi actions; if it is absent, install it explicitly with `sudo bash SwissKnifOS_RPi/install.sh --install-network-manager`. This may change how the Pi manages network connections, so use local access when changing network management. Optional `bully` and Dragon Drain build dependencies can be installed with `--with-optional-tools`. Dragon Drain still performs its own source build when selected. Wardrive GPS tagging needs a USB GPS receiver. Wi-Fi workflows need suitable external adapters with monitor mode support.
+It does not modify network profiles, DHCP services, or adapter roles. NetworkManager is required for the Pi Commands Wi-Fi actions; if it is absent, install it explicitly with `sudo bash RPi_LCD_HAT/install.sh --install-network-manager`. This may change how the Pi manages network connections, so use local access when changing network management. Optional `bully` and Dragon Drain build dependencies can be installed with `--with-optional-tools`. Dragon Drain still performs its own source build when selected. Wardrive GPS tagging needs a USB GPS receiver. Wi-Fi workflows need suitable external adapters with monitor mode support.
 
 The required package set is `python3-pil`, `python3-spidev`, `python3-lgpio`, `python3-scapy`, `fonts-dejavu-core`, `aircrack-ng`, `iproute2`, `ethtool`, `arp-scan`, `hostapd`, `dnsmasq`, `iptables`, `iw`, `iputils-ping`, `usbutils`, `rfkill`, `wireless-tools`, and `mdk4`. The optional set is `bully`, `git`, `autoconf`, `automake`, `libtool`, `shtool`, `libssl-dev`, `pkg-config`, and `build-essential`. The installer uses the Raspberry Pi OS Python packages; it does not use `pip --break-system-packages`.
 
 Start the LCD interface from the repository root:
 
 ```bash
-sudo python3 SwissKnifOS_RPi/app.py
+sudo python3 RPi_LCD_HAT/app.py
 ```
 
-To inspect sample screens without SPI or GPIO, run `python3 SwissKnifOS_RPi/app.py --preview /tmp/swissknifos-preview`. This saves sample PNG files and requires Pillow. The module bridge and menu logic can be checked with `python3 -m unittest discover -s SwissKnifOS_RPi -p 'test_*.py'`.
+To inspect sample screens without SPI or GPIO, run `python3 RPi_LCD_HAT/app.py --preview /tmp/swissknifos-preview`. This saves sample PNG files and requires Pillow. The module bridge and menu logic can be checked with `python3 -m unittest discover -s RPi_LCD_HAT -p 'test_*.py'`.
 
-The bundled intro image is `SwissKnifOS_RPi/assets/logo-128.png`, prepared at the LCD's native 128 × 128 resolution. The current asset was reconstructed from the shared logo preview. For an exact match, save the original PNG as `SwissKnifOS_RPi/assets/logo-source.png`; the interface automatically prefers it and scales it to fit the display. Text is drawn in whole pixels with a monospaced font and no grayscale antialiasing, which makes the small display sharper. The intro stays visible until **any** button is pressed; that press only opens the menu and does not activate its first item.
+The bundled intro image is `RPi_LCD_HAT/assets/logo-128.png`, prepared at the LCD's native 128 × 128 resolution. The current asset was reconstructed from the shared logo preview. For an exact match, save the original PNG as `RPi_LCD_HAT/assets/logo-source.png`; the interface automatically prefers it and scales it to fit the display. Text is drawn in whole pixels with a monospaced font and no grayscale antialiasing, which makes the small display sharper. The intro stays visible until **any** button is pressed; that press only opens the menu and does not activate its first item.
 
 Root access is needed by SwissKnife's networking workflows. If the interface starts but the display stays blank, first check SPI, the HAT seating, and the GPIO map. Hardware behavior still needs validation on the physical Seengreat HAT.
 
@@ -99,9 +101,9 @@ cd /opt/SwissKnife
 git pull
 ```
 
-The running LCD application checks the Git revision. After a successful pull it exits when no workflow is active; systemd starts the new version automatically. An active workflow is allowed to finish or be stopped from the HAT first. The terminal launcher uses the new files on its next invocation. If an update introduces new system packages or changes the service definition, rerun `sudo bash SwissKnifOS_RPi/install.sh` from `/opt/SwissKnife` once. Do not run `git pull` with `sudo`; the installed clone is owned by the user who ran the installer with `sudo`.
+The running LCD application checks the Git revision. After a successful pull it exits when no workflow is active; systemd starts the new version automatically. An active workflow is allowed to finish or be stopped from the HAT first. The terminal launcher uses the new files on its next invocation. If an update introduces new system packages or changes the service definition, rerun `sudo bash RPi_LCD_HAT/install.sh` from `/opt/SwissKnife` once. Do not run `git pull` with `sudo`; the installed clone is owned by the user who ran the installer with `sudo`.
 
-For startup errors, inspect `journalctl -u swissknifos.service -b`. To stop autostart while keeping code and data, use `sudo bash SwissKnifOS_RPi/install.sh --disable-autostart`. To remove only the service, use `sudo bash SwissKnifOS_RPi/install.sh --uninstall-service`. Neither command removes `/opt/SwissKnife` or `/var/lib/swissknife`.
+For startup errors, inspect `journalctl -u swissknifos.service -b`. To stop autostart while keeping code and data, use `sudo bash RPi_LCD_HAT/install.sh --disable-autostart`. To remove only the service, use `sudo bash RPi_LCD_HAT/install.sh --uninstall-service`. Neither command removes `/opt/SwissKnife` or `/var/lib/swissknife`.
 
 ## Status and scope
 

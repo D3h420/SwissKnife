@@ -1,0 +1,38 @@
+name: Cardputer Zero package
+on:
+  push:
+    paths:
+      - 'CardputerZero/**'
+      - 'core/**'
+      - 'modules/**'
+      - 'html/**'
+      - 'swiss_knife.py'
+      - '.github/workflows/cardputer-zero.yml'
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: CardputerZero/AppBuilder
+          path: .build/AppBuilder
+      - name: Install build and test dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-pil dpkg-dev
+      - name: Build with official AppBuilder packager
+        env:
+          APPBUILDER_DIR: ${{ github.workspace }}/.build/AppBuilder
+        run: bash CardputerZero/scripts/build.sh
+      - name: Validate package contents
+        run: |
+          dpkg-deb --contents dist/swissknife-cardputer_*.deb > /tmp/swissknife-package-contents.txt
+          grep -q 'core/engine.py' /tmp/swissknife-package-contents.txt
+          grep -q 'modules/recon.py' /tmp/swissknife-package-contents.txt
+          grep -q 'applications/swissknife-cardputer.desktop' /tmp/swissknife-package-contents.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: swissknife-cardputer-arm64
+          path: dist/swissknife-cardputer_*.deb

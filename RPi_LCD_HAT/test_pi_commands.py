@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from SwissKnifOS_RPi import pi_commands
+from RPi_LCD_HAT import pi_commands
 
 
 class PiCommandsTests(unittest.TestCase):

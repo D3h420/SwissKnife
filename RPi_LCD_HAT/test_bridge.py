@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from SwissKnifOS_RPi.bridge import ModuleProcess
+from RPi_LCD_HAT.bridge import ModuleProcess
 
 
 def collect_until(process: ModuleProcess, predicate, timeout: float = 5.0):

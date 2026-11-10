@@ -2,7 +2,7 @@
 
 import unittest
 
-from SwissKnifOS_RPi.logic import Keyboard, TerminalBuffer, input_mode
+from RPi_LCD_HAT.logic import Keyboard, TerminalBuffer, input_mode
 
 
 class LogicTests(unittest.TestCase):

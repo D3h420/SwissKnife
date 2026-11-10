@@ -10,7 +10,7 @@ SERVICE=swissknifos.service
 
 usage() {
     cat <<'EOF'
-Usage: sudo bash SwissKnifOS_RPi/install.sh [OPTION]
+Usage: sudo bash RPi_LCD_HAT/install.sh [OPTION]
 
 No option                   Install or repair SwissKnifOS
 --install-network-manager   Also install NetworkManager if it is absent
@@ -48,7 +48,7 @@ source /etc/os-release
 [[ -r /proc/device-tree/model ]] || die "This does not appear to be a Raspberry Pi."
 model="$(tr -d '\0' </proc/device-tree/model)"
 [[ $model == *"Raspberry Pi Zero 2 W"* ]] || die "Tested hardware is Raspberry Pi Zero 2 W; detected: $model"
-[[ -f "$SOURCE/SwissKnifOS_RPi/app.py" && -d "$SOURCE/.git" ]] || die "Run this script from a complete Git clone."
+[[ -f "$SOURCE/RPi_LCD_HAT/app.py" && -d "$SOURCE/.git" ]] || die "Run this script from a complete Git clone."
 command -v git >/dev/null || die "Git is required."
 command -v apt-get >/dev/null || die "apt-get is required."
 command -v systemctl >/dev/null || die "systemd is required."
@@ -78,7 +78,7 @@ apt-get install -y "${packages[@]}"
 
 if ! command -v nmcli >/dev/null; then
     echo "NetworkManager is absent. Pi Commands Wi-Fi actions need it."
-    echo "Install explicitly with: sudo bash SwissKnifOS_RPi/install.sh --install-network-manager"
+    echo "Install explicitly with: sudo bash RPi_LCD_HAT/install.sh --install-network-manager"
 fi
 
 if [[ ! -e /dev/spidev0.0 ]]; then
@@ -139,7 +139,7 @@ if [[ -d "$TARGET/log" ]]; then
     chmod 700 "$TARGET/log"
 fi
 
-install -m 0644 "$TARGET/SwissKnifOS_RPi/swissknifos.service" "$UNIT"
+install -m 0644 "$TARGET/RPi_LCD_HAT/swissknifos.service" "$UNIT"
 systemctl daemon-reload
 systemctl enable "$SERVICE"
 if [[ $spi_reboot_required -eq 1 ]]; then

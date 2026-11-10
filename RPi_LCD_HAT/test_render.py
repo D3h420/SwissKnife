@@ -9,19 +9,19 @@ from unittest.mock import patch
 class RenderTests(unittest.TestCase):
     def test_qr_screen_survives_missing_or_broken_image(self):
         try:
-            from SwissKnifOS_RPi.render import Renderer
+            from RPi_LCD_HAT.render import Renderer
         except ImportError:
             self.skipTest("Pillow is not installed")
         with TemporaryDirectory() as directory:
-            with patch("SwissKnifOS_RPi.render.ASSETS", Path(directory)):
+            with patch("RPi_LCD_HAT.render.ASSETS", Path(directory)):
                 self.assertEqual(Renderer().about_qr().size, (128, 128))
                 (Path(directory) / "github-qr.png").write_bytes(b"not a PNG")
                 self.assertEqual(Renderer().about_qr().size, (128, 128))
 
     def test_network_result_is_grouped_into_readable_rows(self):
         try:
-            from SwissKnifOS_RPi.logic import TerminalBuffer
-            from SwissKnifOS_RPi.render import Renderer
+            from RPi_LCD_HAT.logic import TerminalBuffer
+            from RPi_LCD_HAT.render import Renderer
         except ImportError:
             self.skipTest("Pillow is not installed")
         buffer = TerminalBuffer()

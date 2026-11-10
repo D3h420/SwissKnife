@@ -5,7 +5,7 @@ Description=SwissKnifOS LCD interface
 Type=simple
 User=root
 WorkingDirectory=/opt/SwissKnife
-ExecStart=/usr/bin/python3 /opt/SwissKnife/SwissKnifOS_RPi/app.py
+ExecStart=/usr/bin/python3 /opt/SwissKnife/RPi_LCD_HAT/app.py
 Restart=always
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
