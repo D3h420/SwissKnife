@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from pathlib import Path
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.features import features_for
+from modules.sdr import PRESETS, MODULATIONS, SDRSession
 
 if __package__:
     from .bridge import ModuleProcess
@@ -51,6 +53,7 @@ MENUS: dict[str, tuple[MenuItem, ...]] = {
         *(MenuItem(feature.label, "module", feature.script, feature.args) for feature in features_for("Recon")),
         MenuItem("Attacks", "Attacks"),
         MenuItem("Wardrive", "Wardrive"),
+        MenuItem("SDR", "SDR"),
         MenuItem("System", "System"),
     ),
     "Attacks": (
@@ -59,6 +62,23 @@ MENUS: dict[str, tuple[MenuItem, ...]] = {
     ),
     "Wardrive": (
         *(MenuItem(feature.label, "module", feature.script, feature.args) for feature in features_for("Wardrive")),
+        MenuItem("Back", "back"),
+    ),
+    "SDR": (
+        MenuItem("Waterfall", "sdr-mode", args=("spectrum",)),
+        MenuItem("Tune MHz", "sdr-tune"),
+        MenuItem("Listen", "sdr-mode", args=("audio",)),
+        MenuItem("Record IQ 30s", "sdr-mode", args=("record",)),
+        MenuItem("ADS-B", "sdr-mode", args=("adsb",)),
+        MenuItem("Next dongle", "sdr-device"),
+        MenuItem("Settings", "SDR settings"),
+        MenuItem("Back", "back"),
+    ),
+    "SDR settings": (
+        MenuItem("Gain", "sdr-setting", args=("gain",)),
+        MenuItem("PPM", "sdr-setting", args=("ppm",)),
+        MenuItem("Span", "sdr-setting", args=("span",)),
+        MenuItem("IQ rate", "sdr-setting", args=("rate",)),
         MenuItem("Back", "back"),
     ),
     "System": (
@@ -108,6 +128,15 @@ class SwissKnifOS:
         self.last_interrupt = 0.0
         self.stopping_since = 0.0
         self.module_done = False
+        self.sdr: SDRSession | None = None
+        self.sdr_error = ""
+        self.sdr_busy = False
+        self.sdr_pending_stop = False
+        self.sdr_worker: threading.Thread | None = None
+        self.sdr_step_hz = 100_000
+        self.sdr_last_frame = None
+        self.sdr_last_check = 0.0
+        self.sdr_selected_mode = "spectrum"
         self.running = True
         self.dirty = True
 
@@ -141,15 +170,176 @@ class SwissKnifOS:
             self.output.feed(f"Cannot start module: {exc}\n")
             self.module = None
 
+    def _sdr_session(self) -> SDRSession:
+        if self.sdr is None:
+            self.sdr = SDRSession()
+        return self.sdr
+
+    def _refresh_sdr_devices(self) -> None:
+        try:
+            self._sdr_session().refresh_devices()
+        except Exception as exc:
+            self.sdr_error = str(exc)
+        self.dirty = True
+
+    def _sdr_action(self, action: str, **changes) -> None:
+        if self.sdr_busy:
+            if action == "stop":
+                self.sdr_pending_stop = True
+            return
+        self.sdr_busy = True
+        self.sdr_error = ""
+
+        def worker() -> None:
+            try:
+                session = self._sdr_session()
+                if not session.devices and action != "stop":
+                    if not session.refresh_devices():
+                        raise RuntimeError("No RTL-SDR dongle detected")
+                previous = session.mode
+                if action == "retune" and previous in {"record", "adsb"}:
+                    raise RuntimeError("Stop recording or ADS-B before retuning")
+                if changes:
+                    session.update_config(restart=action == "retune", **changes)
+                if action == "spectrum":
+                    session.start_spectrum()
+                elif action == "audio":
+                    session.start_audio()
+                elif action == "record":
+                    session.start_recording(seconds=30)
+                elif action == "adsb":
+                    session.start_adsb()
+                elif action == "stop":
+                    session.stop()
+                elif action == "retune" and previous == "audio":
+                    session.start_audio()
+                if action in {"spectrum", "audio", "record", "adsb"}:
+                    self.sdr_selected_mode = action
+            except Exception as exc:
+                self.sdr_error = str(exc)
+            finally:
+                try:
+                    if self.sdr_pending_stop:
+                        self.sdr_pending_stop = False
+                        self.sdr.stop()
+                finally:
+                    self.sdr_busy = False
+                    self.dirty = True
+
+        self.sdr_worker = threading.Thread(target=worker, daemon=True)
+        self.sdr_worker.start()
+
+    def _sdr_key(self, key: str) -> None:
+        session = self._sdr_session()
+        if key == "K3":
+            self._sdr_action("stop")
+            self.screen = "menu"
+        elif key in {"LEFT", "RIGHT"}:
+            current = min(range(len(PRESETS)), key=lambda index: abs(PRESETS[index][1] - session.config.center_hz))
+            index = (current + (-1 if key == "LEFT" else 1)) % len(PRESETS)
+            _, center, span = PRESETS[index]
+            self._sdr_action("spectrum", center_hz=center, span_hz=span)
+        elif key in {"UP", "DOWN", "L", "R"}:
+            direction = 1 if key in {"UP", "R"} else -1
+            step = self.sdr_step_hz * (10 if key in {"L", "R"} else 1)
+            self._sdr_action("retune", center_hz=session.config.center_hz + direction * step)
+        elif key == "K1":
+            self.sdr_step_hz = {10_000: 100_000, 100_000: 1_000_000, 1_000_000: 10_000}[self.sdr_step_hz]
+        elif key == "K2":
+            index = (MODULATIONS.index(session.config.modulation) + 1) % len(MODULATIONS)
+            self._sdr_action("retune", modulation=MODULATIONS[index])
+        elif key in {"OK", "K4"}:
+            self._sdr_action("stop" if session.mode not in {"idle", "error"} else self.sdr_selected_mode)
+        self.dirty = True
+
+    def _sdr_tune_key(self, key: str) -> None:
+        if key == "K1":
+            self.screen = "menu"
+        elif key == "K2":
+            self.keyboard.value = self.keyboard.value[:-1]
+        elif key in {"UP", "DOWN", "LEFT", "RIGHT"}:
+            self.keyboard.move(key)
+        elif key in {"OK", "K4"}:
+            action = "submit" if key == "K4" else self.keyboard.activate()
+            if action == "submit":
+                try:
+                    frequency = round(float(self.keyboard.value) * 1_000_000)
+                    from dataclasses import replace
+                    replace(self._sdr_session().config, center_hz=frequency).validate()
+                except ValueError as exc:
+                    self.sdr_error = str(exc)
+                    self.sdr_last_frame = self._sdr_session().snapshot()
+                    self.screen = "sdr"
+                else:
+                    self.screen = "sdr"
+                    self._sdr_action("spectrum", center_hz=frequency)
+        self.dirty = True
+
     def _menu_action(self, item: MenuItem) -> None:
         if item.target == "module":
             self._launch(item)
+        elif item.target == "sdr-mode":
+            self._sdr_action(item.args[0])
+            self.screen = "sdr"
+            self.dirty = True
+        elif item.target == "sdr-tune":
+            if self.sdr_busy:
+                self.sdr_error = "SDR is stopping; try again"
+                self.screen = "sdr"
+                self.dirty = True
+                return
+            self.keyboard = Keyboard()
+            self.keyboard.value = f"{self._sdr_session().config.center_hz / 1e6:.3f}"
+            self.screen = "sdr_tune"
+            self.dirty = True
+        elif item.target == "sdr-device":
+            if self.sdr_busy:
+                self.sdr_error = "SDR is stopping; try again"
+                self.screen = "sdr"
+                self.dirty = True
+                return
+            session = self._sdr_session()
+            count = len(session.devices)
+            if count:
+                session.update_config(device=(session.config.device + 1) % count)
+            else:
+                self.sdr_error = "No dongle detected"
+            self.dirty = True
+        elif item.target == "sdr-setting":
+            if self.sdr_busy:
+                self.sdr_error = "SDR is stopping; try again"
+                self.screen = "sdr"
+                self.dirty = True
+                return
+            session = self._sdr_session()
+            config = session.config
+            try:
+                if item.args[0] == "gain":
+                    gains = (None, 0.0, 10.0, 20.0, 30.0, 40.0)
+                    session.update_config(gain_db=gains[((gains.index(config.gain_db) if config.gain_db in gains else -1) + 1) % len(gains)])
+                elif item.args[0] == "ppm":
+                    values = (0, 1, 2, 5, 10, -1, -2, -5, -10)
+                    session.update_config(ppm=values[((values.index(config.ppm) if config.ppm in values else -1) + 1) % len(values)])
+                elif item.args[0] == "span":
+                    spans = (200_000, 2_000_000, 20_000_000)
+                    session.update_config(span_hz=spans[((spans.index(config.span_hz) if config.span_hz in spans else -1) + 1) % len(spans)])
+                elif item.args[0] == "rate":
+                    rates = (1_024_000, 2_048_000, 2_400_000)
+                    session.update_config(sample_rate=rates[((rates.index(config.sample_rate) if config.sample_rate in rates else -1) + 1) % len(rates)])
+            except (ValueError, RuntimeError) as exc:
+                self.sdr_error = str(exc)
+                self.sdr_last_frame = session.snapshot()
+                self.screen = "sdr"
+            self.dirty = True
         elif item.target == "back":
             self._back_menu()
         elif item.target in MENUS:
             self.menu_stack.append(item.target)
             self.screen = "menu"
             self.dirty = True
+            if item.target == "SDR":
+                self._sdr_session()
+                threading.Thread(target=self._refresh_sdr_devices, daemon=True).start()
         elif item.target == "about":
             self.about_page = 0
             self.screen = "about"
@@ -308,6 +498,12 @@ class SwissKnifOS:
             self.screen = "menu"
             self.dirty = True
             return
+        if self.screen == "sdr":
+            self._sdr_key(key)
+            return
+        if self.screen == "sdr_tune":
+            self._sdr_tune_key(key)
+            return
         if self.screen == "menu":
             name = self.menu_name
             items = MENUS[name]
@@ -339,9 +535,17 @@ class SwissKnifOS:
             return self.renderer.boot()
         if self.screen == "menu":
             items = MENUS[self.menu_name]
-            return self.renderer.menu(self.menu_name, [item.label for item in items], self.menu_selection[self.menu_name])
+            labels = [item.label for item in items]
+            if self.menu_name == "SDR settings" and self.sdr is not None:
+                config = self.sdr.config
+                labels = [f"Gain: {config.gain_db if config.gain_db is not None else 'auto'}", f"PPM: {config.ppm}", f"Span: {config.span_hz / 1e6:g}M", f"IQ rate: {config.sample_rate // 1000}k", "Back"]
+            return self.renderer.menu(self.menu_name, labels, self.menu_selection[self.menu_name])
         if self.screen == "about":
             return self.renderer.about_qr() if self.about_page else self.renderer.about_info()
+        if self.screen == "sdr":
+            return self.renderer.sdr(self.sdr_last_frame, self.sdr_error, self.sdr_step_hz)
+        if self.screen == "sdr_tune":
+            return self.renderer.keyboard("Frequency MHz", self.keyboard)
         if self.screen == "choices":
             return self.renderer.choices(self.module_name, self.prompt, self.choices, self.choice_selection)
         if self.screen == "keyboard":
@@ -365,12 +569,16 @@ class SwissKnifOS:
             while self.running:
                 self._poll_module()
                 now = time.monotonic()
+                if self.screen == "sdr" and self.sdr is not None and now - self.sdr_last_check >= 0.25:
+                    self.sdr_last_check = now
+                    self.sdr_last_frame = self.sdr.snapshot()
+                    self.dirty = True
                 if revision and now >= next_revision_check:
                     next_revision_check = now + 3
                     updated = git_revision()
                     if updated and updated != revision and (
                         self.module is None or self.module.returncode is not None
-                    ):
+                    ) and (self.sdr is None or self.sdr.snapshot().mode in {"idle", "error"}):
                         # systemd Restart=always starts the updated application.
                         self.running = False
                         break
@@ -383,6 +591,12 @@ class SwissKnifOS:
         finally:
             if self.module is not None:
                 self.module.terminate()
+            if self.sdr is not None:
+                if self.sdr_busy:
+                    self.sdr_pending_stop = True
+                    if self.sdr_worker:
+                        self.sdr_worker.join(timeout=5)
+                self.sdr.close()
             self.hardware.close()
 
 
@@ -403,6 +617,10 @@ def preview(path: Path) -> None:
     renderer.keyboard("Enter SSID:", keyboard).save(path / "keyboard.png")
     renderer.about_info().save(path / "about.png")
     renderer.about_qr().save(path / "about-qr.png")
+    sdr = SDRSession(demo=True)
+    sdr.start_spectrum()
+    renderer.sdr(sdr.snapshot(), "", 100_000).save(path / "sdr-waterfall.png")
+    sdr.close()
     renderer.choices("Portal", "SSID source:", [Choice("s", "Scan networks"), Choice("m", "Manual SSID")], 0).save(path / "portal-mode.png")
     renderer.choices("Portal", "Scan duration:", [Choice(str(value), f"{value} seconds") for value in (5, 15, 30, 60)], 1).save(path / "scan-duration.png")
     networks = TerminalBuffer()

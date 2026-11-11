@@ -41,6 +41,19 @@ For Raspberry Pi Zero 2 W with the Seengreat 1.44-inch LCD HAT, see [RPi_LCD_HAT
 
 For M5Stack Cardputer Zero with Raspberry Pi OS and APPLaunch, see [CardputerZero](CardputerZero/README.md). It packages the same `core/` and `modules/` code with a 320 × 170 keyboard-driven interface.
 
+The **SDR** main-menu entry uses a USB RTL-SDR receiver for a waterfall, demodulated audio, bounded I/Q recordings in `sub-ghz/`, and ADS-B aircraft data. Terminal, LCD HAT and Cardputer Zero share [modules/sdr.py](modules/sdr.py). The terminal launcher checks SDR dependencies at startup; the LCD installer and Cardputer package install them.
+
+For direct terminal use, select **4 SDR** in `swiss_knife.py`, or call the shared module with explicit settings:
+
+```bash
+python3 modules/sdr.py --mode spectrum --frequency 433.92 --span 2
+python3 modules/sdr.py --mode listen --frequency 100.7 --modulation wbfm
+python3 modules/sdr.py --mode record --frequency 433.92 --seconds 30
+python3 modules/sdr.py --mode adsb
+```
+
+`--device`, `--gain`, `--ppm`, and `--sample-rate` configure the receiver. Recordings are capped at 120 seconds per run; the default is 30 seconds. A single dongle can run only one mode at a time. `--demo` shows labelled simulated data without writing a recording. The target device still needs testing with an RTL-SDR dongle and a configured audio output.
+
 ## Requirements ✅
 
 - Linux

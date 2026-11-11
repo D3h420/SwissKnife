@@ -17,6 +17,16 @@ class RenderTests(unittest.TestCase):
                 )
                 self.assertEqual(frame.size, (320, 170))
 
+    def test_sdr_waterfall_frame(self):
+        from CardputerZero.app.render import Renderer
+        from modules.sdr import SDRSession
+
+        sdr = SDRSession(demo=True)
+        sdr.start_spectrum()
+        frame = Renderer().draw(ViewState(screen="sdr", title="SDR", sdr=sdr.snapshot(), simulated=True))
+        self.assertEqual(frame.size, (320, 170))
+        sdr.close()
+
 
 if __name__ == "__main__":
     unittest.main()

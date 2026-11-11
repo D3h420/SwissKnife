@@ -41,7 +41,7 @@ def run_device(controller) -> int:
         renderer = Renderer()
         last_draw = 0.0
         while running and not controller.quit_requested:
-            editing = controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter")
+            editing = controller.screen == "sdr_tune" or (controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter"))
             for key, char in keyboard.events(editing=editing):
                 controller.handle(key, char)
             changed = controller.tick()
@@ -55,6 +55,7 @@ def run_device(controller) -> int:
             controller.operation.cancel()
             if controller.operation.thread:
                 controller.operation.thread.join(timeout=8)
+        controller.close()
         keyboard.close()
         display.close()
     return 0
@@ -76,7 +77,7 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     def key_event(event) -> None:
         mapping = {"Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT", "Return": "ENTER", "Escape": "ESC", "Home": "HOME", "Prior": "PAGEUP", "Next": "PAGEDOWN", "BackSpace": "BACKSPACE"}
         key = mapping.get(event.keysym)
-        editing = controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter")
+        editing = controller.screen == "sdr_tune" or (controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter"))
         if not key and not editing:
             key = {"f": "UP", "x": "DOWN", "z": "LEFT", "c": "RIGHT"}.get(event.char.lower())
         if key:
@@ -105,6 +106,7 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     root.mainloop()
     if controller.operation and controller.operation.state == "running":
         controller.operation.cancel()
+    controller.close()
     return 0
 
 

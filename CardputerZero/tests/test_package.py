@@ -17,6 +17,8 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(manifest["package_name"], "swissknife-cardputer")
         self.assertIn("APP_TERMINAL=false", metadata)
         self.assertNotIn("User=root", metadata)
+        self.assertIn("rtl-sdr", metadata)
+        self.assertIn("dump1090-mutability", metadata)
         self.assertTrue((CARDPUTER / "packaging/icon.png").is_file())
 
     def test_stage_has_one_copy_of_shared_engine(self):
@@ -27,6 +29,7 @@ class PackageTests(unittest.TestCase):
             installed = stage / "usr/share/APPLaunch/apps/swissknife-cardputer"
             self.assertTrue((installed / "core/engine.py").exists())
             self.assertTrue((installed / "modules/recon.py").exists())
+            self.assertTrue((installed / "modules/sdr.py").exists())
             self.assertFalse((installed / "CardputerZero/modules").exists())
             self.assertTrue((stage / "usr/share/APPLaunch/bin/swissknife-cardputer").exists())
 

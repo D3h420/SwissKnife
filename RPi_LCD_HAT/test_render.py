@@ -7,6 +7,18 @@ from unittest.mock import patch
 
 
 class RenderTests(unittest.TestCase):
+    def test_sdr_waterfall_frame(self):
+        try:
+            from RPi_LCD_HAT.render import Renderer
+        except ImportError:
+            self.skipTest("Pillow is not installed")
+        from modules.sdr import SDRSession
+
+        session = SDRSession(demo=True)
+        session.start_spectrum()
+        self.assertEqual(Renderer().sdr(session.snapshot(), "", 100_000).size, (128, 128))
+        session.close()
+
     def test_qr_screen_survives_missing_or_broken_image(self):
         try:
             from RPi_LCD_HAT.render import Renderer

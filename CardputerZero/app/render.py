@@ -69,6 +69,41 @@ class Renderer:
                 draw.text((25, y + 1), self._clip(draw, row, self.medium, 282), font=self.medium, fill=TEXT if active else DIM)
             if len(state.rows) > 5:
                 draw.text((286, 130), f"{state.selected + 1}/{len(state.rows)}", font=self.small, fill=DIM)
+        elif state.screen == "sdr":
+            sdr = state.sdr
+            if sdr is None:
+                draw.text((9, 48), "Starting RTL-SDR...", font=self.medium, fill=TEXT)
+            else:
+                config = sdr.config
+                draw.text((8, 32), f"{config.center_hz / 1e6:.3f} MHz", font=self.medium, fill=GREEN)
+                gain = "A" if config.gain_db is None else f"{config.gain_db:g}"
+                draw.text((156, 32), f"{sdr.mode.upper()} D{config.device} G{gain} P{config.ppm}", font=self.small, fill=AMBER)
+                if sdr.mode == "spectrum":
+                    from PIL import Image
+                    rows = sdr.waterfall[-73:]
+                    pixels = []
+                    for row in ([()] * (73 - len(rows))) + list(rows):
+                        for value in (row or (-110.0,) * 128):
+                            level = max(0, min(255, int((value + 105) * 4)))
+                            pixels.append((level // 2, level, level // 5))
+                    heatmap = Image.new("RGB", (128, 73))
+                    heatmap.putdata(pixels)
+                    image.paste(heatmap.resize((304, 73), Image.Resampling.NEAREST), (8, 49))
+                    draw.rectangle((7, 48, 312, 123), outline=(48, 90, 58))
+                    low = (config.center_hz - config.span_hz // 2) / 1e6
+                    high = (config.center_hz + config.span_hz // 2) / 1e6
+                    draw.text((8, 126), f"{low:.2f}", font=self.small, fill=DIM)
+                    draw.text((115, 126), f"{config.span_hz / 1e6:g}M / {state.sdr_step_hz // 1000}k", font=self.small, fill=DIM)
+                    draw.text((270, 126), f"{high:.2f}", font=self.small, fill=DIM)
+                elif sdr.mode == "adsb":
+                    draw.text((8, 52), f"Aircraft: {len(sdr.aircraft)}", font=self.medium, fill=AMBER)
+                    for index, aircraft in enumerate(sdr.aircraft[:4]):
+                        draw.text((8, 72 + 15 * index), self._clip(draw, aircraft, self.small, 300), font=self.small, fill=TEXT)
+                else:
+                    draw.text((8, 61), "IQ RECORDING" if sdr.mode == "record" else ("AUDIO / " + config.modulation.upper() if sdr.mode == "audio" else sdr.mode.upper()), font=self.medium, fill=AMBER)
+                    if sdr.recording and sdr.mode == "record":
+                        draw.text((8, 83), self._clip(draw, Path(sdr.recording).name, self.small, 300), font=self.small, fill=DIM)
+                draw.text((8, 135), self._clip(draw, state.sdr_error or sdr.message, self.small, 304), font=self.small, fill=AMBER if state.sdr_error or sdr.mode == "error" else DIM)
         elif state.screen in {"log", "detail"}:
             lines: list[str] = []
             max_chars = 46 if state.screen == "log" else 42

@@ -1,5 +1,11 @@
 # RPi_LCD_HAT
 
+## SDR
+
+Pozycja **SDR** w głównym menu otwiera tryby Waterfall, Listen, Record IQ 30s i ADS-B, ręczne wpisanie częstotliwości w MHz oraz wybór następnego dongla RTL-SDR. Wszystkie korzystają z [wspólnego modułu](../modules/sdr.py). Instalator dodaje `rtl-sdr`, `alsa-utils` i `dump1090-mutability`; ponowne uruchomienie instalatora doinstaluje brakujące pakiety. Nagrania `.cu8` z metadanymi `.json` trafiają do `/var/lib/swissknife/sub-ghz/` przy instalacji systemowej.
+
+Na ekranie SDR: góra/dół przestraja częstotliwość, lewo/prawo zmienia pasmo, K1 zmienia krok, K2 demodulację, K4/OK zatrzymuje lub wznawia tryb, K3 zatrzymuje i wraca do menu. `L/R` przestraja szybciej. Na ekranie **Tune MHz** K4 zatwierdza wpis, K2 usuwa znak, K1 wraca. Podmenu **Settings** ustawia wzmocnienie, PPM, szerokość pasma i częstotliwość próbkowania IQ. Jeden dongiel obsługuje jeden tryb naraz, więc podczas odsłuchu lub nagrywania waterfall nie jest aktualizowany. Odsłuch wymaga działającego domyślnego wyjścia ALSA (np. HDMI lub USB audio). Jeśli dongiel jest zajęty przez inną usługę, trzeba zwolnić go poza SwissKnife. Działanie na rzeczywistym RTL-SDR i wyjściu audio wymaga testu sprzętowego.
+
 RPi_LCD_HAT is the small-screen interface for SwissKnife on a Raspberry Pi Zero 2 W. It shows the project logo until any button is pressed, lets you browse menus with the HAT's joystick, and provides an on-screen keyboard where a workflow needs text input. The existing SwissKnife modules still perform the actual work; their external Wi-Fi adapter and tool requirements remain in force.
 
 The target HAT is the **Seengreat 1.44-inch LCD Display for Raspberry Pi**, with a 128 × 128 ST7735S panel, SPI interface, six buttons, and a five-direction joystick. It is a different HAT from the Waveshare display used by RaspyJack. Pin numbers below use **BCM GPIO numbering**, as in the [Seengreat hardware guide](https://seengreat.com/wiki/68/1-44inch-lcd-display).

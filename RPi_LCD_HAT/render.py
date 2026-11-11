@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+from modules.sdr import SDRSnapshot
 
 if __package__:
     from .logic import Choice, Keyboard, TerminalBuffer
@@ -151,6 +152,40 @@ class Renderer:
             draw.text((30, y + 1), self._fit(draw, items[index], 87, self.body), font=self.body, fill=BG if active else TEXT)
             draw.text((117, y + 2), ">", font=self.small, fill=BG if active else ACCENT)
         self._footer(draw, "UP/DN select  OK open")
+        return image
+
+    def sdr(self, state: SDRSnapshot | None, error: str, step_hz: int) -> Image.Image:
+        image, draw = self._canvas()
+        self._header(draw, "SDR", state.mode.upper() if state else "WAIT")
+        if state is None:
+            draw.text((4, 27), "Starting receiver...", font=self.small, fill=TEXT)
+            self._footer(draw, "K3 back")
+            return image
+        config = state.config
+        draw.text((3, 19), f"{config.center_hz / 1e6:.3f} MHz", font=self.body, fill=ACCENT)
+        draw.text((3, 101), self._fit(draw, error or state.message, 122, self.small), font=self.small, fill=HIGHLIGHT if error or state.mode == "error" else MUTED)
+        if state.mode == "spectrum":
+            rows = state.waterfall[-68:]
+            for row_index, row in enumerate(rows):
+                y = 99 - len(rows) + row_index
+                if y < 31:
+                    continue
+                for x in range(128):
+                    level = row[min(len(row) - 1, int(x * len(row) / 128))]
+                    strength = max(0, min(255, int((level + 105) * 4)))
+                    draw.point((x, y), fill=(strength // 2, min(255, strength), strength // 5))
+            if not rows:
+                draw.text((4, 55), "Waiting for sweep...", font=self.small, fill=MUTED)
+        if state.mode == "adsb":
+            draw.text((3, 34), f"Aircraft: {len(state.aircraft)}", font=self.small, fill=ACCENT)
+            for index, aircraft in enumerate(state.aircraft[:4]):
+                draw.text((3, 48 + index * 12), self._fit(draw, aircraft, 120, self.small), font=self.small, fill=TEXT)
+        elif state.mode in {"audio", "record"}:
+            draw.text((3, 41), "AUDIO" if state.mode == "audio" else "IQ RECORDING", font=self.body, fill=HIGHLIGHT)
+            draw.text((3, 60), f"Mode {config.modulation}  Dev {config.device}", font=self.small, fill=TEXT)
+            if state.recording and state.mode == "record":
+                draw.text((3, 75), self._fit(draw, Path(state.recording).name, 120, self.small), font=self.small, fill=MUTED)
+        self._footer(draw, f"K3< K4 on/off {step_hz // 1000}k")
         return image
 
     def choices(self, title: str, prompt: str, options: list[Choice], selected: int) -> Image.Image:

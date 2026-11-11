@@ -48,6 +48,7 @@ MAIN_MENU: Dict[str, Dict[str, str]] = {
     "1": {"name": "Recon", "action": "recon"},
     "2": {"name": "Attacks", "action": "attacks"},
     "3": {"name": "Wardrive", "action": "wardrive"},
+    "4": {"name": "SDR", "action": "sdr"},
     "0": {"name": "Exit", "action": "exit"},
 }
 
@@ -82,6 +83,12 @@ REQUIRED_TOOLS: List[str] = [
     "dnsmasq",
     "iptables",
     "lsusb",
+    "rtl_test",
+    "rtl_power",
+    "rtl_fm",
+    "rtl_sdr",
+    "aplay",
+    "dump1090-mutability",
 ]
 
 RECOMMENDED_TOOLS: List[str] = [
@@ -106,6 +113,12 @@ PACKAGE_MAPS = {
         "ping": "iputils-ping",
         "lsusb": "usbutils",
         "autoreconf": "autoconf",
+        "rtl_test": "rtl-sdr",
+        "rtl_power": "rtl-sdr",
+        "rtl_fm": "rtl-sdr",
+        "rtl_sdr": "rtl-sdr",
+        "aplay": "alsa-utils",
+        "dump1090-mutability": "dump1090-mutability",
     },
     "apt-get": {
         "aireplay-ng": "aircrack-ng",
@@ -116,6 +129,12 @@ PACKAGE_MAPS = {
         "ping": "iputils-ping",
         "lsusb": "usbutils",
         "autoreconf": "autoconf",
+        "rtl_test": "rtl-sdr",
+        "rtl_power": "rtl-sdr",
+        "rtl_fm": "rtl-sdr",
+        "rtl_sdr": "rtl-sdr",
+        "aplay": "alsa-utils",
+        "dump1090-mutability": "dump1090-mutability",
     },
     "dnf": {
         "aireplay-ng": "aircrack-ng",
@@ -530,7 +549,7 @@ def main() -> None:
 
     while True:
         print_header("Main menu:", MAIN_MENU)
-        choice = input(style("Your choice (0-3): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (0-4): ", STYLE_BOLD)).strip()
 
         if choice not in MAIN_MENU:
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))
@@ -556,6 +575,10 @@ def main() -> None:
 
         if choice == "3":
             wardrive_menu()
+            continue
+
+        if choice == "4":
+            run_child("modules/sdr.py")
             continue
 
 

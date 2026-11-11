@@ -65,6 +65,7 @@ packages=(
     python3-pil python3-spidev python3-lgpio python3-scapy fonts-dejavu-core
     aircrack-ng iproute2 ethtool arp-scan hostapd dnsmasq iptables
     iw iputils-ping usbutils rfkill wireless-tools mdk4
+    rtl-sdr alsa-utils dump1090-mutability
 )
 if [[ ${1:-} == --install-network-manager ]]; then
     packages+=(network-manager)
