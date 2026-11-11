@@ -88,7 +88,8 @@ class Renderer:
                             pixels.append((level // 2, level, level // 5))
                     heatmap = Image.new("RGB", (128, 73))
                     heatmap.putdata(pixels)
-                    image.paste(heatmap.resize((304, 73), Image.Resampling.NEAREST), (8, 49))
+                    resampling = getattr(Image, "Resampling", Image)
+                    image.paste(heatmap.resize((304, 73), resampling.NEAREST), (8, 49))
                     draw.rectangle((7, 48, 312, 123), outline=(48, 90, 58))
                     low = (config.center_hz - config.span_hz // 2) / 1e6
                     high = (config.center_hz + config.span_hz // 2) / 1e6

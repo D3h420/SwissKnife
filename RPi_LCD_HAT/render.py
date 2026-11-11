@@ -47,7 +47,8 @@ class Renderer:
         if logo.exists():
             with Image.open(logo) as original:
                 resized = original.convert("RGB")
-                resized.thumbnail((SIZE, SIZE), Image.Resampling.LANCZOS)
+                resampling = getattr(Image, "Resampling", Image)
+                resized.thumbnail((SIZE, SIZE), resampling.LANCZOS)
                 self.logo = Image.new("RGB", (SIZE, SIZE), "black")
                 self.logo.paste(resized, ((SIZE - resized.width) // 2, (SIZE - resized.height) // 2))
         self.qr = None
