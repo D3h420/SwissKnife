@@ -6,7 +6,7 @@
 
 To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik. Dotychczasowe `swiss_knife.py` i `RPi_LCD_HAT/` nadal działają swoimi dotychczasowymi ścieżkami.
 
-Kod działa w trybie symulacji na komputerze. **Nie został sprawdzony na fizycznym Cardputer Zero**. Status „wymaga testów na urządzeniu” oznacza zaimplementowaną ścieżkę kodu, a nie potwierdzoną zgodność sprzętową.
+Kod działa w trybie symulacji na komputerze. Instalacja pakietu oraz skan Recon na `wlan0` zostały sprawdzone na fizycznym Cardputer Zero z Debianem 13. Pozostałe moduły, adaptery i obsługa GUI nadal wymagają testów sprzętowych.
 
 ## Podstawa platformowa
 
@@ -35,7 +35,7 @@ Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualn
 
 | Moduł | Wersja Cardputer Zero | Wymagania |
 | --- | --- | --- |
-| Recon | GUI skanu `iw`, wyniki strukturalne z istniejącego modułu; test sprzętowy wymagany | Wi-Fi w trybie managed, `iw` |
+| Recon | GUI skanu `iw`, wyniki strukturalne z istniejącego modułu; skan `wlan0` sprawdzony na Cardputer Zero | Wi-Fi w trybie managed, `iw` |
 | Wardrive | GUI GPS + cykliczny skan + Wigle log; test sprzętowy wymagany | Wi-Fi, GPS z NMEA, `iw`, `stty` |
 | ARP Scan | GUI bezpiecznego przeglądu połączonej sieci: ping + sąsiedzi ARP; test sprzętowy wymagany | Połączony IPv4, `ip`, `ping` |
 | IP.CAM Finder | GUI kandydatów kamer z podłączonej sieci i istniejących heurystyk OUI; test sprzętowy wymagany | Połączony IPv4, `ip`, `ping` |
@@ -46,7 +46,7 @@ Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualn
 | WiFi Poet | Ekran informacyjny, uruchamianie wyłączone | Monitor, `mdk4` |
 | Dragon Drain | Ekran informacyjny, uruchamianie wyłączone | Monitor, narzędzia budowania i źródła zewnętrzne |
 
-Interfejs nie uruchamia operacji zakłócających sieć, podszywania się pod AP ani zbierania danych logowania. Pełne terminalowe kreatory ARP/IP.CAM potrafią łączyć się z wybraną siecią; GUI **nie wykonuje tej części**. Działa wyłącznie na już połączonym interfejsie i ogranicza przegląd do 128 adresów w podsieciach nie większych niż 4096 adresów. Recon korzysta z aktywnego skanu `iw`, więc nie jest snifferem pasywnym. Nie przełącza trybu karty. Brak uprawnień do skanowania jest wyświetlany jako błąd; GUI nie próbuje uruchomić się jako root.
+Interfejs nie uruchamia operacji zakłócających sieć, podszywania się pod AP ani zbierania danych logowania. Pełne terminalowe kreatory ARP/IP.CAM potrafią łączyć się z wybraną siecią; GUI **nie wykonuje tej części**. Działa wyłącznie na już połączonym interfejsie i ogranicza przegląd do 128 adresów w podsieciach nie większych niż 4096 adresów. Recon korzysta z aktywnego skanu `iw`, więc nie jest snifferem pasywnym. Nie przełącza trybu karty. Pakiet instaluje wymagane narzędzia działających modułów przez `apt`, ustawia ścieżkę do `/usr/sbin` i dodaje wąsko uprawniony pomocnik wyłącznie do skanu `iw`. GUI pozostaje zwykłym procesem użytkownika. Narzędzia modułów informacyjnych nie są instalowane, ponieważ tych modułów GUI nie uruchamia.
 
 ## Menu i ekran startowy
 
@@ -84,7 +84,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.1.2-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.1.3-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -93,12 +93,12 @@ Wynik: `dist/swissknife-cardputer_0.1.2-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.1.2-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.1.3-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.
 
-Pakiet umieszcza program w `/usr/share/APPLaunch/apps/swissknife-cardputer/`, uruchamialny wrapper w `/usr/share/APPLaunch/bin/` i wpis `.desktop` w `/usr/share/APPLaunch/applications/`. APPLaunch powinien wykryć SwissKnife jako osobną aplikację. `postinst` dodaje użytkownika uruchamiającego `sudo` (lub `pi`, jeśli nie da się go ustalić) do istniejących grup `video`, `input`, `dialout` i `plugdev`. Jeśli APPLaunch działa na innym koncie, dodaj to konto do tych grup ręcznie. Zaloguj się ponownie lub uruchom urządzenie ponownie, aby członkostwo zadziałało. Pakiet nie zmienia profili sieciowych ani ustawień DHCP.
+Pakiet umieszcza program w `/usr/share/APPLaunch/apps/swissknife-cardputer/`, uruchamialny wrapper w `/usr/share/APPLaunch/bin/` i wpis `.desktop` w `/usr/share/APPLaunch/applications/`. APPLaunch powinien wykryć SwissKnife jako osobną aplikację. `postinst` dodaje użytkownika uruchamiającego `sudo` (lub konto o UID 1000) do istniejących grup `video`, `input`, `dialout` i `plugdev`. Jeśli APPLaunch działa na innym koncie, dodaj to konto do tych grup ręcznie. Zaloguj się ponownie lub uruchom urządzenie ponownie, aby członkostwo zadziałało. Pakiet nadaje temu użytkownikowi prawo uruchomienia wyłącznie walidowanego pomocnika `/usr/libexec/swissknife-cardputer/scan-wifi`; nie daje ogólnego dostępu `sudo`. Reguła jest usuwana przy odinstalowaniu. Pakiet nie zmienia profili sieciowych ani ustawień DHCP.
 
 Wyniki są zapisywane pod `~/.local/state/swissknife/log/` użytkownika uruchamiającego APPLaunch. Po instalacji nowszego `.deb` pozostają w katalogu domowym.
 
@@ -126,7 +126,7 @@ python3 -m unittest discover -s RPi_LCD_HAT -p 'test_*.py'
 - Czarny ekran: sprawdź `/dev/fb0`, format 320 × 170 × 16 bpp i uprawnienia grupy `video`.
 - Brak reakcji klawiszy: sprawdź `/dev/input/`, grupę `input` i ścieżkę w `APPLAUNCH_KEYBOARD_DEVICE`.
 - Brak GPS: sprawdź port `/dev/ttyUSB*`/`/dev/ttyACM*`, grupę `dialout` i rzeczywisty NMEA fix.
-- Skan Wi-Fi odmawia dostępu: zwykły użytkownik może nie mieć uprawnień `nl80211`; aplikacja nie używa szerokiego `sudo` ani usługi root. W takim środowisku skan pozostaje niedostępny do czasu zaprojektowania wąsko uprawnionego pomocnika.
+- Skan Wi-Fi odmawia dostępu: sprawdź, czy instalacja pakietu utworzyła `/etc/sudoers.d/swissknife-cardputer`, czy użytkownik uruchamiający APPLaunch jest w tej regule oraz czy `iw dev <interfejs> info` rozpoznaje adapter. Pomocnik nie zmienia trybu karty ani profili sieciowych.
 - Anulowanie przerywa bieżące wywołanie `iw`, odczyt NMEA i kolejne zadania skanowania LAN. Działające już procesy `ping` mają krótki limit czasu; działanie na Cardputer Zero wymaga testu urządzenia.
 - Pojawienie się ikony w APPLaunch i wydajność framebuffer/klawiatury nie zostały jeszcze potwierdzone na urządzeniu.
 

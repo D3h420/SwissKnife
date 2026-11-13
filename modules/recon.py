@@ -297,12 +297,15 @@ def scan_wireless_networks_iw(
     allow_mode_change: bool = True,
     raise_on_error: bool = False,
 ) -> List[Dict[str, Optional[str]]]:
+    from core.wifi_scan import scan_command
+
     def run_scan(timeout_seconds: float) -> subprocess.CompletedProcess:
+        command = scan_command(interface)
         if cancel_event is not None:
             from core.process_control import run_cancellable
-            return run_cancellable(["iw", "dev", interface, "scan"], timeout=timeout_seconds, cancel_event=cancel_event)
+            return run_cancellable(command, timeout=timeout_seconds, cancel_event=cancel_event)
         return subprocess.run(
-            ["iw", "dev", interface, "scan"],
+            command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

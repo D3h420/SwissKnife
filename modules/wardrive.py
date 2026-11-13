@@ -237,13 +237,15 @@ def finalize_encryption(privacy: bool, wpa: bool, wpa2: bool, wps: bool) -> str:
 
 
 def scan_networks_once(interface: str, timeout_seconds: float = 10.0, cancel_event: Optional[threading.Event] = None, raise_on_error: bool = False) -> List[WiFiNetwork]:
+    from core.wifi_scan import scan_command
+    command = scan_command(interface)
     try:
         if cancel_event is not None:
             from core.process_control import run_cancellable
-            result = run_cancellable(["iw", "dev", interface, "scan"], timeout=timeout_seconds, cancel_event=cancel_event)
+            result = run_cancellable(command, timeout=timeout_seconds, cancel_event=cancel_event)
         else:
             result = subprocess.run(
-                ["iw", "dev", interface, "scan"],
+                command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

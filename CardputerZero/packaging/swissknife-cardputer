@@ -3,5 +3,7 @@ set -eu
 APP=/usr/share/APPLaunch/apps/swissknife-cardputer
 export PYTHONPATH="$APP"
 export SWISSKNIFE_DATA_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/swissknife"
+export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
+export SWISSKNIFE_WIFI_SCAN_HELPER=/usr/libexec/swissknife-cardputer/scan-wifi
 cd "$APP"
 exec /usr/bin/python3 -m CardputerZero.app.main "$@"

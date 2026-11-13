@@ -1,0 +1,28 @@
+#!/usr/bin/python3
+"""Root-only, single-purpose Wi-Fi scan entry point for the Cardputer GUI."""
+
+import os
+import re
+import subprocess
+import sys
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", sys.argv[1]):
+        print("Expected one Wi-Fi interface name", file=sys.stderr)
+        return 2
+    interface = sys.argv[1]
+    iw = "/usr/sbin/iw"
+    try:
+        info = subprocess.run([iw, "dev", interface, "info"], timeout=3, capture_output=True, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        print("Wi-Fi interface check failed", file=sys.stderr)
+        return 1
+    if info.returncode != 0 or b"Interface " not in info.stdout:
+        print("Not an available Wi-Fi interface", file=sys.stderr)
+        return 1
+    os.execv(iw, [iw, "dev", interface, "scan"])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

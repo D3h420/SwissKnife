@@ -1,12 +1,24 @@
 #!/bin/sh
 set -e
 # Framebuffer, keyboard, and USB GPS access remain with the normal login user.
-app_user=${SUDO_USER:-pi}
+app_user=${SUDO_USER:-}
+if [ -z "$app_user" ]; then
+    app_user=$(getent passwd 1000 | cut -d: -f1)
+fi
+app_user=${app_user:-pi}
 if [ "$app_user" != root ] && id -u "$app_user" >/dev/null 2>&1; then
     for group in video input dialout plugdev; do
         if getent group "$group" >/dev/null 2>&1; then
             usermod -aG "$group" "$app_user"
         fi
     done
+    rule=/etc/sudoers.d/swissknife-cardputer
+    printf '%s ALL=(root) NOPASSWD: /usr/libexec/swissknife-cardputer/scan-wifi *\n' "$app_user" > "$rule"
+    chmod 0440 "$rule"
+    if ! visudo -cf "$rule" >/dev/null; then
+        rm -f "$rule"
+        echo "Invalid SwissKnife scan privilege rule" >&2
+        exit 1
+    fi
 fi
 exit 0

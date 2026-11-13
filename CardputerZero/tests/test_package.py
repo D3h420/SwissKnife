@@ -16,6 +16,7 @@ class PackageTests(unittest.TestCase):
         metadata = (CARDPUTER / "packaging/meta.env").read_text()
         self.assertEqual(manifest["package_name"], "swissknife-cardputer")
         self.assertIn("APP_TERMINAL=false", metadata)
+        self.assertIn("iw, iputils-ping, usbutils, sudo", metadata)
         self.assertNotIn("User=root", metadata)
         self.assertTrue((CARDPUTER / "packaging/icon.png").is_file())
 
@@ -30,6 +31,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue((installed / "CardputerZero/swiss_intro.png").exists())
             self.assertFalse((installed / "CardputerZero/modules").exists())
             self.assertTrue((stage / "usr/share/APPLaunch/bin/swissknife-cardputer").exists())
+            self.assertTrue((stage / "usr/libexec/swissknife-cardputer/scan-wifi").exists())
 
 
 if __name__ == "__main__":
