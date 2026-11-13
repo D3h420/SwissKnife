@@ -182,6 +182,14 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c._automatic_answer("Press Enter to run GPS setup before wardrive"), "")
         self.assertIsNone(c._automatic_answer("Retry GPS setup (R) or Exit (E): "))
 
+    def test_lan_scan_duration_uses_default_or_custom_value(self):
+        c = self.controller
+        for key in ("ARP scan", "IP.CAM finder"):
+            c.module = next(item for item in c.engine.modules() if item.key == key)
+            self.assertEqual(c._automatic_answer("Scan duration in seconds (Enter for 15): "), "")
+            c.scan_durations[key] = 27
+            self.assertEqual(c._automatic_answer("Scan duration in seconds (Enter for 15): "), "27")
+
     def test_recon_custom_duration_is_second_action(self):
         c = self.controller
         c.screen = "detail"

@@ -682,7 +682,7 @@ class IpCamFinder(Module):
             )
             return self.scan_duration
 
-        raw = Prompt.ask("Scan duration in seconds", default="15", console=self.console).strip()
+        raw = (input("Scan duration in seconds (Enter for 15): ") if os.environ.get("SWISSKNIFE_GUI") else Prompt.ask("Scan duration in seconds", default="15", console=self.console)).strip()
         try:
             value = int(raw) if raw else 15
         except ValueError:
