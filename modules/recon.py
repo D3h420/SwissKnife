@@ -1053,7 +1053,7 @@ def format_sniffer_networks_lines(aps: Dict[str, AccessPoint], vendors: Dict[str
     return lines
 
 
-def _emit_recon_records(mode: str, aps: Dict[str, AccessPoint], vendors: Dict[str, str], *, remaining: int | None = None, packets: int | None = None, probes: int | None = None) -> None:
+def _emit_recon_records(mode: str, aps: Dict[str, AccessPoint], vendors: Dict[str, str], *, remaining: int | None = None, packets: int | None = None, probes: int | None = None, probe_counts: Dict[str, int] | None = None) -> None:
     if not os.environ.get("SWISSKNIFE_GUI"):
         return
     from core.gui_events import emit
@@ -1065,7 +1065,8 @@ def _emit_recon_records(mode: str, aps: Dict[str, AccessPoint], vendors: Dict[st
             "encryption": ap.encryption, "clients": len(ap.clients),
             "vendor": shorten_vendor(lookup_vendor(ap.bssid, vendors)),
         })
-    emit("recon_networks", mode=mode, networks=records, remaining=remaining, packets=packets, probes=probes)
+    probe_records = [{"ssid": ssid, "count": count} for ssid, count in sorted((probe_counts or {}).items(), key=lambda item: item[1], reverse=True)]
+    emit("recon_networks", mode=mode, networks=records, remaining=remaining, packets=packets, probes=probes, probe_records=probe_records)
 
 
 def format_probe_lines(probe_counts: Dict[str, int], probe_total: int) -> List[str]:
@@ -1264,12 +1265,17 @@ def recon_menu(vendors: Dict[str, str]) -> None:
                     state,
                     channels=DEFAULT_MONITOR_CHANNELS,
                     hop_interval=DEFAULT_HOP_INTERVAL,
+                    on_update=lambda snapshot, _status: _emit_recon_records(
+                        "sniffer", snapshot.aps, vendors,
+                        packets=snapshot.packet_count, probes=snapshot.probe_total,
+                        probe_counts=snapshot.probe_counts,
+                    ),
                 )
                 stopper.join(timeout=1)
 
                 logging.info("")
                 logging.info(style(f"Total packets captured: {state.packet_count}", STYLE_BOLD))
-                _emit_recon_records("sniffer", state.aps, vendors, packets=state.packet_count, probes=state.probe_total)
+                _emit_recon_records("sniffer", state.aps, vendors, packets=state.packet_count, probes=state.probe_total, probe_counts=state.probe_counts)
                 for line in format_sniffer_networks_lines(state.aps, vendors):
                     logging.info("%s", line)
                 logging.info("")

@@ -10,12 +10,19 @@ class RenderTests(unittest.TestCase):
         from CardputerZero.app.render import Renderer
 
         renderer = Renderer()
-        for screen in ("splash", "list", "detail", "log"):
+        for screen in ("splash", "list", "detail", "log", "about", "recon_modes", "recon_scan_setup", "sniffer_live", "sniffer_stopped", "sniffer_probes"):
             with self.subTest(screen=screen):
                 frame = renderer.draw(
                     ViewState(screen=screen, title="SwissKnife", rows=["A long result " * 8] * 12, simulated=True),
                 )
                 self.assertEqual(frame.size, (320, 170))
+
+    @unittest.skipUnless(importlib.util.find_spec("qrcode"), "python-qrcode not installed")
+    def test_repository_qr_screen(self):
+        from CardputerZero.app.render import Renderer
+
+        frame = Renderer().draw(ViewState(screen="about_qr", title="GITHUB"))
+        self.assertEqual(frame.size, (320, 170))
 
     def test_intro_and_delayed_prompt(self):
         from CardputerZero.app.render import Renderer

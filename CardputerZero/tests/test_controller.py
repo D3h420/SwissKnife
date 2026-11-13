@@ -26,6 +26,9 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.screen, "menu")
         c.handle("ENTER")
         self.assertEqual(c.module.key, "Recon")
+        self.assertEqual(c.screen, "recon_modes")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "recon_scan_setup")
         c.handle("ENTER")
         self.assertEqual(c.screen, "running")
         c.handle("HOME")
@@ -35,8 +38,8 @@ class ControllerTests(unittest.TestCase):
     def test_menu_hierarchy_matches_terminal(self):
         c = self.controller
         self.assertEqual(MAIN, tuple(item["name"] for item in MAIN_MENU.values()))
-        self.assertEqual(SUBMENUS["Attacks"], tuple(item["name"] for item in ATTACKS_MENU.values()))
-        self.assertEqual(SUBMENUS["Wardrive"], tuple(item["name"] for item in WARDRIVE_MENU.values()))
+        self.assertEqual(SUBMENUS["Attacks"], tuple(item["name"] for item in ATTACKS_MENU.values() if item["name"] != "Back"))
+        self.assertEqual(SUBMENUS["Wardrive"], tuple(item["name"] for item in WARDRIVE_MENU.values() if item["name"] != "Back"))
         c.splash_started -= SPLASH_DELAY
         c.tick()
         c.handle("TEXT", "x")
@@ -53,7 +56,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.view().rows, list(SUBMENUS["Wardrive"]))
         c.handle("DOWN")
         c.handle("DOWN")
-        c.handle("ENTER")
+        c.handle("ESC")
         self.assertEqual(c.menu, "main")
 
     def test_module_starts_directly_from_description(self):
@@ -192,17 +195,87 @@ class ControllerTests(unittest.TestCase):
 
     def test_recon_custom_duration_is_second_action(self):
         c = self.controller
-        c.screen = "detail"
+        c.screen = "recon_scan_setup"
         c.module = next(item for item in c.engine.modules() if item.key == "Recon")
-        c.handle("RIGHT")
-        c.handle("ENTER")
+        c.handle("TEXT", "t")
         self.assertEqual(c.screen, "duration_input")
         c.duration_text = ""
         c.handle("TEXT", "3")
         c.handle("TEXT", "0")
         c.handle("ENTER")
         self.assertEqual(c.scan_durations["Recon"], 30)
-        self.assertEqual(c.screen, "detail")
+        self.assertEqual(c.screen, "recon_scan_setup")
+
+    def test_recon_mode_and_scan_followup_are_automatic(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.recon_mode = "1"
+        self.assertEqual(c._automatic_answer("Your choice (0-2): "), "1")
+        self.assertEqual(c._automatic_answer("Press Enter to return."), "")
+        self.assertEqual(c._automatic_answer("Your choice (0-2): "), "0")
+
+    def test_sniffer_live_stop_probes_resume_and_exit(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.recon_mode = "2"
+        c.screen = "running"
+        answers = []
+        events = [
+            EngineEvent("input", "Input required", {"prompt": "Press Enter to stop sniffer: "}),
+            EngineEvent("data", "recon_networks", {"mode": "sniffer", "networks": [{"ssid": "AP"}], "packets": 5, "probes": 2, "probe_records": [{"ssid": "LAB", "count": 2}]}),
+        ]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=answers.append)
+        c.tick()
+        c.tick()
+        self.assertEqual(c.screen, "sniffer_live")
+        self.assertEqual(c.view().probes, 2)
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "sniffer_probes")
+        c.handle("ESC")
+        c.handle("LEFT")
+        c.handle("ENTER")
+        self.assertEqual(answers, [""])
+        self.assertEqual(c.screen, "sniffer_stopped")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Your choice (0/2): "}))
+        c.tick()
+        self.assertTrue(c.sniffer_post_choice_ready)
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(answers, ["", "2"])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to stop sniffer: "}))
+        c.tick()
+        c.handle("ENTER")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Your choice (0/2): "}))
+        c.tick()
+        c.handle("RIGHT")
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(answers, ["", "2", "", "0"])
+        self.assertEqual(c.screen, "menu")
+
+    def test_about_shortcut_and_qr_navigation(self):
+        c = self.controller
+        c.screen = "menu"
+        c.handle("TEXT", "a")
+        self.assertEqual(c.screen, "about")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "about_qr")
+        c.handle("ESC")
+        self.assertEqual(c.screen, "about")
+
+    def test_esc_uses_module_back_choice_without_showing_back_card(self):
+        c = self.controller
+        c.screen = "running"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        answers = []
+        events = [EngineEvent("input", "Input required", {"prompt": "Your choice (0-2): "})]
+        c.console.feed("  [1] Scaner\n  [2] Sniffer\n  [0] Back\n")
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=answers.append)
+        c.tick()
+        self.assertEqual([label for _, label in c.choices], ["Scaner", "Sniffer"])
+        c.handle("ESC")
+        self.assertEqual(answers, ["0"])
 
 
 if __name__ == "__main__":

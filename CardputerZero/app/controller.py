@@ -8,6 +8,7 @@ import threading
 import textwrap
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from core.engine import ModuleInfo, Operation, SwissKnifeEngine, module_status
 from core.hardware import HardwareSnapshot
@@ -18,8 +19,8 @@ from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 MAIN = tuple(item["name"] for item in MAIN_MENU.values())
 SUBMENUS = {
-    "Attacks": tuple(item["name"] for item in ATTACKS_MENU.values()),
-    "Wardrive": tuple(item["name"] for item in WARDRIVE_MENU.values()),
+    "Attacks": tuple(item["name"] for item in ATTACKS_MENU.values() if item["name"] != "Back"),
+    "Wardrive": tuple(item["name"] for item in WARDRIVE_MENU.values() if item["name"] != "Back"),
 }
 SPLASH_DELAY = 2.5
 SCAN_DEFAULTS = {"Recon": 12, "Start Wardrive": 8, "ARP scan": 15, "IP.CAM finder": 15}
@@ -36,6 +37,18 @@ MODULE_COPY = {
     "Start Wardrive": "Record nearby networks with GPS position.",
     "GPS setup": "Check your GPS receiver and position fix.",
 }
+REPOSITORY_URL = "https://github.com/D3h420/SwissKnife"
+
+
+def app_version() -> str:
+    metadata = Path(__file__).resolve().parents[1] / "packaging" / "meta.env"
+    try:
+        for line in metadata.read_text().splitlines():
+            if line.startswith("PKG_VERSION="):
+                return line.partition("=")[2].strip()
+    except OSError:
+        pass
+    return "unknown"
 
 
 @dataclass
@@ -59,6 +72,10 @@ class ViewState:
     description: str = ""
     status_label: str = ""
     secondary_label: str = ""
+    packets: int = 0
+    probes: int = 0
+    probe_records: list[dict] = field(default_factory=list)
+    version: str = ""
 
 
 class Controller:
@@ -82,12 +99,20 @@ class Controller:
         self.record_summary = ""
         self.record_kind = ""
         self.choices: list[tuple[str, str]] = []
+        self.back_choice = ""
         self.choice_index = 0
         self.scan_durations = dict(SCAN_DEFAULTS)
         self.duration_text = "12"
         self.duration_pristine = True
         self.recon_mode = ""
+        self.recon_choice_sent = False
         self.workflow_interface_selected = False
+        self.sniffer_active = False
+        self.sniffer_post_choice_ready = False
+        self.sniffer_exit_requested = False
+        self.probe_records: list[dict] = []
+        self.packet_count = 0
+        self.probe_total = 0
         self.current_prompt = ""
         self.error = ""
         self.selected = 0
@@ -143,9 +168,22 @@ class Controller:
                         else:
                             self.awaiting_input = False
                             self.choices = []
+                            self.back_choice = ""
                             continue
+                    if self.module and self.module.key == "Recon" and self.recon_mode == "2":
+                        lower_prompt = prompt.casefold()
+                        if "press enter to stop sniffer" in lower_prompt:
+                            self.sniffer_active = True
+                            if self.screen != "sniffer_probes":
+                                self.screen = "sniffer_live"
+                        elif "your choice" in lower_prompt and "0/2" in lower_prompt:
+                            self.sniffer_active = False
+                            self.sniffer_post_choice_ready = True
+                            self.screen = "sniffer_stopped"
                     wants_choice = bool(re.search(r"\b(select|choose|choice|option|number)\b", prompt, re.IGNORECASE))
-                    self.choices = current_choices(self.console.visible_lines()) if wants_choice and not self.secret_input else []
+                    available = current_choices(self.console.visible_lines()) if wants_choice and not self.secret_input and self.screen not in {"sniffer_stopped", "sniffer_live", "sniffer_probes"} else []
+                    self.back_choice = next((key for key, label in available if label.casefold().startswith("back")), "")
+                    self.choices = [(key, label) for key, label in available if not label.casefold().startswith("back")]
                     self.choice_index = 0
                 elif event.kind == "data" and event.message == "recon_networks":
                     self.records = list(event.data.get("networks", []))
@@ -153,6 +191,9 @@ class Controller:
                     count = len(self.records)
                     if mode == "sniffer":
                         self.record_summary = f"{count} AP  {event.data.get('packets') or 0} pkt"
+                        self.packet_count = int(event.data.get("packets") or 0)
+                        self.probe_total = int(event.data.get("probes") or 0)
+                        self.probe_records = list(event.data.get("probe_records") or [])
                     elif event.data.get("remaining") is not None:
                         self.record_summary = f"{count} AP  {event.data['remaining']}s left"
                     else:
@@ -177,9 +218,13 @@ class Controller:
                 if event.kind == "error":
                     self.error = event.message
                     self.screen = "results"
-                elif event.kind == "finished" and self.screen == "running":
+                elif event.kind == "finished" and self.screen in {"running", "sniffer_live", "sniffer_stopped", "sniffer_probes"}:
                     self.awaiting_input = False
-                    self.screen = "results"
+                    if self.sniffer_exit_requested:
+                        self.menu = "main"
+                        self._goto("menu")
+                    else:
+                        self.screen = "results"
                 changed = True
         return changed
 
@@ -188,6 +233,16 @@ class Controller:
             return None
         lowered = prompt.casefold()
         key = self.module.key
+        if key == "Recon" and "your choice" in lowered and "0-2" in lowered:
+            if not self.recon_choice_sent and self.recon_mode in {"1", "2"}:
+                self.recon_choice_sent = True
+                return self.recon_mode
+            if self.recon_mode == "1" and self.recon_choice_sent:
+                return "0"
+        if key == "Recon" and self.recon_mode == "2" and "your choice" in lowered and "0/2" in lowered and self.sniffer_exit_requested:
+            return "0"
+        if key == "Recon" and self.recon_mode == "1" and "press enter to return" in lowered:
+            return ""
         if key in SCAN_DEFAULTS and ("scan duration" in lowered or "scan window" in lowered):
             duration = self.scan_durations[key]
             return "" if duration == SCAN_DEFAULTS[key] else str(duration)
@@ -217,7 +272,7 @@ class Controller:
             self._goto("error")
         else:
             self.return_menu = self.menu
-            self._goto("detail")
+            self._goto("recon_modes" if self.module.key == "Recon" else "detail")
 
     @staticmethod
     def _wrap(rows: list[str], width: int = 31) -> list[str]:
@@ -228,7 +283,18 @@ class Controller:
         if self.screen == "splash":
             return ViewState(screen="splash", show_prompt=self.splash_ready, simulated=self.engine.demo)
         if self.screen == "menu":
-            return ViewState(screen="list", title="MAIN MENU" if self.menu == "main" else self.menu.upper(), rows=self._menu_rows(), hint="F/X move  ENTER select  ESC back", **common)
+            return ViewState(screen="list", title="MAIN MENU" if self.menu == "main" else self.menu.upper(), rows=self._menu_rows(), hint="F/X move  ENTER select  A about" if self.menu == "main" else "F/X move  ENTER select  ESC back", **common)
+        if self.screen == "about":
+            return ViewState(screen="about", title="ABOUT", version=app_version(), hint="ENTER repository QR  ESC back", **common)
+        if self.screen == "about_qr":
+            return ViewState(screen="about_qr", title="GITHUB", hint="ESC back", **common)
+        if self.screen == "recon_modes":
+            return ViewState(screen="recon_modes", title="RECON", description=MODULE_COPY["Recon"], rows=["Scaner", "Sniffer"], hint="F/X choose  ENTER open  ESC back", **common)
+        if self.screen == "recon_scan_setup":
+            return ViewState(screen="recon_scan_setup", title="SCANER", status_label=f"{self.scan_durations['Recon']} s", hint="Z/C ±1  F/X ±5  T type  ENTER start", **common)
+        if self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes"}:
+            phase = "LIVE" if self.sniffer_active else ("READY" if self.sniffer_post_choice_ready else "WORKING")
+            return ViewState(screen=self.screen, title="SNIFFER", selected=self.selected, records=self.records, probe_records=self.probe_records, packets=self.packet_count, probes=self.probe_total, status=self.operation.state if self.operation else "", status_label=phase, hint="ENTER select  ESC back", simulated=self.engine.demo)
         if self.screen == "detail":
             assert self.module
             status, reason = module_status(self.module, self.hardware) if self.hardware else ("requires_configuration", "Detecting hardware")
@@ -269,15 +335,46 @@ class Controller:
             if self.splash_ready:
                 self._goto("menu")
             return
+        if self.screen == "menu" and self.menu == "main" and key == "TEXT" and char.lower() == "a":
+            self._goto("about")
+            return
         if key == "HOME":
-            if self.operation and self.operation.state == "running":
+            if self.module and self.module.key == "Recon" and self.recon_mode == "2" and self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes"}:
+                self.sniffer_exit_requested = True
+                if self.awaiting_input and self.operation:
+                    try:
+                        self.operation.send("" if self.sniffer_active else "0")
+                        self.awaiting_input = False
+                    except RuntimeError:
+                        self.operation.cancel()
+                elif self.operation:
+                    self.operation.cancel()
+            elif self.operation and self.operation.state == "running":
                 self.operation.cancel()
             self.menu = "main"
             self._goto("menu")
             return
         if key == "ESC":
+            if self.screen == "sniffer_probes":
+                self._goto("sniffer_live" if self.sniffer_active else "sniffer_stopped")
+                return
+            if self.screen == "sniffer_live":
+                self._stop_sniffer()
+                return
+            if self.screen == "sniffer_stopped":
+                self._leave_sniffer()
+                return
             if self.screen == "running":
-                if self.operation:
+                if self.operation and self.awaiting_input and self.back_choice:
+                    try:
+                        self.operation.send(self.back_choice)
+                        self.awaiting_input = False
+                        self.choices = []
+                        self.back_choice = ""
+                    except RuntimeError as exc:
+                        self.error = str(exc)
+                        self._goto("error")
+                elif self.operation:
                     self.operation.cancel()
                 self.dirty = True
                 return
@@ -288,7 +385,7 @@ class Controller:
                     self.menu = "main"
                     self._goto("menu")
                 return
-            back = {"detail": "menu", "duration_input": "detail", "results": "detail", "error": "detail", "network_detail": "results"}
+            back = {"about": "menu", "about_qr": "about", "recon_modes": "menu", "recon_scan_setup": "recon_modes", "detail": "menu", "duration_input": "recon_scan_setup" if self.module and self.module.key == "Recon" else "detail", "results": "recon_modes" if self.module and self.module.key == "Recon" else "detail", "error": "detail", "network_detail": "results"}
             if self.screen == "detail":
                 self.menu = self.return_menu
             self._goto(back.get(self.screen, "menu"))
@@ -308,11 +405,72 @@ class Controller:
                     if self.module and self.module.key in SCAN_DEFAULTS:
                         self.scan_durations[self.module.key] = value
                     self.selected = 0
-                    self._goto("detail")
+                    self._goto("recon_scan_setup" if self.module and self.module.key == "Recon" else "detail")
                 else:
                     self.error = "Choose 1 to 300 seconds"
                     self._goto("error")
             self.dirty = True
+            return
+        if self.screen == "about" and key == "ENTER":
+            self._goto("about_qr")
+            return
+        if self.screen == "recon_modes":
+            if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
+                self.selected = 1 - self.selected
+                self.dirty = True
+            elif key == "ENTER":
+                self.recon_mode = "1" if self.selected == 0 else "2"
+                if self.recon_mode == "1":
+                    self._goto("recon_scan_setup")
+                else:
+                    self._start_operation()
+            return
+        if self.screen == "recon_scan_setup":
+            if key in {"LEFT", "RIGHT", "UP", "DOWN"}:
+                step = {"LEFT": -1, "RIGHT": 1, "UP": 5, "DOWN": -5}[key]
+                self.scan_durations["Recon"] = max(1, min(300, self.scan_durations["Recon"] + step))
+                self.dirty = True
+            elif key == "TEXT" and char.lower() == "t":
+                self.duration_text = str(self.scan_durations["Recon"])
+                self.duration_pristine = True
+                self._goto("duration_input")
+            elif key == "TEXT" and char.isdigit():
+                self.duration_text = char
+                self.duration_pristine = False
+                self._goto("duration_input")
+            elif key == "ENTER":
+                self.recon_mode = "1"
+                self._start_operation()
+            return
+        if self.screen == "sniffer_live":
+            if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
+                self.selected = max(0, min(2, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
+                self.dirty = True
+            elif key == "ENTER":
+                if self.selected == 0:
+                    self._stop_sniffer()
+                elif self.selected == 1:
+                    self._goto("sniffer_probes")
+                else:
+                    self.handle("HOME")
+            return
+        if self.screen == "sniffer_stopped":
+            if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
+                self.selected = max(0, min(2, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
+                self.dirty = True
+            elif key == "ENTER":
+                if self.selected == 0:
+                    self._goto("sniffer_probes")
+                elif self.selected == 1:
+                    self._resume_sniffer()
+                else:
+                    self._leave_sniffer()
+            return
+        if self.screen == "sniffer_probes":
+            if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
+                step = {"UP": -1, "DOWN": 1, "PAGEUP": -3, "PAGEDOWN": 3}[key]
+                self.selected = max(0, min(max(0, len(self.probe_records) - 1), self.selected + step))
+                self.dirty = True
             return
         if self.screen == "running" and self.awaiting_input:
             if self.choices and key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
@@ -345,6 +503,7 @@ class Controller:
                     self.awaiting_input = False
                     self.input_value = ""
                     self.choices = []
+                    self.back_choice = ""
                 self.dirty = True
                 return
         if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
@@ -417,11 +576,60 @@ class Controller:
         self.record_summary = ""
         self.record_kind = ""
         self.choices = []
-        self.recon_mode = ""
+        self.back_choice = ""
+        if self.module.key != "Recon":
+            self.recon_mode = ""
+        self.recon_choice_sent = False
         self.workflow_interface_selected = False
+        self.sniffer_active = False
+        self.sniffer_post_choice_ready = False
+        self.sniffer_exit_requested = False
+        self.probe_records = []
+        self.packet_count = 0
+        self.probe_total = 0
         self.current_prompt = ""
         self.console.feed(self.logs[0] + "\n")
         self.awaiting_input = False
         self.input_value = ""
         self.follow_output = True
         self._goto("running")
+
+    def _stop_sniffer(self) -> None:
+        if self.awaiting_input and self.sniffer_active and self.operation:
+            try:
+                self.operation.send("")
+            except RuntimeError as exc:
+                self.error = str(exc)
+                self._goto("error")
+                return
+            self.awaiting_input = False
+            self.sniffer_active = False
+            self.sniffer_post_choice_ready = False
+            self._goto("sniffer_stopped")
+
+    def _resume_sniffer(self) -> None:
+        if not self.sniffer_post_choice_ready or not self.awaiting_input or not self.operation:
+            return
+        try:
+            self.operation.send("2")
+        except RuntimeError as exc:
+            self.error = str(exc)
+            self._goto("error")
+            return
+        self.awaiting_input = False
+        self.sniffer_post_choice_ready = False
+        self._goto("sniffer_live")
+
+    def _leave_sniffer(self) -> None:
+        if not self.sniffer_post_choice_ready or not self.awaiting_input or not self.operation:
+            return
+        try:
+            self.operation.send("0")
+        except RuntimeError as exc:
+            self.error = str(exc)
+            self._goto("error")
+            return
+        self.awaiting_input = False
+        self.sniffer_exit_requested = True
+        self.menu = "main"
+        self._goto("menu")

@@ -15,6 +15,8 @@ AMBER = (255, 182, 82)
 TEXT = (244, 247, 252)
 DIM = (157, 171, 193)
 BLUE = (91, 146, 245)
+MAGENTA = (232, 91, 194)
+REPOSITORY_URL = "https://github.com/D3h420/SwissKnife"
 
 
 class Renderer:
@@ -33,11 +35,54 @@ class Renderer:
         self.large = ImageFont.truetype(bold_path, 25) if bold_path else ImageFont.load_default()
         intro_path = Path(__file__).resolve().parents[1] / "swiss_intro.png"
         self.intro = None
+        self.qr = None
         if intro_path.is_file():
             with Image.open(intro_path) as source:
                 self.intro = source.convert("RGB")
                 resampling = getattr(Image, "Resampling", Image)
                 self.intro.thumbnail((WIDTH, 150), resampling.LANCZOS)
+
+    @staticmethod
+    def _battery_percent() -> int | None:
+        for path in Path("/sys/class/power_supply").glob("*/capacity"):
+            try:
+                value = int(path.read_text().strip())
+                if 0 <= value <= 100:
+                    return value
+            except (OSError, ValueError):
+                continue
+        return None
+
+    def _button(self, draw, box, label: str, active: bool, color=GREEN) -> None:
+        draw.rounded_rectangle(box, radius=8, fill=color if active else PANEL, outline=color)
+        draw.text((box[0] + 9, box[1] + 4), self._clip(draw, label, self.medium, box[2] - box[0] - 15), font=self.medium, fill=BG if active else TEXT)
+
+    def _draw_status(self, draw) -> None:
+        battery = self._battery_percent()
+        x = 240
+        draw.rounded_rectangle((x, 10, x + 27, 23), radius=2, outline=DIM, width=1)
+        draw.rectangle((x + 28, 14, x + 30, 19), fill=DIM)
+        if battery is not None:
+            draw.rectangle((x + 3, 13, x + 3 + round(21 * battery / 100), 20), fill=GREEN if battery > 20 else AMBER)
+        else:
+            draw.text((x + 10, 10), "?", font=self.small, fill=DIM)
+        # Draw the skull as shapes so it does not depend on emoji fonts.
+        draw.ellipse((287, 8, 307, 25), fill=MAGENTA)
+        draw.rectangle((292, 19, 302, 27), fill=MAGENTA)
+        draw.ellipse((291, 15, 296, 20), fill=BG)
+        draw.ellipse((299, 15, 304, 20), fill=BG)
+        draw.polygon([(297, 20), (300, 20), (298, 23)], fill=BG)
+        for x in (294, 298, 302):
+            draw.line((x, 24, x, 27), fill=BG, width=1)
+
+    def _qr_image(self):
+        if self.qr is None:
+            import qrcode
+            code = qrcode.QRCode(border=4, box_size=3)
+            code.add_data(REPOSITORY_URL)
+            code.make(fit=True)
+            self.qr = code.make_image(fill_color="white", back_color="black").convert("RGB")
+        return self.qr
 
     def _clip(self, draw, text: str, font, width: int) -> str:
         if draw.textbbox((0, 0), text, font=font)[2] <= width:
@@ -67,10 +112,62 @@ class Renderer:
         if bright:
             accent = (170, 255, 193)
         draw.rounded_rectangle((5, 4, 314, 29), radius=8, fill=PANEL)
-        draw.text((13, 8), self._clip(draw, state.title, self.medium, 245), font=self.medium, fill=TEXT)
-        draw.text((281, 10), "LAB5", font=self.small, fill=BLUE)
+        draw.text((13, 8), self._clip(draw, state.title, self.medium, 210), font=self.medium, fill=TEXT)
+        self._draw_status(draw)
 
-        if state.screen == "networks":
+        if state.screen == "about":
+            draw.rounded_rectangle((7, 36, 312, 143), radius=10, fill=PANEL)
+            draw.text((17, 43), "SWISSKNIFE", font=self.menu, fill=GREEN)
+            draw.text((17, 67), "LAB5 / D3h420", font=self.body, fill=TEXT)
+            draw.text((17, 91), f"Version {state.version}", font=self.body, fill=DIM)
+            self._button(draw, (157, 111, 305, 139), "GitHub QR", True, BLUE)
+        elif state.screen == "about_qr":
+            try:
+                qr = self._qr_image()
+                qr.thumbnail((112, 112))
+                image.paste(qr, (13, 34))
+            except ImportError:
+                draw.text((13, 50), "QR unavailable", font=self.body, fill=AMBER)
+            draw.text((135, 47), "SwissKnife", font=self.menu, fill=TEXT)
+            draw.text((135, 79), "GitHub repo", font=self.body, fill=DIM)
+            draw.text((135, 107), "Scan to open", font=self.body, fill=GREEN)
+        elif state.screen == "recon_modes":
+            draw.rounded_rectangle((7, 36, 312, 86), radius=10, fill=PANEL)
+            draw.text((17, 44), "Wi-Fi discovery", font=self.menu, fill=TEXT)
+            draw.text((17, 67), "Choose an operation", font=self.body, fill=DIM)
+            self._button(draw, (7, 104, 153, 140), "Scaner", state.selected == 0)
+            self._button(draw, (161, 104, 312, 140), "Sniffer", state.selected == 1, BLUE)
+        elif state.screen == "recon_scan_setup":
+            draw.rounded_rectangle((7, 36, 312, 104), radius=10, fill=PANEL)
+            draw.text((17, 43), "Scan duration", font=self.body, fill=DIM)
+            draw.text((17, 63), state.status_label, font=self.large, fill=TEXT)
+            draw.text((172, 72), "Z -1  C +1", font=self.small, fill=DIM)
+            self._button(draw, (7, 111, 312, 143), "Start scan", True)
+        elif state.screen in {"sniffer_live", "sniffer_stopped"}:
+            live = state.screen == "sniffer_live"
+            draw.text((10, 35), state.status_label if state.status_label != "READY" else "STOPPED", font=self.small, fill=GREEN if live and state.status_label == "LIVE" else AMBER)
+            metrics = [("AP", len(state.records)), ("PROBES", state.probes), ("PACKETS", state.packets)]
+            for i, (label, value) in enumerate(metrics):
+                x = 7 + i * 103
+                draw.rounded_rectangle((x, 50, x + 98, 104), radius=9, fill=PANEL)
+                draw.text((x + 8, 56), label, font=self.small, fill=DIM)
+                draw.text((x + 8, 73), str(value), font=self.menu, fill=TEXT)
+            actions = ("Stop", "Probes", "Main") if live else ("Probes", "Resume", "Main")
+            for i, label in enumerate(actions):
+                x = 7 + i * 103
+                self._button(draw, (x, 115, x + 98, 142), label, state.selected == i, GREEN if i == 0 else BLUE)
+        elif state.screen == "sniffer_probes":
+            draw.text((10, 36), f"{state.probes} probes / {len(state.probe_records)} SSIDs", font=self.body, fill=DIM)
+            if not state.probe_records:
+                draw.text((14, 78), "No probes yet", font=self.body, fill=TEXT)
+            first = max(0, state.selected - 2)
+            for i, record in enumerate(state.probe_records[first:first + 3]):
+                y = 57 + i * 28
+                active = first + i == state.selected
+                draw.rounded_rectangle((7, y, 312, y + 25), radius=6, fill=(35, 53, 77) if active else PANEL)
+                draw.text((15, y + 3), self._clip(draw, str(record.get("ssid") or "<hidden>"), self.body, 244), font=self.body, fill=TEXT)
+                draw.text((270, y + 3), str(record.get("count") or 0), font=self.body, fill=GREEN)
+        elif state.screen == "networks":
             draw.text((10, 35), self._clip(draw, state.summary or "Networks", self.body, 300), font=self.body, fill=DIM)
             first = max(0, state.selected - 1)
             for i, record in enumerate(state.records[first:first + 2]):
