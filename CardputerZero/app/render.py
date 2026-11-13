@@ -109,8 +109,13 @@ class Renderer:
 
         draw.rectangle((0, 146, WIDTH - 1, HEIGHT - 1), fill=PANEL)
         draw.line((0, 146, WIDTH - 1, 146), fill=(45, 84, 59))
-        hint = self._clip(draw, state.hint, self.small, 290)
-        draw.text((8, 152), hint, font=self.small, fill=DIM)
+        if state.awaiting_input:
+            value = "*" * len(state.input_value) if state.secret_input else state.input_value
+            prompt = ("PASS> " if state.secret_input else "INPUT> ") + value + "_"
+            draw.text((8, 152), self._clip(draw, prompt, self.small, 300), font=self.small, fill=AMBER)
+        else:
+            hint = self._clip(draw, state.hint, self.small, 290)
+            draw.text((8, 152), hint, font=self.small, fill=DIM)
         if state.simulated:
             draw.rectangle((251, 148, 315, 167), fill=(75, 49, 17), outline=AMBER)
             draw.text((257, 152), "DEMO", font=self.small, fill=AMBER)

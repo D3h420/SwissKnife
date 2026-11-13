@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from core.engine import ModuleInfo, Operation, SwissKnifeEngine, compatibility_issues, module_status
 from core.hardware import HardwareSnapshot
+from RPi_LCD_HAT.logic import TerminalBuffer
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 
@@ -33,6 +34,9 @@ class ViewState:
     accent: str = "green"
     simulated: bool = False
     show_prompt: bool = False
+    awaiting_input: bool = False
+    input_value: str = ""
+    secret_input: bool = False
 
 
 class Controller:
@@ -47,15 +51,14 @@ class Controller:
         self.hardware: HardwareSnapshot | None = None
         self.operation: Operation | None = None
         self.logs: list[str] = []
+        self.console = TerminalBuffer(max_lines=1000)
+        self.awaiting_input = False
+        self.secret_input = False
+        self.input_value = ""
+        self.follow_output = True
         self.error = ""
         self.selected = 0
         self.scroll = 0
-        self.interface_index = 0
-        self.duration = 5
-        self.cycles = 3
-        self.max_hosts = 64
-        self.filter_text = ""
-        self.confirm_management = False
         self.theme_bright = False
         self.quit_requested = False
         self.dirty = True
@@ -83,21 +86,29 @@ class Controller:
                     self.error = f"Hardware discovery: {result}"
                 else:
                     self.hardware = result
-                    self.interface_index = min(self.interface_index, max(0, len(result.wifi) - 1))
-                    if self.screen == "config":
-                        self.selected = min(self.selected, len(self._config_rows()) - 1)
                 changed = True
         except queue.Empty:
             pass
         if self.operation:
             for event in self.operation.poll():
+                if event.kind == "output":
+                    self.console.feed(event.message)
+                    if self.follow_output:
+                        self.scroll = max(0, len(self._wrap(self.console.visible_lines())) - 7)
+                elif event.kind == "input":
+                    self.awaiting_input = True
+                    self.secret_input = bool(event.data.get("secret", False))
+                    self.input_value = ""
                 if event.kind in {"status", "result", "progress", "error"}:
                     self.logs.append(event.message)
                     self.logs = self.logs[-500:]
+                    if event.kind == "error":
+                        self.console.feed("Error: " + event.message + "\n")
                 if event.kind == "error":
                     self.error = event.message
-                    self.screen = "error"
+                    self.screen = "results"
                 elif event.kind == "finished" and self.screen == "running":
+                    self.awaiting_input = False
                     self.screen = "results"
                 changed = True
         return changed
@@ -113,27 +124,6 @@ class Controller:
         else:
             self.return_menu = self.menu
             self._goto("detail")
-
-    def _config_rows(self) -> list[str]:
-        interface = "none"
-        if self.hardware and self.hardware.wifi:
-            interface = self.hardware.wifi[self.interface_index].name
-        rows = []
-        if self.module and self.module.needs_wifi:
-            rows.append(f"Interface  {interface}")
-        if self.module and self.module.key in {"Recon", "Start Wardrive"}:
-            rows.append(f"Duration   {self.duration}s")
-            rows.append(f"SSID filter  {self.filter_text or '(all)'}")
-        if self.module and self.module.key == "Start Wardrive":
-            rows.append(f"Cycles     {self.cycles}")
-        if self.module and self.module.key in {"ARP scan", "IP.CAM finder"}:
-            rows.append(f"Host limit {self.max_hosts}")
-        if self.hardware and self.hardware.wifi and self.module and self.module.needs_wifi:
-            selected_interface = self.hardware.wifi[self.interface_index].name
-            if selected_interface == self.hardware.default_route:
-                rows.append(f"Mgmt Wi-Fi  {'CONFIRMED' if self.confirm_management else 'confirm'}")
-        rows.append("START")
-        return rows
 
     @staticmethod
     def _wrap(rows: list[str], width: int = 42) -> list[str]:
@@ -151,11 +141,18 @@ class Controller:
             issues = compatibility_issues(self.module, self.hardware) if self.hardware else ("Hardware discovery pending",)
             rows = [self.module.description, f"Status: {status.replace('_', ' ')}", reason, f"Tools: {', '.join(self.module.tools)}"]
             rows += [f"Check: {issue}" for issue in issues] if issues else ["Prerequisites detected; device test pending"]
-            return ViewState(screen="detail", title=self.module.label.upper(), rows=self._wrap(rows), hint="ENTER configure  ESC back" if self.module.enabled else "INFO ONLY  ESC back", status=status, accent="amber" if status != "needs_device_test" else "green", **common)
-        if self.screen == "config":
-            return ViewState(screen="list", title=f"SETUP / {self.module.label.upper() if self.module else ''}", rows=self._config_rows(), hint="LEFT/RIGHT change  ENTER", **common)
+            return ViewState(screen="detail", title=self.module.label.upper(), rows=self._wrap(rows), hint="ENTER run  ESC back", status=status, accent="amber" if status != "needs_device_test" else "green", **common)
+        if self.screen == "confirm":
+            assert self.module
+            rows = [f"Run {self.module.label} as root?", "The module asks the same questions as in the terminal."]
+            if self.module.needs_wifi:
+                rows.append("Changing Wi-Fi mode or network may interrupt SSH and the management connection.")
+            rows += ["ENTER start", "ESC back"]
+            return ViewState(screen="detail", title="CONFIRM / " + self.module.label.upper(), rows=self._wrap(rows), hint="ENTER start  ESC back", accent="amber", **common)
         if self.screen in {"running", "results"}:
-            return ViewState(screen="log", title=("RUN / " if self.screen == "running" else "RESULT / ") + (self.module.label.upper() if self.module else ""), rows=self._wrap(self.logs[-500:]), hint="ESC cancel  HOME menu" if self.screen == "running" else "ESC back  HOME menu", status=self.operation.state if self.operation else "", accent="amber" if self.screen == "running" else "green", **common)
+            terminal_rows = self._wrap(self.console.visible_lines())
+            rows = terminal_rows if terminal_rows else self._wrap(self.logs[-500:])
+            return ViewState(screen="log", title=("RUN / " if self.screen == "running" else "RESULT / ") + (self.module.label.upper() if self.module else ""), rows=rows, hint="TYPE answer  ENTER submit" if self.awaiting_input else ("ESC cancel  HOME menu" if self.screen == "running" else "ESC back  HOME menu"), status=self.operation.state if self.operation else "", accent="amber" if self.screen == "running" else "green", awaiting_input=self.awaiting_input, input_value=self.input_value, secret_input=self.secret_input, **common)
         if self.screen == "error":
             return ViewState(screen="detail", title="ERROR", rows=self._wrap([self.error]), hint="ESC back  HOME menu", accent="amber", **common)
         return ViewState(screen="detail", title="EXIT", rows=["Returning to APPLaunch"], hint="", **common)
@@ -192,27 +189,40 @@ class Controller:
                     self.menu = "main"
                     self._goto("menu")
                 return
-            back = {"detail": "menu", "config": "detail", "results": "detail", "error": "detail"}
+            back = {"detail": "menu", "confirm": "detail", "results": "detail", "error": "detail"}
             if self.screen == "detail":
                 self.menu = self.return_menu
             self._goto(back.get(self.screen, "menu"))
             if self.screen == "exit":
                 self.quit_requested = True
             return
-        if self.screen == "config" and self.selected < len(self._config_rows()) and self._config_rows()[self.selected].startswith("SSID filter"):
+        if self.screen == "running" and self.awaiting_input:
             if key == "BACKSPACE":
-                self.filter_text = self.filter_text[:-1]
+                self.input_value = self.input_value[:-1]
                 self.dirty = True
                 return
-            if key == "TEXT" and char and len(self.filter_text) < 24:
-                self.filter_text += char
+            if key == "TEXT" and char and char.isprintable() and len(self.input_value) < 256:
+                self.input_value += char
+                self.dirty = True
+                return
+            if key == "ENTER":
+                try:
+                    self.operation.send(self.input_value)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    self.error = str(exc)
+                    self.console.feed("Error: " + self.error + "\n")
+                else:
+                    self.awaiting_input = False
+                    self.input_value = ""
                 self.dirty = True
                 return
         if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
             step = {"UP": -1, "DOWN": 1, "PAGEUP": -5, "PAGEDOWN": 5}[key]
             rows = self.view().rows
-            if self.screen in {"running", "results", "hardware", "detail", "error"}:
+            if self.screen in {"running", "results", "hardware", "detail", "confirm", "error"}:
                 self.scroll = max(0, min(max(0, len(rows) - 5), self.scroll + step))
+                if self.screen in {"running", "results"}:
+                    self.follow_output = self.scroll >= max(0, len(rows) - 7)
             elif rows:
                 self.selected = max(0, min(len(rows) - 1, self.selected + step))
             self.dirty = True
@@ -231,27 +241,10 @@ class Controller:
                 self._open_module(label)
             return
         if self.screen == "detail" and key == "ENTER" and self.module and self.module.enabled:
-            self._goto("config")
+            self._goto("confirm")
             return
-        if self.screen == "config":
-            row = self._config_rows()[self.selected]
-            delta = -1 if key == "LEFT" else 1
-            if key in {"LEFT", "RIGHT", "ENTER"}:
-                if row.startswith("Interface") and self.hardware and self.hardware.wifi:
-                    self.interface_index = (self.interface_index + delta) % len(self.hardware.wifi)
-                    self.confirm_management = False
-                    self.selected = min(self.selected, len(self._config_rows()) - 1)
-                elif row.startswith("Duration"):
-                    self.duration = max(1, min(60, self.duration + delta))
-                elif row.startswith("Cycles"):
-                    self.cycles = max(1, min(100, self.cycles + delta))
-                elif row.startswith("Host limit"):
-                    self.max_hosts = max(32, min(128, self.max_hosts + delta * 8))
-                elif row.startswith("Mgmt Wi-Fi"):
-                    self.confirm_management = not self.confirm_management
-                elif row == "START" and key == "ENTER":
-                    self._start_operation()
-                self.dirty = True
+        if self.screen == "confirm" and key == "ENTER":
+            self._start_operation()
             return
 
     def _start_operation(self) -> None:
@@ -259,17 +252,20 @@ class Controller:
             self.error = "Previous operation is still stopping"
             self._goto("error")
             return
-        if not self.module or not self.hardware:
-            self.error = "Hardware discovery is not complete"
+        if not self.module:
+            self.error = "No module selected"
             self._goto("error")
             return
-        interface = self.hardware.wifi[self.interface_index].name if self.hardware.wifi else ""
-        config = {"interface": interface, "duration": self.duration, "cycles": self.cycles, "max_hosts": self.max_hosts, "filter": self.filter_text, "allow_management_interface": self.confirm_management}
         try:
-            self.operation = self.engine.start(self.module.key, config, hardware=self.hardware)
+            self.operation = self.engine.start_terminal(self.module.key)
         except Exception as exc:
             self.error = str(exc)
             self._goto("error")
             return
-        self.logs = ["[SIMULATED RESULTS]" if self.engine.demo else "Started"]
+        self.logs = ["[SIMULATED WORKFLOW]" if self.engine.demo else "Started"]
+        self.console = TerminalBuffer(max_lines=1000)
+        self.console.feed(self.logs[0] + "\n")
+        self.awaiting_input = False
+        self.input_value = ""
+        self.follow_output = True
         self._goto("running")

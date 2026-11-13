@@ -31,4 +31,4 @@ trap 'rm -r -- "$workdir"' EXIT
 dpkg-deb --raw-extract "$package" "$workdir/stage"
 dpkg-deb --root-owner-group --build "$workdir/stage" "$workdir/$filename" >/dev/null
 scp "$workdir/$filename" "$target:$remote_package"
-ssh -tt "$target" "trap 'rm -f -- $remote_package' EXIT; sudo apt-get install -y -- $remote_package && dpkg-query -W swissknife-cardputer"
+ssh -tt "$target" "trap 'rm -f -- $remote_package' EXIT; sudo apt-get install -y --no-install-recommends -- $remote_package && dpkg-query -W swissknife-cardputer"

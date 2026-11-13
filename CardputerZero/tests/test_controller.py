@@ -1,5 +1,6 @@
 import time
 import unittest
+from types import SimpleNamespace
 
 from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY
 from core.engine import SwissKnifeEngine
@@ -14,7 +15,7 @@ class ControllerTests(unittest.TestCase):
             self.controller.tick()
             time.sleep(0.01)
 
-    def test_navigation_and_keyboard_filter(self):
+    def test_navigation_to_terminal_workflow(self):
         c = self.controller
         c.handle("ENTER")
         self.assertEqual(c.screen, "splash")
@@ -26,13 +27,9 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(c.module.key, "Recon")
         c.handle("ENTER")
-        self.assertEqual(c.screen, "config")
-        c.handle("DOWN")
-        c.handle("DOWN")
-        c.handle("TEXT", "L")
-        c.handle("TEXT", "5")
-        c.handle("BACKSPACE")
-        self.assertEqual(c.filter_text, "L")
+        self.assertEqual(c.screen, "confirm")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "running")
         c.handle("HOME")
         self.assertEqual(c.screen, "menu")
         self.assertEqual(c.menu, "main")
@@ -61,19 +58,17 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(c.menu, "main")
 
-    def test_information_only_module_cannot_start(self):
+    def test_all_catalogue_modules_can_open_confirmation(self):
         c = self.controller
         c.screen = "detail"
         c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
         c.handle("ENTER")
-        self.assertEqual(c.screen, "detail")
+        self.assertEqual(c.screen, "confirm")
 
     def test_demo_operation_returns_results(self):
         c = self.controller
         c.module = next(item for item in c.engine.modules() if item.key == "Recon")
-        c.screen = "config"
-        c.interface_index = 1
-        c.selected = len(c._config_rows()) - 1
+        c.screen = "confirm"
         c.handle("ENTER")
         self.assertEqual(c.screen, "running")
         deadline = time.monotonic() + 2
@@ -83,12 +78,12 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.screen, "results")
         self.assertTrue(any("[SIMULATED]" in line for line in c.logs))
 
-    def test_missing_hardware_shows_error(self):
+    def test_module_wizard_can_report_missing_hardware_itself(self):
         c = self.controller
         c.hardware = None
         c.module = next(item for item in c.engine.modules() if item.key == "Recon")
         c._start_operation()
-        self.assertEqual(c.screen, "error")
+        self.assertEqual(c.screen, "running")
 
     def test_cannot_start_while_previous_operation_is_stopping(self):
         c = self.controller
@@ -102,18 +97,31 @@ class ControllerTests(unittest.TestCase):
         self.assertIn("still stopping", c.error)
         c.operation.thread.join(timeout=2)
 
-    def test_adapter_disappearing_clamps_configuration(self):
+    def test_adapter_disappearing_does_not_break_menu(self):
         c = self.controller
         c.module = next(item for item in c.engine.modules() if item.key == "Recon")
-        c.screen = "config"
-        c.interface_index = 1
-        c.selected = len(c._config_rows()) - 1
+        c.screen = "detail"
         c._hardware_events.put(c.hardware.__class__((), (), (), (), "", False, c.hardware.tools))
         c.tick()
-        self.assertEqual(c.interface_index, 0)
-        self.assertLess(c.selected, len(c._config_rows()))
+        self.assertEqual(c.hardware.wifi, ())
         c.handle("ENTER")
-        self.assertEqual(c.screen, "error")
+        self.assertEqual(c.screen, "confirm")
+
+    def test_terminal_prompt_accepts_text_and_hides_secret(self):
+        c = self.controller
+        answers = []
+        c.screen = "running"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.operation = SimpleNamespace(state="running", send=answers.append)
+        c.awaiting_input = True
+        c.secret_input = True
+        c.handle("TEXT", "s")
+        c.handle("TEXT", "e")
+        c.handle("BACKSPACE")
+        self.assertTrue(c.view().secret_input)
+        c.handle("ENTER")
+        self.assertEqual(answers, ["s"])
+        self.assertFalse(c.awaiting_input)
 
 
 if __name__ == "__main__":

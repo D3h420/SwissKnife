@@ -18,7 +18,7 @@ if [ "$app_user" != root ] && id -u "$app_user" >/dev/null 2>&1; then
     chmod 0440 "$rule"
     if ! visudo -cf "$rule" >/dev/null; then
         rm -f "$rule"
-        echo "Invalid SwissKnife scan privilege rule" >&2
+        echo "Invalid SwissKnife privilege rule" >&2
         exit 1
     fi
 fi

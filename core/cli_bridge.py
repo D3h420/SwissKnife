@@ -51,7 +51,7 @@ class CliOperation(Operation):
                 raise RuntimeError("Module stopped before receiving input") from exc
             self.awaiting_input = False
             self.secret = False
-        self.emit("status", "Answer submitted" if not value else "Answer submitted")
+        self.emit("status", "Answer submitted")
 
     def cancel(self) -> None:
         if self.cancelled.is_set():

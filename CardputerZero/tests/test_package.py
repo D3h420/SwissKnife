@@ -34,6 +34,7 @@ class PackageTests(unittest.TestCase):
             self.assertTrue((stage / "usr/libexec/swissknife-cardputer/scan-wifi").exists())
             self.assertTrue((stage / "usr/libexec/swissknife-cardputer/run-module").exists())
             self.assertTrue((installed / "RPi_LCD_HAT/runner.py").exists())
+            self.assertTrue((installed / "RPi_LCD_HAT/logic.py").exists())
 
 
 if __name__ == "__main__":

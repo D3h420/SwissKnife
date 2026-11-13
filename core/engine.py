@@ -36,12 +36,12 @@ _DESCRIPTIONS = {
     "Start Wardrive": ("Wi-Fi survey with GPS and Wigle log", ("iw", "stty"), True, True),
     "ARP scan": ("Connected LAN ping and ARP neighbor discovery", ("ip", "ping"), False, True),
     "IP.CAM finder": ("Camera candidates on the connected LAN", ("ip", "ping"), False, True),
-    "Deauth": ("Connection disruption; information only", ("iw", "aireplay-ng"), False, False),
-    "Portal": ("Rogue AP and credential collection; information only", ("hostapd", "dnsmasq"), False, False),
-    "Evil Twin": ("AP impersonation; information only", ("hostapd", "dnsmasq"), False, False),
-    "Handshaker": ("Handshake capture; information only", ("iw", "airodump-ng"), False, False),
-    "WiFi Poet": ("Beacon transmission; information only", ("mdk4",), False, False),
-    "Dragon Drain": ("WPA3 active workflow; information only", ("iw", "airodump-ng"), False, False),
+    "Deauth": ("Existing terminal Deauth workflow", ("iw", "aireplay-ng"), False, True),
+    "Portal": ("Existing terminal captive portal workflow", ("hostapd", "dnsmasq", "iptables"), False, True),
+    "Evil Twin": ("Existing terminal Evil Twin workflow", ("hostapd", "dnsmasq", "iptables"), False, True),
+    "Handshaker": ("Existing terminal handshake workflow", ("iw", "airodump-ng"), False, True),
+    "WiFi Poet": ("Existing terminal WiFi Poet workflow", ("mdk4",), False, True),
+    "Dragon Drain": ("Existing terminal Dragon Drain workflow", ("iw", "airodump-ng"), False, True),
     "GPS setup": ("GPS diagnostics", ("stty",), True, True),
 }
 
@@ -57,7 +57,8 @@ def available_modules() -> tuple[ModuleInfo, ...]:
             (f"{feature.label}: new workflow; integration review required", (), False, False),
         )
         category = "Diagnostics" if feature.label in {"ARP scan", "IP.CAM finder"} else feature.category
-        modules.append(ModuleInfo(feature.label, feature.label, category, description, tools, feature.category != "Wardrive" or feature.label == "Start Wardrive", gps, True, enabled))
+        needs_wifi = feature.label not in {"GPS setup", "ARP scan", "IP.CAM finder"}
+        modules.append(ModuleInfo(feature.label, feature.label, category, description, tools, needs_wifi, gps, True, enabled))
     return tuple(modules)
 
 
@@ -143,12 +144,30 @@ class SwissKnifeEngine:
     def modules(self) -> tuple[ModuleInfo, ...]:
         return tuple(self._modules.values())
 
+    def start_terminal(self, key: str) -> Operation:
+        """Run the exact CLI module behind a prompt/output event bridge.
+
+        This is the Cardputer execution path.  The existing structured API is
+        retained for callers that need the diagnostic subset.
+        """
+        if key not in self._modules:
+            raise ValueError("Unknown module")
+        if self.demo:
+            hardware = self.hardware()
+            return self.start(key, {"interface": "wlan1"}, hardware=hardware)
+        from .cli_bridge import CliOperation
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_path = LOG_DIR / f"cardputer-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{key.lower().replace(' ', '-')}.log"
+        return CliOperation(key, log_path=log_path)
+
     def start(self, key: str, config: dict[str, Any], *, hardware: HardwareSnapshot | None = None) -> Operation:
         module = self._modules.get(key)
         if module is None:
             raise ValueError("Unknown module")
         if not module.enabled:
             raise PermissionError("This module has no Cardputer Zero execution path")
+        if not self.demo and key not in {"Recon", "Start Wardrive", "ARP scan", "IP.CAM finder", "GPS setup"}:
+            return self.start_terminal(key)
         hardware = hardware or self.hardware()
         status, reason = module_status(module, hardware)
         if status in {"missing_dependency", "missing_hardware", "unsupported"}:
@@ -201,7 +220,7 @@ class SwissKnifeEngine:
 
     def _demo_run(self, operation: Operation) -> None:
         samples = {"Recon": ["[SIMULATED] LAB5-TEST  -51 dBm  ch 6", "[SIMULATED] GUEST-TEST  -72 dBm  ch 11"], "Start Wardrive": ["[SIMULATED] GPS fix 52.2300, 21.0100", "[SIMULATED] 2 networks logged"], "ARP scan": ["[SIMULATED] 192.0.2.10  02:00:00:00:00:10"], "IP.CAM finder": ["[SIMULATED] 192.0.2.20  camera candidate"], "GPS setup": ["[SIMULATED] GPS fix available"]}
-        for line in samples.get(operation.key, []):
+        for line in samples.get(operation.key, [f"[SIMULATED] {operation.key} workflow; no packets transmitted"]):
             if operation.cancelled.wait(0.15):
                 return
             operation.emit("result", line, simulated=True)

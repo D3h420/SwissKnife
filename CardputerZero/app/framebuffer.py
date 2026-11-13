@@ -13,6 +13,18 @@ FBIOGET_FSCREENINFO = 0x4602
 
 
 class Framebuffer:
+    @staticmethod
+    def detect_path() -> str:
+        try:
+            with open("/proc/fb", encoding="ascii") as handle:
+                for line in handle:
+                    index, _, name = line.strip().partition(" ")
+                    if "fb_st7789v" in name and index.isdigit():
+                        return f"/dev/fb{index}"
+        except OSError:
+            pass
+        return "/dev/fb0"
+
     def __init__(self, path: str = "/dev/fb0") -> None:
         self.fd = os.open(path, os.O_RDWR)
         try:

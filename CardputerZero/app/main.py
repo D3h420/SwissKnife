@@ -23,7 +23,7 @@ def run_device(controller) -> int:
     from .framebuffer import Framebuffer
     from .keyboard import Keyboard
     from .render import Renderer
-    display = Framebuffer(os.environ.get("APPLAUNCH_LINUX_FBDEV_DEVICE", "/dev/fb0"))
+    display = Framebuffer(os.environ.get("APPLAUNCH_LINUX_FBDEV_DEVICE") or os.environ.get("LV_LINUX_FBDEV_DEVICE") or Framebuffer.detect_path())
     try:
         keyboard = Keyboard()
     except Exception:
@@ -41,7 +41,7 @@ def run_device(controller) -> int:
         renderer = Renderer()
         last_draw = 0.0
         while running and not controller.quit_requested:
-            editing = (controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter"))
+            editing = controller.screen == "running" and controller.awaiting_input
             for key, char in keyboard.events(editing=editing):
                 controller.handle(key, char)
             changed = controller.tick()
@@ -76,7 +76,7 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     def key_event(event) -> None:
         mapping = {"Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT", "Return": "ENTER", "Escape": "ESC", "Home": "HOME", "Prior": "PAGEUP", "Next": "PAGEDOWN", "BackSpace": "BACKSPACE"}
         key = mapping.get(event.keysym)
-        editing = (controller.screen == "config" and controller.selected < len(controller._config_rows()) and controller._config_rows()[controller.selected].startswith("SSID filter"))
+        editing = controller.screen == "running" and controller.awaiting_input
         if not key and not editing:
             key = {"f": "UP", "x": "DOWN", "z": "LEFT", "c": "RIGHT"}.get(event.char.lower())
         if key:
