@@ -27,8 +27,6 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(c.module.key, "Recon")
         c.handle("ENTER")
-        self.assertEqual(c.screen, "confirm")
-        c.handle("ENTER")
         self.assertEqual(c.screen, "running")
         c.handle("HOME")
         self.assertEqual(c.screen, "menu")
@@ -58,17 +56,17 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(c.menu, "main")
 
-    def test_all_catalogue_modules_can_open_confirmation(self):
+    def test_module_starts_directly_from_description(self):
         c = self.controller
         c.screen = "detail"
         c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
         c.handle("ENTER")
-        self.assertEqual(c.screen, "confirm")
+        self.assertEqual(c.screen, "running")
 
     def test_demo_operation_returns_results(self):
         c = self.controller
         c.module = next(item for item in c.engine.modules() if item.key == "Recon")
-        c.screen = "confirm"
+        c.screen = "detail"
         c.handle("ENTER")
         self.assertEqual(c.screen, "running")
         deadline = time.monotonic() + 2
@@ -105,7 +103,7 @@ class ControllerTests(unittest.TestCase):
         c.tick()
         self.assertEqual(c.hardware.wifi, ())
         c.handle("ENTER")
-        self.assertEqual(c.screen, "confirm")
+        self.assertEqual(c.screen, "running")
 
     def test_terminal_prompt_accepts_text_and_hides_secret(self):
         c = self.controller

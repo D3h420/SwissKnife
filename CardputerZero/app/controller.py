@@ -22,6 +22,19 @@ SUBMENUS = {
     "Wardrive": tuple(item["name"] for item in WARDRIVE_MENU.values()),
 }
 SPLASH_DELAY = 2.5
+MODULE_COPY = {
+    "Recon": "Discover nearby Wi-Fi networks and inspect radio activity.",
+    "Deauth": "Manage the existing Deauth workflow.",
+    "Portal": "Configure a local captive portal.",
+    "Evil Twin": "Configure the Evil Twin workflow.",
+    "Handshaker": "Inspect and capture Wi-Fi handshakes.",
+    "WiFi Poet": "Configure wireless beacon messages.",
+    "Dragon Drain": "Inspect the Dragon Drain workflow.",
+    "ARP scan": "Find devices on the connected network.",
+    "IP.CAM finder": "Find possible IP cameras on the network.",
+    "Start Wardrive": "Record nearby networks with GPS position.",
+    "GPS setup": "Check your GPS receiver and position fix.",
+}
 
 
 @dataclass
@@ -42,6 +55,8 @@ class ViewState:
     records: list[dict] = field(default_factory=list)
     summary: str = ""
     prompt_text: str = ""
+    description: str = ""
+    status_label: str = ""
 
 
 class Controller:
@@ -174,19 +189,11 @@ class Controller:
         if self.screen == "detail":
             assert self.module
             status, reason = module_status(self.module, self.hardware) if self.hardware else ("requires_configuration", "Detecting hardware")
-            labels = {"needs_device_test": "Ready to start", "missing_dependency": "Missing tool", "missing_hardware": "Hardware unavailable", "requires_configuration": "Checking hardware"}
-            rows = [self.module.description, labels.get(status, status.replace('_', ' '))]
+            labels = {"needs_device_test": "Ready", "missing_dependency": "Needs a tool", "missing_hardware": "Hardware unavailable", "requires_configuration": "Checking hardware"}
+            rows = [MODULE_COPY.get(self.module.key, self.module.description), labels.get(status, status.replace('_', ' '))]
             if status in {"missing_dependency", "missing_hardware"}:
                 rows.append(reason)
-            rows.append("ENTER opens this module")
-            return ViewState(screen="detail", title=self.module.label.upper(), rows=self._wrap(rows), hint="ENTER run  ESC back", status=status, accent="amber" if status != "needs_device_test" else "green", **common)
-        if self.screen == "confirm":
-            assert self.module
-            rows = [f"Run {self.module.label} as root?", "The module asks the same questions as in the terminal."]
-            if self.module.needs_wifi:
-                rows.append("Changing Wi-Fi mode or network may interrupt SSH and the management connection.")
-            rows += ["ENTER start", "ESC back"]
-            return ViewState(screen="detail", title="CONFIRM / " + self.module.label.upper(), rows=self._wrap(rows), hint="ENTER start  ESC back", accent="amber", **common)
+            return ViewState(screen="module_detail", title=self.module.label, rows=self._wrap(rows), description=rows[0], status_label=rows[1], hint="ENTER start  ESC back", status=status, **common)
         if self.screen in {"running", "results"}:
             if self.awaiting_input and self.choices:
                 return ViewState(screen="list", title=(self.console.prompt() or "CHOOSE")[:28], rows=[f"{key}  {label}" for key, label in self.choices], selected=self.choice_index, hint="UP/DOWN select  ENTER", simulated=self.engine.demo)
@@ -236,7 +243,7 @@ class Controller:
                     self.menu = "main"
                     self._goto("menu")
                 return
-            back = {"detail": "menu", "confirm": "detail", "results": "detail", "error": "detail", "network_detail": "results"}
+            back = {"detail": "menu", "results": "detail", "error": "detail", "network_detail": "results"}
             if self.screen == "detail":
                 self.menu = self.return_menu
             self._goto(back.get(self.screen, "menu"))
@@ -299,9 +306,6 @@ class Controller:
                 self._open_module(label)
             return
         if self.screen == "detail" and key == "ENTER" and self.module and self.module.enabled:
-            self._goto("confirm")
-            return
-        if self.screen == "confirm" and key == "ENTER":
             self._start_operation()
             return
         if self.screen == "results" and self.records and key == "ENTER":

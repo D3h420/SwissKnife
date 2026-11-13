@@ -47,7 +47,7 @@ Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualn
 | WiFi Poet | `modules/wifi_poet.py` | Adapter monitor, `mdk4` i biblioteki Python |
 | Dragon Drain | `modules/dragon_drain.py` | Specjalistyczne narzędzia i źródła zewnętrzne |
 
-Pozycje uruchamiają wspólne moduły Python. Numerowane wybory są pokazywane jako karty, pola tekstowe obsługuje klawiatura. Recon przesyła wyniki skanu i sniffera jako rekordy sieci. Wardrive pokazuje bieżące sieci i licznik zapisów, ARP scan urządzenia, a IP.CAM finder kandydatów kamer. GUI pokazuje te dane w kartach z osobnym widokiem szczegółów. Pozostałe moduły korzystają z graficznego wyboru numerowanych opcji, lecz ich wyniki nadal wymagają osobnych widoków danych; nie są jeszcze pełną nakładką graficzną. Funkcje zależne od trybu monitorowania, AP, GPS lub zewnętrznych źródeł nadal wymagają zgodnego sprzętu i testów. Root nie zastąpi brakującego narzędzia ani możliwości adaptera. Część modułów może zmienić tryb interfejsu lub profil sieci i przerwać połączenie używane do SSH; przed uruchomieniem wybierz kartę przeznaczoną do danej operacji.
+Opis modułu ma jeden przycisk Start; Enter uruchamia funkcję bez dodatkowego ekranu potwierdzenia. Pozycje uruchamiają wspólne moduły Python. Numerowane wybory są pokazywane jako karty, pola tekstowe obsługuje klawiatura. Recon przesyła wyniki skanu i sniffera jako rekordy sieci. Wardrive pokazuje bieżące sieci i licznik zapisów, ARP scan urządzenia, a IP.CAM finder kandydatów kamer. GUI pokazuje te dane w kartach z osobnym widokiem szczegółów. Pozostałe moduły korzystają z graficznego wyboru numerowanych opcji, lecz ich wyniki nadal wymagają osobnych widoków danych; nie są jeszcze pełną nakładką graficzną. Funkcje zależne od trybu monitorowania, AP, GPS lub zewnętrznych źródeł nadal wymagają zgodnego sprzętu i testów. Root nie zastąpi brakującego narzędzia ani możliwości adaptera. Część modułów może zmienić tryb interfejsu lub profil sieci i przerwać połączenie używane do SSH; przed uruchomieniem wybierz kartę przeznaczoną do danej operacji.
 
 ## Menu i ekran startowy
 
@@ -85,7 +85,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.2.2-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.2.3-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -94,7 +94,7 @@ Wynik: `dist/swissknife-cardputer_0.2.2-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.2-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.3-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt --no-install-recommends` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.
