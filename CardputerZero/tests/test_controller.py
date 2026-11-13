@@ -241,6 +241,7 @@ class ControllerTests(unittest.TestCase):
         c.tick()
         self.assertTrue(c.sniffer_post_choice_ready)
         c.handle("RIGHT")
+        c.handle("RIGHT")
         c.handle("ENTER")
         self.assertEqual(answers, ["", "2"])
         events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to stop sniffer: "}))
@@ -250,9 +251,25 @@ class ControllerTests(unittest.TestCase):
         c.tick()
         c.handle("RIGHT")
         c.handle("RIGHT")
+        c.handle("RIGHT")
         c.handle("ENTER")
         self.assertEqual(answers, ["", "2", "", "0"])
         self.assertEqual(c.screen, "menu")
+
+    def test_sniffer_nearby_ap_list(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.recon_mode = "2"
+        c.screen = "sniffer_live"
+        c.sniffer_active = True
+        c.records = [{"ssid": "LAB5", "channel": 6}]
+        c.handle("RIGHT")
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "sniffer_aps")
+        self.assertEqual(c.view().records[0]["ssid"], "LAB5")
+        c.handle("ESC")
+        self.assertEqual(c.screen, "sniffer_live")
 
     def test_about_shortcut_and_qr_navigation(self):
         c = self.controller

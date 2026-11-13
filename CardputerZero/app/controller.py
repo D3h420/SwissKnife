@@ -181,7 +181,7 @@ class Controller:
                             self.sniffer_post_choice_ready = True
                             self.screen = "sniffer_stopped"
                     wants_choice = bool(re.search(r"\b(select|choose|choice|option|number)\b", prompt, re.IGNORECASE))
-                    available = current_choices(self.console.visible_lines()) if wants_choice and not self.secret_input and self.screen not in {"sniffer_stopped", "sniffer_live", "sniffer_probes"} else []
+                    available = current_choices(self.console.visible_lines()) if wants_choice and not self.secret_input and self.screen not in {"sniffer_stopped", "sniffer_live", "sniffer_probes", "sniffer_aps"} else []
                     self.back_choice = next((key for key, label in available if label.casefold().startswith("back")), "")
                     self.choices = [(key, label) for key, label in available if not label.casefold().startswith("back")]
                     self.choice_index = 0
@@ -218,7 +218,7 @@ class Controller:
                 if event.kind == "error":
                     self.error = event.message
                     self.screen = "results"
-                elif event.kind == "finished" and self.screen in {"running", "sniffer_live", "sniffer_stopped", "sniffer_probes"}:
+                elif event.kind == "finished" and self.screen in {"running", "sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
                     self.awaiting_input = False
                     if self.sniffer_exit_requested:
                         self.menu = "main"
@@ -292,7 +292,7 @@ class Controller:
             return ViewState(screen="recon_modes", title="RECON", description=MODULE_COPY["Recon"], rows=["Scaner", "Sniffer"], hint="F/X choose  ENTER open  ESC back", **common)
         if self.screen == "recon_scan_setup":
             return ViewState(screen="recon_scan_setup", title="SCANER", status_label=f"{self.scan_durations['Recon']} s", hint="Z/C ±1  F/X ±5  T type  ENTER start", **common)
-        if self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes"}:
+        if self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
             phase = "LIVE" if self.sniffer_active else ("READY" if self.sniffer_post_choice_ready else "WORKING")
             return ViewState(screen=self.screen, title="SNIFFER", selected=self.selected, records=self.records, probe_records=self.probe_records, packets=self.packet_count, probes=self.probe_total, status=self.operation.state if self.operation else "", status_label=phase, hint="ENTER select  ESC back", simulated=self.engine.demo)
         if self.screen == "detail":
@@ -339,7 +339,7 @@ class Controller:
             self._goto("about")
             return
         if key == "HOME":
-            if self.module and self.module.key == "Recon" and self.recon_mode == "2" and self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes"}:
+            if self.module and self.module.key == "Recon" and self.recon_mode == "2" and self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
                 self.sniffer_exit_requested = True
                 if self.awaiting_input and self.operation:
                     try:
@@ -356,6 +356,9 @@ class Controller:
             return
         if key == "ESC":
             if self.screen == "sniffer_probes":
+                self._goto("sniffer_live" if self.sniffer_active else "sniffer_stopped")
+                return
+            if self.screen == "sniffer_aps":
                 self._goto("sniffer_live" if self.sniffer_active else "sniffer_stopped")
                 return
             if self.screen == "sniffer_live":
@@ -444,24 +447,28 @@ class Controller:
             return
         if self.screen == "sniffer_live":
             if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
-                self.selected = max(0, min(2, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
+                self.selected = max(0, min(3, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
                 self.dirty = True
             elif key == "ENTER":
                 if self.selected == 0:
                     self._stop_sniffer()
                 elif self.selected == 1:
                     self._goto("sniffer_probes")
+                elif self.selected == 2:
+                    self._goto("sniffer_aps")
                 else:
                     self.handle("HOME")
             return
         if self.screen == "sniffer_stopped":
             if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
-                self.selected = max(0, min(2, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
+                self.selected = max(0, min(3, self.selected + (-1 if key in {"UP", "LEFT"} else 1)))
                 self.dirty = True
             elif key == "ENTER":
                 if self.selected == 0:
                     self._goto("sniffer_probes")
                 elif self.selected == 1:
+                    self._goto("sniffer_aps")
+                elif self.selected == 2:
                     self._resume_sniffer()
                 else:
                     self._leave_sniffer()
@@ -470,6 +477,12 @@ class Controller:
             if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
                 step = {"UP": -1, "DOWN": 1, "PAGEUP": -3, "PAGEDOWN": 3}[key]
                 self.selected = max(0, min(max(0, len(self.probe_records) - 1), self.selected + step))
+                self.dirty = True
+            return
+        if self.screen == "sniffer_aps":
+            if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
+                step = {"UP": -1, "DOWN": 1, "PAGEUP": -3, "PAGEDOWN": 3}[key]
+                self.selected = max(0, min(max(0, len(self.records) - 1), self.selected + step))
                 self.dirty = True
             return
         if self.screen == "running" and self.awaiting_input:

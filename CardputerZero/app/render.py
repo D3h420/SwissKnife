@@ -55,7 +55,8 @@ class Renderer:
 
     def _button(self, draw, box, label: str, active: bool, color=GREEN) -> None:
         draw.rounded_rectangle(box, radius=8, fill=color if active else PANEL, outline=color)
-        draw.text((box[0] + 9, box[1] + 4), self._clip(draw, label, self.medium, box[2] - box[0] - 15), font=self.medium, fill=BG if active else TEXT)
+        font = self.small if box[2] - box[0] < 80 else self.medium
+        draw.text((box[0] + 9, box[1] + (7 if font == self.small else 4)), self._clip(draw, label, font, box[2] - box[0] - 15), font=font, fill=BG if active else TEXT)
 
     def _draw_status(self, draw) -> None:
         battery = self._battery_percent()
@@ -152,10 +153,10 @@ class Renderer:
                 draw.rounded_rectangle((x, 50, x + 98, 104), radius=9, fill=PANEL)
                 draw.text((x + 8, 56), label, font=self.small, fill=DIM)
                 draw.text((x + 8, 73), str(value), font=self.menu, fill=TEXT)
-            actions = ("Stop", "Probes", "Main") if live else ("Probes", "Resume", "Main")
+            actions = ("Stop", "Probes", "APs", "Main") if live else ("Probes", "APs", "Resume", "Main")
             for i, label in enumerate(actions):
-                x = 7 + i * 103
-                self._button(draw, (x, 115, x + 98, 142), label, state.selected == i, GREEN if i == 0 else BLUE)
+                x = 7 + i * 77
+                self._button(draw, (x, 115, x + 72, 142), label, state.selected == i, GREEN if i == 0 else BLUE)
         elif state.screen == "sniffer_probes":
             draw.text((10, 36), f"{state.probes} probes / {len(state.probe_records)} SSIDs", font=self.body, fill=DIM)
             if not state.probe_records:
@@ -167,6 +168,18 @@ class Renderer:
                 draw.rounded_rectangle((7, y, 312, y + 25), radius=6, fill=(35, 53, 77) if active else PANEL)
                 draw.text((15, y + 3), self._clip(draw, str(record.get("ssid") or "<hidden>"), self.body, 244), font=self.body, fill=TEXT)
                 draw.text((270, y + 3), str(record.get("count") or 0), font=self.body, fill=GREEN)
+        elif state.screen == "sniffer_aps":
+            draw.text((10, 36), f"{len(state.records)} nearby APs", font=self.body, fill=DIM)
+            if not state.records:
+                draw.text((14, 78), "No APs yet", font=self.body, fill=TEXT)
+            first = max(0, state.selected - 2)
+            for i, record in enumerate(state.records[first:first + 3]):
+                y = 57 + i * 28
+                active = first + i == state.selected
+                draw.rounded_rectangle((7, y, 312, y + 25), radius=6, fill=(35, 53, 77) if active else PANEL)
+                draw.text((15, y + 3), self._clip(draw, str(record.get("ssid") or "<hidden>"), self.body, 205), font=self.body, fill=TEXT)
+                info = f"CH {record.get('channel') or '?'}"
+                draw.text((241, y + 3), info, font=self.small, fill=GREEN)
         elif state.screen == "networks":
             draw.text((10, 35), self._clip(draw, state.summary or "Networks", self.body, 300), font=self.body, fill=DIM)
             first = max(0, state.selected - 1)

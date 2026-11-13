@@ -10,7 +10,7 @@ class RenderTests(unittest.TestCase):
         from CardputerZero.app.render import Renderer
 
         renderer = Renderer()
-        for screen in ("splash", "list", "detail", "log", "about", "recon_modes", "recon_scan_setup", "sniffer_live", "sniffer_stopped", "sniffer_probes"):
+        for screen in ("splash", "list", "detail", "log", "about", "recon_modes", "recon_scan_setup", "sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"):
             with self.subTest(screen=screen):
                 frame = renderer.draw(
                     ViewState(screen=screen, title="SwissKnife", rows=["A long result " * 8] * 12, simulated=True),
