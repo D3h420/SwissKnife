@@ -1,9 +1,9 @@
 """Run a SwissKnife CLI module with its input requests on a separate pipe.
 
-The LCD application cannot infer from terminal output when a module is waiting
+The graphical application cannot infer from terminal output when a module is waiting
 for text.  This process intercepts the input functions used by the existing
 modules and announces each blocking read on ``SWISSKNIFE_CONTROL_FD``.  The
-module's normal output stays on stdout/stderr for display on the LCD.
+module's normal output stays on stdout/stderr for display in the GUI.
 """
 
 from __future__ import annotations

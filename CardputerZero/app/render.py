@@ -8,12 +8,12 @@ from .controller import ViewState
 
 
 WIDTH, HEIGHT = 320, 170
-BG = (7, 15, 13)
-PANEL = (14, 29, 23)
-GREEN = (112, 238, 166)
-AMBER = (246, 185, 85)
-TEXT = (226, 239, 229)
-DIM = (129, 154, 138)
+BG = (5, 12, 27)
+PANEL = (12, 28, 51)
+GREEN = (182, 247, 75)
+AMBER = (255, 166, 48)
+TEXT = (245, 250, 255)
+DIM = (159, 181, 205)
 
 
 class Renderer:
@@ -26,7 +26,9 @@ class Renderer:
         )
         font_path = next((path for path in candidates if Path(path).exists()), None)
         self.small = ImageFont.truetype(font_path, 10) if font_path else ImageFont.load_default()
-        self.medium = ImageFont.truetype(font_path, 12) if font_path else ImageFont.load_default()
+        self.medium = ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
+        self.body = ImageFont.truetype(font_path, 14) if font_path else ImageFont.load_default()
+        self.menu = ImageFont.truetype(font_path, 16) if font_path else ImageFont.load_default()
         self.large = ImageFont.truetype(font_path, 25) if font_path else ImageFont.load_default()
         intro_path = Path(__file__).resolve().parents[1] / "swiss_intro.png"
         self.intro = None
@@ -63,29 +65,29 @@ class Renderer:
         accent = AMBER if state.accent == "amber" else GREEN
         if bright:
             accent = (170, 255, 193)
-        for y in range(0, HEIGHT, 5):
-            draw.line((0, y, WIDTH, y), fill=(10, 21, 17))
-        draw.rectangle((0, 0, WIDTH - 1, 25), fill=PANEL)
-        draw.rectangle((0, 25, WIDTH - 1, 26), fill=accent)
-        draw.text((8, 5), self._clip(draw, state.title.upper(), self.medium, 255), font=self.medium, fill=accent)
-        draw.text((278, 5), "LAB5", font=self.small, fill=DIM)
+        draw.rectangle((0, 0, WIDTH - 1, 28), fill=PANEL)
+        draw.rectangle((0, 28, WIDTH - 1, 29), fill=accent)
+        draw.text((9, 5), self._clip(draw, state.title.upper(), self.medium, 250), font=self.medium, fill=TEXT)
+        draw.text((278, 7), "LAB5", font=self.small, fill=GREEN)
 
         if state.screen == "list":
-            first = max(0, state.selected - 4)
-            visible = state.rows[first:first + 5]
+            first = max(0, state.selected - 3)
+            visible = state.rows[first:first + 4]
             for i, row in enumerate(visible):
                 idx = first + i
-                y = 34 + i * 22
+                y = 34 + i * 28
                 active = idx == state.selected
                 if active:
-                    draw.rounded_rectangle((5, y - 2, 314, y + 19), radius=3, fill=(31, 64, 46), outline=GREEN)
-                    draw.text((10, y + 1), ">", font=self.medium, fill=AMBER)
-                draw.text((25, y + 1), self._clip(draw, row, self.medium, 282), font=self.medium, fill=TEXT if active else DIM)
-            if len(state.rows) > 5:
-                draw.text((286, 130), f"{state.selected + 1}/{len(state.rows)}", font=self.small, fill=DIM)
+                    draw.rounded_rectangle((5, y - 2, 314, y + 24), radius=6, fill=(26, 48, 73), outline=GREEN, width=2)
+                    draw.rounded_rectangle((8, y + 1, 13, y + 20), radius=2, fill=GREEN)
+                else:
+                    draw.rounded_rectangle((5, y - 2, 314, y + 24), radius=5, fill=PANEL)
+                draw.text((22, y + 1), self._clip(draw, row, self.menu, 270), font=self.menu, fill=TEXT if active else DIM)
+            if len(state.rows) > 4:
+                draw.text((273, 132), f"{state.selected + 1}/{len(state.rows)}", font=self.small, fill=AMBER)
         elif state.screen in {"log", "detail"}:
             lines: list[str] = []
-            max_chars = 46 if state.screen == "log" else 42
+            max_chars = 31
             for item in state.rows:
                 words = str(item).split()
                 line = ""
@@ -96,19 +98,19 @@ class Renderer:
                     else:
                         line = (line + " " + word).strip()
                 lines.append(line)
-            for i, line in enumerate(lines[state.scroll:state.scroll + 7]):
-                y = 34 + i * 15
-                color = AMBER if line.startswith("Error") or line.startswith("Status:") else TEXT
-                draw.text((8, y), self._clip(draw, line, self.small, 302), font=self.small, fill=color)
+            for i, line in enumerate(lines[state.scroll:state.scroll + 5]):
+                y = 37 + i * 21
+                color = AMBER if line.startswith("Error") else (GREEN if line.lstrip().startswith(("[1]", "[2]", "[0]", "Status:")) else TEXT)
+                draw.text((9, y), self._clip(draw, line, self.body, 302), font=self.body, fill=color)
             if state.screen == "log" and state.status:
-                draw.rectangle((237, 126, 312, 143), fill=(37, 45, 30))
+                draw.rounded_rectangle((237, 128, 312, 144), radius=4, fill=(38, 50, 63))
                 draw.text((242, 130), self._clip(draw, state.status.upper(), self.small, 66), font=self.small, fill=AMBER)
         else:
             for i, row in enumerate(state.rows[:5]):
                 draw.text((8, 34 + i * 19), self._clip(draw, row, self.medium, 300), font=self.medium, fill=TEXT)
 
         draw.rectangle((0, 146, WIDTH - 1, HEIGHT - 1), fill=PANEL)
-        draw.line((0, 146, WIDTH - 1, 146), fill=(45, 84, 59))
+        draw.line((0, 146, WIDTH - 1, 146), fill=(56, 83, 105))
         if state.awaiting_input:
             value = "*" * len(state.input_value) if state.secret_input else state.input_value
             prompt = ("PASS> " if state.secret_input else "INPUT> ") + value + "_"

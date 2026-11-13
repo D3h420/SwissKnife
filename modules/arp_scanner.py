@@ -573,7 +573,7 @@ class ArpScanner(Module):
                 self.console.print(f"[green]Selected interface:[/green] {display_name}")
             return ordered[0]
 
-        if os.environ.get("SWISSKNIFOS_LCD"):
+        if os.environ.get("SWISSKNIFE_GUI"):
             print("\nAvailable interfaces:", flush=True)
             for idx, iface in enumerate(ordered, start=1):
                 profile = self._interface_profiles.get(iface)
@@ -595,7 +595,7 @@ class ArpScanner(Module):
                 )
 
         while self.running:
-            raw = input("Select interface (number): ") if os.environ.get("SWISSKNIFOS_LCD") else Prompt.ask("Select interface (number)", default="1", console=self.console)
+            raw = input("Select interface (number): ") if os.environ.get("SWISSKNIFE_GUI") else Prompt.ask("Select interface (number)", default="1", console=self.console)
             try:
                 picked = int(raw)
             except ValueError:
@@ -847,7 +847,7 @@ class ArpScanner(Module):
         return ordered, ""
 
     def _render_networks_table(self, networks: List[WiFiNetwork]) -> None:
-        if os.environ.get("SWISSKNIFOS_LCD"):
+        if os.environ.get("SWISSKNIFE_GUI"):
             print("\nNearby Wi-Fi Networks:", flush=True)
             for idx, net in enumerate(networks, start=1):
                 print(f"  [{idx}] {net.ssid or '<hidden>'} - {net.signal if net.signal is not None else '?'} dBm", flush=True)
@@ -887,7 +887,7 @@ class ArpScanner(Module):
             )
 
         while self.running:
-            raw = input("Choose network number: ") if os.environ.get("SWISSKNIFOS_LCD") else Prompt.ask("Choose network number", default="1", console=self.console)
+            raw = input("Choose network number: ") if os.environ.get("SWISSKNIFE_GUI") else Prompt.ask("Choose network number", default="1", console=self.console)
             try:
                 idx = int(raw)
             except ValueError:

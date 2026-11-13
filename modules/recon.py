@@ -921,7 +921,7 @@ def display_scan_live_update(
     remaining: int,
     interface: str,
 ) -> None:
-    if os.environ.get("SWISSKNIFOS_LCD"):
+    if os.environ.get("SWISSKNIFE_GUI"):
         sys.stdout.write("\f" + f"Scanning on {interface}\n{remaining}s remaining\n")
         for line in format_scan_results_lines(aps, vendors):
             sys.stdout.write(line + "\n")
@@ -994,7 +994,7 @@ def display_sniffer_live(
     status: str,
     control_hint: Optional[str] = None,
 ) -> None:
-    if os.environ.get("SWISSKNIFOS_LCD"):
+    if os.environ.get("SWISSKNIFE_GUI"):
         sys.stdout.write(
             "\f"
             f"Sniffer on {interface}\n"

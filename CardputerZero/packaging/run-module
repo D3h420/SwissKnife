@@ -14,7 +14,7 @@ import sys
 
 
 APP = Path("/usr/share/APPLaunch/apps/swissknife-cardputer")
-RUNNER = APP / "RPi_LCD_HAT" / "runner.py"
+RUNNER = APP / "core" / "cli_runner.py"
 MODULE_DIR = APP / "modules"
 
 
@@ -56,7 +56,7 @@ def main() -> int:
         return 2
     if not all(
         _trusted_directory(path)
-        for path in (APP, APP / "core", MODULE_DIR, APP / "RPi_LCD_HAT")
+        for path in (APP, APP / "core", MODULE_DIR)
     ) or not _trusted_file(RUNNER):
         print("Installed runner is missing or unsafe", file=sys.stderr)
         return 1
@@ -84,7 +84,7 @@ def main() -> int:
         "SWISSKNIFE_DATA_DIR": "/var/lib/swissknife",
         "SWISSKNIFE_CONTROL_FD": "2",
         "SWISSKNIFE_CONTROL_PREFIX": "SKINPUT:",
-        "SWISSKNIFOS_LCD": "1",
+        "SWISSKNIFE_GUI": "1",
         "TERM": "dumb",
         "NO_COLOR": "1",
         "CLICOLOR": "0",

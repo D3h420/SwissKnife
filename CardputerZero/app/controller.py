@@ -8,9 +8,9 @@ import textwrap
 import time
 from dataclasses import dataclass, field
 
-from core.engine import ModuleInfo, Operation, SwissKnifeEngine, compatibility_issues, module_status
+from core.engine import ModuleInfo, Operation, SwissKnifeEngine, module_status
 from core.hardware import HardwareSnapshot
-from RPi_LCD_HAT.logic import TerminalBuffer
+from core.terminal_buffer import TerminalBuffer
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 
@@ -94,7 +94,7 @@ class Controller:
                 if event.kind == "output":
                     self.console.feed(event.message)
                     if self.follow_output:
-                        self.scroll = max(0, len(self._wrap(self.console.visible_lines())) - 7)
+                        self.scroll = max(0, len(self._wrap(self.console.visible_lines(), 31)) - 5)
                 elif event.kind == "input":
                     self.awaiting_input = True
                     self.secret_input = bool(event.data.get("secret", False))
@@ -126,7 +126,7 @@ class Controller:
             self._goto("detail")
 
     @staticmethod
-    def _wrap(rows: list[str], width: int = 42) -> list[str]:
+    def _wrap(rows: list[str], width: int = 31) -> list[str]:
         return [line for row in rows for line in (textwrap.wrap(str(row), width=width, break_long_words=True) or [""])]
 
     def view(self) -> ViewState:
@@ -138,9 +138,11 @@ class Controller:
         if self.screen == "detail":
             assert self.module
             status, reason = module_status(self.module, self.hardware) if self.hardware else ("requires_configuration", "Detecting hardware")
-            issues = compatibility_issues(self.module, self.hardware) if self.hardware else ("Hardware discovery pending",)
-            rows = [self.module.description, f"Status: {status.replace('_', ' ')}", reason, f"Tools: {', '.join(self.module.tools)}"]
-            rows += [f"Check: {issue}" for issue in issues] if issues else ["Prerequisites detected; device test pending"]
+            labels = {"needs_device_test": "Ready to start", "missing_dependency": "Missing tool", "missing_hardware": "Hardware unavailable", "requires_configuration": "Checking hardware"}
+            rows = [self.module.description, labels.get(status, status.replace('_', ' '))]
+            if status in {"missing_dependency", "missing_hardware"}:
+                rows.append(reason)
+            rows.append("ENTER opens this module")
             return ViewState(screen="detail", title=self.module.label.upper(), rows=self._wrap(rows), hint="ENTER run  ESC back", status=status, accent="amber" if status != "needs_device_test" else "green", **common)
         if self.screen == "confirm":
             assert self.module
@@ -150,7 +152,7 @@ class Controller:
             rows += ["ENTER start", "ESC back"]
             return ViewState(screen="detail", title="CONFIRM / " + self.module.label.upper(), rows=self._wrap(rows), hint="ENTER start  ESC back", accent="amber", **common)
         if self.screen in {"running", "results"}:
-            terminal_rows = self._wrap(self.console.visible_lines())
+            terminal_rows = self._wrap(self.console.visible_lines(), 31)
             rows = terminal_rows if terminal_rows else self._wrap(self.logs[-500:])
             return ViewState(screen="log", title=("RUN / " if self.screen == "running" else "RESULT / ") + (self.module.label.upper() if self.module else ""), rows=rows, hint="TYPE answer  ENTER submit" if self.awaiting_input else ("ESC cancel  HOME menu" if self.screen == "running" else "ESC back  HOME menu"), status=self.operation.state if self.operation else "", accent="amber" if self.screen == "running" else "green", awaiting_input=self.awaiting_input, input_value=self.input_value, secret_input=self.secret_input, **common)
         if self.screen == "error":
@@ -222,7 +224,7 @@ class Controller:
             if self.screen in {"running", "results", "hardware", "detail", "confirm", "error"}:
                 self.scroll = max(0, min(max(0, len(rows) - 5), self.scroll + step))
                 if self.screen in {"running", "results"}:
-                    self.follow_output = self.scroll >= max(0, len(rows) - 7)
+                    self.follow_output = self.scroll >= max(0, len(rows) - 5)
             elif rows:
                 self.selected = max(0, min(len(rows) - 1, self.selected + step))
             self.dirty = True

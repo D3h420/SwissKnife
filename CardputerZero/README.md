@@ -4,9 +4,9 @@
 
 ## Stan implementacji
 
-To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik; istniejące skrypty wymagające roota są wywoływane przez kontrolowany proces. Dotychczasowe `swiss_knife.py` i `RPi_LCD_HAT/` zachowują swoje wejścia.
+To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik; istniejące skrypty wymagające roota są wywoływane przez kontrolowany proces. Terminalowy `swiss_knife.py` pozostaje drugim wejściem do tego samego silnika.
 
-Kod działa w trybie symulacji na komputerze. Pakiet 0.2.0 zainstalowano na fizycznym Cardputer Zero z Debianem 13; potwierdzono dostęp do ekranu 320 × 170, klawiatury oraz uruchomienie i anulowanie terminalowego Recon z jego oryginalnym menu. Wcześniejszy skan Recon na `wlan0` także został sprawdzony. Pozostałe moduły, adaptery i pełna obsługa GUI wymagają testów sprzętowych. Dostępność pozycji w menu nie oznacza potwierdzonego działania na urządzeniu.
+Kod działa w trybie symulacji na komputerze. Poprzedni pakiet 0.2.0 zainstalowano na fizycznym Cardputer Zero z Debianem 13; potwierdzono dostęp do ekranu 320 × 170, klawiatury oraz uruchomienie i anulowanie terminalowego Recon z jego oryginalnym menu. Wcześniejszy skan Recon na `wlan0` także został sprawdzony. Pakiet 0.2.1 z nowym wyglądem zbudowano lokalnie, ale nie udało się go jeszcze zainstalować, ponieważ `c0.local` przestał odpowiadać. Pozostałe moduły, adaptery i pełna obsługa GUI wymagają testów sprzętowych.
 
 ## Podstawa platformowa
 
@@ -22,9 +22,8 @@ Oficjalny szablon preferuje LVGL w C/C++. W tym projekcie Python bezpośrednio w
 
 ```text
 swiss_knife.py ─┐
-RPi_LCD_HAT/ ────┼── core/features.py + modules/ + core/paths.py
-CardputerZero/ ─┘                     │
-              └── core/engine.py + core/hardware.py
+                ├── core/ + modules/ + html/
+CardputerZero/ ─┘
 ```
 
 `core/engine.py` udostępnia listę modułów, status zależności i sprzętu oraz operacje z wynikami, błędami i anulowaniem. Dla wszystkich pozycji menu uruchamia **ten sam plik modułu**, którego używa terminal. Warstwa wejścia przechwytuje terminalowe pytania `input`, `getpass` i `stdin.readline`, aby odpowiedzi dało się wpisać fizyczną klawiaturą. Skrypt działa w osobnym procesie, a GUI odczytuje zdarzenia bez blokowania ekranu. `core/hardware.py` wykrywa interfejsy, USB, GPS, trasę domyślną, narzędzia i uprawnienia.
@@ -56,7 +55,7 @@ Po uruchomieniu APPLaunch wyświetla `CardputerZero/swiss_intro.png` na ekranie 
 
 Układ menu jest taki sam jak w terminalowym `swiss_knife.py`:
 
-- **Recon** — bezpośrednio do informacji i konfiguracji Recon.
+- **Recon** — otwiera widok modułu i jego uruchomienie.
 - **Attacks** — Deauth, Portal, Evil Twin, Handshaker, WiFi Poet, Dragon Drain, ARP scan, IP.CAM finder, Back.
 - **Wardrive** — Start Wardrive, GPS setup, Back.
 - **Exit** — powrót do APPLaunch.
@@ -86,7 +85,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.2.0-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.2.1-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -95,7 +94,7 @@ Wynik: `dist/swissknife-cardputer_0.2.0-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.0-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.1-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt --no-install-recommends` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.
@@ -122,7 +121,6 @@ Testy bez sprzętu:
 
 ```bash
 python3 -m unittest discover -s CardputerZero/tests -p 'test_*.py'
-python3 -m unittest discover -s RPi_LCD_HAT -p 'test_*.py'
 ```
 
 ## Rozwiązywanie problemów i ograniczenia
