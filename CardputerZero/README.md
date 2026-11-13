@@ -90,11 +90,13 @@ Wynik: `dist/swissknife-cardputer_0.1.2-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 
 ## Instalacja na Cardputer Zero
 
-Skopiuj zbudowany `.deb`, a następnie na urządzeniu:
+Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-sudo apt install ./swissknife-cardputer_*.deb
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.1.2-*_arm64.deb one@c0.local
 ```
+
+Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.
 
 Pakiet umieszcza program w `/usr/share/APPLaunch/apps/swissknife-cardputer/`, uruchamialny wrapper w `/usr/share/APPLaunch/bin/` i wpis `.desktop` w `/usr/share/APPLaunch/applications/`. APPLaunch powinien wykryć SwissKnife jako osobną aplikację. `postinst` dodaje użytkownika uruchamiającego `sudo` (lub `pi`, jeśli nie da się go ustalić) do istniejących grup `video`, `input`, `dialout` i `plugdev`. Jeśli APPLaunch działa na innym koncie, dodaj to konto do tych grup ręcznie. Zaloguj się ponownie lub uruchom urządzenie ponownie, aby członkostwo zadziałało. Pakiet nie zmienia profili sieciowych ani ustawień DHCP.
 
