@@ -41,6 +41,7 @@ except ModuleNotFoundError:
     )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+from core.gui_events import emit as gui_emit
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -418,6 +419,10 @@ def select_target_ap(interface: str, duration_seconds: int) -> Optional[AccessPo
 
         logging.info("")
         logging.info(style("Observed networks:", STYLE_BOLD))
+        gui_emit("workflow_networks", module="Dragon Drain", interface=interface, records=[{
+            "ssid": ap.ssid, "bssid": ap.bssid, "channel": ap.channel,
+            "signal": ap.power, "security": ap.privacy, "clients": ap.clients,
+        } for ap in networks])
         for index, ap in enumerate(networks, start=1):
             ch = str(ap.channel) if ap.channel is not None else "?"
             power = f"{ap.power} dBm" if ap.power is not None else "signal ?"
@@ -619,6 +624,7 @@ def run_attack(interface: str, target: AccessPoint) -> bool:
         return False
 
     logging.info(style("Attack is running.", COLOR_SUCCESS, STYLE_BOLD))
+    gui_emit("workflow_status", module="Dragon Drain", phase="running", interface=interface, ssid=target.ssid, target=target.bssid)
     logging.info("Press %s to stop attack and return.", style("Enter", COLOR_SUCCESS, STYLE_BOLD))
 
     try:
@@ -630,6 +636,7 @@ def run_attack(interface: str, target: AccessPoint) -> bool:
         stop_process(process)
 
     logging.info(color_text("Dragon Drain stopped.", COLOR_SUCCESS))
+    gui_emit("workflow_status", module="Dragon Drain", phase="stopped", interface=interface, ssid=target.ssid, target=target.bssid)
     return True
 
 
@@ -686,6 +693,7 @@ def run_attack_session() -> None:
         logging.info("Selected: %s (%s)", style(target.ssid, COLOR_SUCCESS, STYLE_BOLD), target.bssid)
         logging.info("Channel: %s", target.channel if target.channel is not None else "?")
         logging.info("Security: %s", target.privacy)
+        gui_emit("workflow_status", module="Dragon Drain", phase="ready", interface=attack_interface, ssid=target.ssid, target=target.bssid)
 
         logging.info("")
         input(

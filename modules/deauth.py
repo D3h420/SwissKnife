@@ -42,6 +42,7 @@ except ModuleNotFoundError:
     )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+from core.gui_events import emit as gui_emit
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -648,6 +649,11 @@ def select_network(attack_interface: str, duration_seconds: int) -> Optional[Dic
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
+        gui_emit("workflow_networks", module="Deauth", interface=attack_interface, records=[{
+            "ssid": net.get("ssid"), "bssid": net.get("bssid"),
+            "channel": net.get("channel"), "signal": net.get("signal"),
+            "security": net.get("security") or net.get("encryption"),
+        } for net in networks])
         for index, net in enumerate(networks, start=1):
             signal = f"{net['signal']:.1f} dBm" if net["signal"] is not None else "signal unknown"
             channel = f"ch {net['channel']}" if net["channel"] else "ch ?"
@@ -1242,6 +1248,10 @@ def run_deauth_session() -> bool:
         logging.error("Monitor mode could not be confirmed on %s.", SELECTED_INTERFACE)
         return False
     logging.info(color_text("✓ Monitor mode confirmed", COLOR_SUCCESS))
+    gui_emit("workflow_status", module="Deauth", phase="ready", interface=SELECTED_INTERFACE, ssid=target_network["ssid"], target=target_network["bssid"])
+
+    if os.environ.get("SWISSKNIFE_GUI"):
+        input("Press Enter to start deauth attack: ")
 
     logging.info("")
     logging.info(style("="*60, STYLE_BOLD))
@@ -1251,6 +1261,7 @@ def run_deauth_session() -> bool:
     if not start_deauth_attack(SELECTED_INTERFACE, target_network):
         logging.error(color_text("Attack failed to start!", COLOR_ERROR))
         return False
+    gui_emit("workflow_status", module="Deauth", phase="running", interface=SELECTED_INTERFACE, ssid=target_network["ssid"], target=target_network["bssid"])
     
     # Start monitor thread
     monitor_thread = threading.Thread(target=attack_monitor, daemon=True)
@@ -1282,6 +1293,7 @@ def run_deauth_session() -> bool:
         logging.error(f"Unexpected error: {e}")
         stop_attack()
     
+    gui_emit("workflow_status", module="Deauth", phase="stopped", interface=SELECTED_INTERFACE, ssid=target_network["ssid"], target=target_network["bssid"])
     return False
 
 

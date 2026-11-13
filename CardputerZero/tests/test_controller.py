@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY
 from core.engine import EngineEvent, SwissKnifeEngine
+from core.hardware import HardwareSnapshot, WiFiAdapter
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 
@@ -59,12 +60,11 @@ class ControllerTests(unittest.TestCase):
         c.handle("ESC")
         self.assertEqual(c.menu, "main")
 
-    def test_module_starts_directly_from_description(self):
+    def test_attack_module_starts_without_description_screen(self):
         c = self.controller
-        c.screen = "detail"
         c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
-        c.handle("ENTER")
-        self.assertEqual(c.screen, "running")
+        c._start_operation()
+        self.assertEqual(c.screen, "workflow_wait")
 
     def test_demo_operation_returns_results(self):
         c = self.controller
@@ -276,7 +276,10 @@ class ControllerTests(unittest.TestCase):
         c.screen = "menu"
         c.handle("TEXT", "a")
         self.assertEqual(c.screen, "about")
+        self.assertEqual(c.view().hint, "Q - QR CODE  ESC - back")
         c.handle("ENTER")
+        self.assertEqual(c.screen, "about")
+        c.handle("TEXT", "q")
         self.assertEqual(c.screen, "about_qr")
         c.handle("ESC")
         self.assertEqual(c.screen, "about")
@@ -293,6 +296,92 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([label for _, label in c.choices], ["Scaner", "Sniffer"])
         c.handle("ESC")
         self.assertEqual(answers, ["0"])
+
+    def test_deauth_wizard_scans_without_terminal_confirmations(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
+        c.hardware = HardwareSnapshot(("wlan0", "wlan1"), (
+            WiFiAdapter("wlan0", "builtin", "managed", False, None),
+            WiFiAdapter("wlan1", "usb", "managed", True, True),
+        ), (), (), "wlan0", False, frozenset())
+        c.screen = "workflow_wait"
+        sent = []
+        events = [EngineEvent("input", "Input required", {"prompt": "Select interface (number or name): "})]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=sent.append)
+        c.tick()
+        self.assertEqual(c.view().screen, "workflow_choice")
+        self.assertEqual(len(c.attack_options), 2)
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(sent, ["wlan1"])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to switch wlan1 to managed mode for scanning..."}))
+        c.tick()
+        self.assertEqual(sent, ["wlan1", ""])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Scan duration in seconds (Enter for 15): "}))
+        c.tick()
+        self.assertEqual(c.view().screen, "workflow_scan")
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(sent[-1], "16")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to scan networks on wlan1..."}))
+        c.tick()
+        self.assertEqual(sent[-1], "")
+        events.extend([
+            EngineEvent("data", "workflow_networks", {"module": "Deauth", "interface": "wlan1", "records": [{"ssid": "LAB", "bssid": "02:00:00:00:00:01", "channel": 6, "signal": -52}]}),
+            EngineEvent("input", "Input required", {"prompt": "Select network (number, R to rescan, E to exit): "}),
+        ])
+        c.tick()
+        c.tick()
+        self.assertEqual(c.view().records[0]["ssid"], "LAB")
+        c.handle("ENTER")
+        self.assertEqual(sent[-1], "1")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to switch wlan1 to monitor mode for attack..."}))
+        c.tick()
+        self.assertEqual(sent[-1], "")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to start deauth attack: "}))
+        c.tick()
+        self.assertEqual(c.screen, "workflow_start")
+        c.handle("ENTER")
+        self.assertEqual(sent[-1], "")
+
+    def test_portal_source_html_start_and_stop_flow(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Portal")
+        c.screen = "workflow_wait"
+        sent = []
+        cancelled = []
+        events = [EngineEvent("input", "Input required", {"prompt": "SSID source - Scan (S) or Manual (M): "})]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=sent.append, cancel=lambda: cancelled.append(True))
+        c.tick()
+        self.assertEqual(c.view().rows, ["Scan networks", "Enter SSID"])
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(sent, ["m"])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Enter SSID: "}))
+        c.tick()
+        self.assertEqual(c.screen, "workflow_text")
+        for char in "LAB5":
+            c.handle("TEXT", char)
+        c.handle("ENTER")
+        self.assertEqual(sent[-1], "LAB5")
+        events.extend([
+            EngineEvent("data", "portal_templates", {"records": [{"index": 1, "name": "portal.html"}]}),
+            EngineEvent("input", "Input required", {"prompt": "Select portal HTML (number): "}),
+        ])
+        c.tick()
+        c.tick()
+        self.assertEqual(c.view().records[0]["name"], "portal.html")
+        c.handle("ENTER")
+        self.assertEqual(sent[-1], "1")
+        events.append(EngineEvent("input", "Input required", {"prompt": "Press Enter to start captive portal 'LAB5'..."}))
+        c.tick()
+        self.assertEqual(c.screen, "workflow_start")
+        c.handle("ENTER")
+        events.append(EngineEvent("data", "workflow_status", {"module": "Portal", "phase": "running", "interface": "wlan1", "ssid": "LAB5"}))
+        c.tick()
+        self.assertEqual(c.screen, "workflow_live")
+        c.handle("ENTER")
+        self.assertEqual(cancelled, [True])
 
 
 if __name__ == "__main__":

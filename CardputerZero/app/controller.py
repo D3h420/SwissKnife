@@ -24,6 +24,7 @@ SUBMENUS = {
 }
 SPLASH_DELAY = 2.5
 SCAN_DEFAULTS = {"Recon": 12, "Start Wardrive": 8, "ARP scan": 15, "IP.CAM finder": 15}
+ATTACK_MODULES = frozenset(SUBMENUS["Attacks"])
 MODULE_COPY = {
     "Recon": "Discover nearby Wi-Fi networks and inspect radio activity.",
     "Deauth": "Manage the existing Deauth workflow.",
@@ -114,6 +115,18 @@ class Controller:
         self.packet_count = 0
         self.probe_total = 0
         self.current_prompt = ""
+        self.attack_options: list[tuple[str, str]] = []
+        self.attack_records: list[dict] = []
+        self.attack_templates: list[dict] = []
+        self.attack_context: dict[str, str] = {}
+        self.attack_duration = 15
+        self.attack_marked: set[int] = set()
+        self.attack_multi = False
+        self.attack_input = ""
+        self.attack_secret = False
+        self.attack_phase = "Preparing"
+        self.attack_pending_answer = ""
+        self.attack_interface_options: list[tuple[str, str]] = []
         self.error = ""
         self.selected = 0
         self.scroll = 0
@@ -159,6 +172,21 @@ class Controller:
                     self.input_value = ""
                     prompt = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(event.data.get("prompt") or self.console.prompt()))
                     self.current_prompt = prompt
+                    if self.module and self.module.key in ATTACK_MODULES:
+                        automatic = self._attack_automatic_answer(prompt)
+                        if automatic is not None:
+                            try:
+                                self.operation.send(automatic)  # type: ignore[attr-defined]
+                            except Exception as exc:
+                                self.error = str(exc)
+                                self._goto("error")
+                            else:
+                                self.awaiting_input = False
+                            changed = True
+                            continue
+                        self._attack_prompt(prompt)
+                        changed = True
+                        continue
                     automatic = self._automatic_answer(prompt)
                     if automatic is not None:
                         try:
@@ -210,6 +238,26 @@ class Controller:
                     self.record_kind = "wardrive_cycle"
                     self.record_summary = f"{len(self.records)} AP  {event.data.get('total') or 0} saved"
                     self.selected = min(self.selected, max(0, len(self.records) - 1))
+                elif event.kind == "data" and event.message == "workflow_networks" and self.module and self.module.key in ATTACK_MODULES:
+                    if event.data.get("module") == self.module.key:
+                        self.attack_records = list(event.data.get("records") or [])
+                        self.attack_context["interface"] = str(event.data.get("interface") or self.attack_context.get("interface", ""))
+                elif event.kind == "data" and event.message == "portal_templates" and self.module and self.module.key in ATTACK_MODULES:
+                    self.attack_templates = list(event.data.get("records") or [])
+                elif event.kind == "data" and event.message == "workflow_options" and self.module and self.module.key in ATTACK_MODULES:
+                    if event.data.get("module") == self.module.key:
+                        self.attack_templates = list(event.data.get("records") or [])
+                elif event.kind == "data" and event.message == "workflow_status" and self.module and self.module.key in ATTACK_MODULES:
+                    if event.data.get("module") == self.module.key:
+                        for name in ("interface", "ssid", "target", "html", "template", "ssid_set", "packets", "elapsed", "ssids"):
+                            if event.data.get(name):
+                                self.attack_context[name] = str(event.data[name])
+                        phase = str(event.data.get("phase") or "")
+                        if phase:
+                            self.attack_phase = phase.replace("_", " ").title()
+                        if phase in {"running", "active", "started"}:
+                            self.screen = "workflow_live"
+                            self.selected = 0
                 if event.kind in {"status", "result", "progress", "error"}:
                     self.logs.append(event.message)
                     self.logs = self.logs[-500:]
@@ -217,7 +265,10 @@ class Controller:
                         self.console.feed("Error: " + event.message + "\n")
                 if event.kind == "error":
                     self.error = event.message
-                    self.screen = "results"
+                    self.screen = "workflow_result" if self.module and self.module.key in ATTACK_MODULES else "results"
+                elif event.kind == "finished" and self.screen.startswith("workflow_"):
+                    self.awaiting_input = False
+                    self.screen = "workflow_result"
                 elif event.kind == "finished" and self.screen in {"running", "sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
                     self.awaiting_input = False
                     if self.sniffer_exit_requested:
@@ -262,6 +313,117 @@ class Controller:
                 return ""
         return None
 
+    def _attack_automatic_answer(self, prompt: str) -> str | None:
+        lowered = prompt.casefold().strip()
+        if "press enter" in lowered and ("to exit" in lowered or "to return" in lowered):
+            return ""
+        if "press enter" in lowered and "switch" in lowered and "mode" in lowered:
+            self.attack_phase = "Preparing adapter"
+            return ""
+        if "press enter" in lowered and ("scan networks" in lowered or "start scanning" in lowered):
+            self.attack_phase = "Scanning networks"
+            self.screen = "workflow_wait"
+            return ""
+        if any(text in lowered for text in (
+            "capture window per ap", "deauth burst on time", "deauth burst cycle",
+        )):
+            return ""
+        return None
+
+    def _attack_prompt(self, prompt: str) -> None:
+        lowered = prompt.casefold().strip()
+        self.attack_options = []
+        self.attack_multi = False
+        self.attack_marked.clear()
+        self.attack_input = ""
+        self.attack_secret = self.secret_input
+        self.selected = 0
+        if "scan duration" in lowered or "scan window per round" in lowered:
+            self.attack_phase = "Scan duration"
+            self._goto("workflow_scan")
+            return
+        if "press enter" in lowered and (
+            "start captive portal" in lowered or "start evil twin" in lowered
+            or "start dragon drain attack" in lowered or "start deauth + capture" in lowered
+            or "start deauth attack" in lowered or "start on run loop" in lowered
+            or "start wifi poet" in lowered
+        ):
+            self.attack_phase = "Ready to start"
+            self._goto("workflow_start")
+            return
+        if "press enter" in lowered and "stop" in lowered:
+            self.attack_phase = "Running"
+            self._goto("workflow_live")
+            return
+        if "select" in lowered and "interface" in lowered:
+            self.attack_phase = "Choose interface"
+            available = current_choices(self.console.visible_lines())
+            if available:
+                self.attack_options = [(key, label) for key, label in available if "back" not in label.casefold()]
+            elif self.hardware:
+                self.attack_options = [(item.name, f"{item.name}  {item.mode}") for item in self.hardware.wifi]
+            self._goto("workflow_choice")
+            return
+        if "ssid source" in lowered:
+            self.attack_phase = "Choose SSID source"
+            self.attack_options = [("s", "Scan networks"), ("m", "Enter SSID")]
+            self._goto("workflow_choice")
+            return
+        if "select network" in lowered or "select target ap" in lowered or "choose network number" in lowered:
+            self.attack_phase = "Choose network"
+            self.attack_multi = "network(s)" in lowered
+            if self.attack_records:
+                self.attack_options = [(str(i), str(record.get("ssid") or record.get("bssid") or f"Network {i}")) for i, record in enumerate(self.attack_records, 1)]
+            else:
+                self.attack_options = current_choices(self.console.visible_lines())
+            self._goto("workflow_choice")
+            return
+        if "select portal html" in lowered:
+            self.attack_phase = "Choose portal page"
+            if self.attack_templates:
+                self.attack_options = [(str(item.get("index") or i), str(item.get("name") or "")) for i, item in enumerate(self.attack_templates, 1)]
+            else:
+                self.attack_options = current_choices(self.console.visible_lines())
+            self._goto("workflow_choice")
+            return
+        if "select ssid set" in lowered and self.attack_templates:
+            self.attack_phase = "Choose SSID set"
+            self.attack_options = [(str(item.get("index") or i), str(item.get("label") or item.get("key") or "")) for i, item in enumerate(self.attack_templates, 1)]
+            self._goto("workflow_choice")
+            return
+        if "select mode" in lowered:
+            self.attack_phase = "Choose mode"
+            self.attack_options = [("1", "Classic"), ("2", "ON RUN")]
+            self._goto("workflow_choice")
+            return
+        if ("proceed" in lowered and "y/n" in lowered) or ("install all required tools" in lowered and "y/n" in lowered):
+            self.attack_phase = "Confirm configuration"
+            self.attack_options = [("y", "Continue"), ("n", "Cancel")]
+            self._goto("workflow_choice")
+            return
+        if "rescan" in lowered and "exit" in lowered:
+            self.attack_phase = "No networks found"
+            self.attack_options = [("r" if "(r)" in lowered else "y", "Scan again"), ("m", "Enter SSID")] if "manual" in lowered else [("y", "Scan again")]
+            self.attack_options.append(("e", "Exit"))
+            self._goto("workflow_choice")
+            return
+        if "back to main menu" in lowered and "restart" in lowered:
+            self.attack_phase = "Operation complete"
+            self.attack_options = [("b", "Main menu"), ("r", "Restart")]
+            self._goto("workflow_choice")
+            return
+        available = current_choices(self.console.visible_lines()) if re.search(r"\b(select|choose|choice|option)\b", lowered) else []
+        if available:
+            self.attack_phase = "Choose option"
+            self.attack_options = [(key, label) for key, label in available if not label.casefold().startswith("back")]
+            self._goto("workflow_choice")
+            return
+        if self.attack_phase.casefold() in {"running", "active", "started"} and not lowered:
+            self._goto("workflow_live")
+            return
+        self.attack_phase = "Enter value"
+        self._goto("workflow_text")
+
     def _menu_rows(self) -> list[str]:
         return list(MAIN if self.menu == "main" else SUBMENUS[self.menu])
 
@@ -272,7 +434,10 @@ class Controller:
             self._goto("error")
         else:
             self.return_menu = self.menu
-            self._goto("recon_modes" if self.module.key == "Recon" else "detail")
+            if self.module.key in ATTACK_MODULES:
+                self._start_operation()
+            else:
+                self._goto("recon_modes" if self.module.key == "Recon" else "detail")
 
     @staticmethod
     def _wrap(rows: list[str], width: int = 31) -> list[str]:
@@ -285,7 +450,7 @@ class Controller:
         if self.screen == "menu":
             return ViewState(screen="list", title="MAIN MENU" if self.menu == "main" else self.menu.upper(), rows=self._menu_rows(), hint="F/X move  ENTER select  A about" if self.menu == "main" else "F/X move  ENTER select  ESC back", **common)
         if self.screen == "about":
-            return ViewState(screen="about", title="ABOUT", version=app_version(), hint="ENTER repository QR  ESC back", **common)
+            return ViewState(screen="about", title="ABOUT", version=app_version(), hint="Q - QR CODE  ESC - back", **common)
         if self.screen == "about_qr":
             return ViewState(screen="about_qr", title="GITHUB", hint="ESC back", **common)
         if self.screen == "recon_modes":
@@ -295,6 +460,39 @@ class Controller:
         if self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
             phase = "LIVE" if self.sniffer_active else ("READY" if self.sniffer_post_choice_ready else "WORKING")
             return ViewState(screen=self.screen, title="SNIFFER", selected=self.selected, records=self.records, probe_records=self.probe_records, packets=self.packet_count, probes=self.probe_total, status=self.operation.state if self.operation else "", status_label=phase, hint="ENTER select  ESC back", simulated=self.engine.demo)
+        if self.screen.startswith("workflow_"):
+            title = self.module.label.upper() if self.module else "WORKFLOW"
+            summary_parts = [self.attack_context.get(name, "") for name in ("interface", "ssid", "target")]
+            summary = "  ·  ".join(part for part in summary_parts if part)
+            rows = [label for _answer, label in self.attack_options]
+            records: list[dict] = []
+            if self.screen == "workflow_choice" and self.attack_phase == "Choose network" and len(self.attack_options) == len(self.attack_records):
+                records = [{**record, "marked": i in self.attack_marked} for i, record in enumerate(self.attack_records)]
+            elif self.screen == "workflow_choice" and self.attack_phase == "Choose portal page" and len(self.attack_options) == len(self.attack_templates):
+                records = self.attack_templates
+            if self.attack_multi:
+                rows = [("✓ " if i in self.attack_marked else "○ ") + label for i, label in enumerate(rows)]
+            if self.screen == "workflow_live":
+                if self.attack_context.get("template"):
+                    rows = [f"Page: {self.attack_context['template']}"]
+                elif self.attack_context.get("ssid_set"):
+                    rows = [f"Set: {self.attack_context['ssid_set']}  ·  {self.attack_context.get('packets', '0')} packets"]
+                elif self.attack_context.get("packets"):
+                    rows = [f"Packets: {self.attack_context['packets']}"]
+            if self.screen == "workflow_result":
+                rows = [self.error] if self.error else ([f"Interface: {self.attack_context['interface']}"] if self.attack_context.get("interface") else [])
+                if self.record_kind in {"arp_devices", "camera_candidates"}:
+                    rows.insert(0, self.record_summary)
+            return ViewState(
+                screen=self.screen, title=title, rows=rows, selected=self.selected,
+                records=records, description=self.current_prompt if self.screen == "workflow_text" else self.attack_phase,
+                status_label=f"{self.attack_duration} s" if self.screen == "workflow_scan" else self.attack_phase.upper(),
+                summary=summary or ("Operation finished" if self.screen == "workflow_result" else ""),
+                secondary_label="SPACE select  ENTER continue" if self.attack_multi else self.attack_context.get("template", "") if self.screen == "workflow_start" else "",
+                input_value=self.attack_input, secret_input=self.attack_secret,
+                hint="Z/C ±1  F/X ±5  ENTER scan" if self.screen == "workflow_scan" else ("SPACE toggle  ENTER next" if self.attack_multi else "F/X choose  ENTER select  ESC back"),
+                simulated=self.engine.demo,
+            )
         if self.screen == "detail":
             assert self.module
             status, reason = module_status(self.module, self.hardware) if self.hardware else ("requires_configuration", "Detecting hardware")
@@ -355,6 +553,12 @@ class Controller:
             self._goto("menu")
             return
         if key == "ESC":
+            if self.screen.startswith("workflow_"):
+                if self.screen != "workflow_result" and self.operation and self.operation.state in {"starting", "running"}:
+                    self.operation.cancel()
+                self.menu = self.return_menu
+                self._goto("menu")
+                return
             if self.screen == "sniffer_probes":
                 self._goto("sniffer_live" if self.sniffer_active else "sniffer_stopped")
                 return
@@ -414,7 +618,99 @@ class Controller:
                     self._goto("error")
             self.dirty = True
             return
-        if self.screen == "about" and key == "ENTER":
+        if self.screen == "workflow_choice":
+            if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN", "LEFT", "RIGHT"} and self.attack_options:
+                step = {"UP": -1, "DOWN": 1, "PAGEUP": -3, "PAGEDOWN": 3, "LEFT": -1, "RIGHT": 1}[key]
+                self.selected = max(0, min(len(self.attack_options) - 1, self.selected + step))
+                self.dirty = True
+            elif key == "TEXT" and char == " " and self.attack_multi and self.attack_options:
+                if self.selected in self.attack_marked:
+                    self.attack_marked.remove(self.selected)
+                else:
+                    self.attack_marked.add(self.selected)
+                self.dirty = True
+            elif key == "ENTER" and self.attack_options:
+                answer, label = self.attack_options[self.selected]
+                if self.attack_phase == "Confirm management interface":
+                    if answer == "go":
+                        self.attack_phase = "Preparing adapter"
+                        self._submit_attack_answer(self.attack_pending_answer)
+                    else:
+                        self.attack_phase = "Choose interface"
+                        self.attack_options = self.attack_interface_options
+                        self._goto("workflow_choice")
+                    return
+                if self.attack_multi:
+                    answer = ",".join(self.attack_options[i][0] for i in sorted(self.attack_marked or {self.selected}))
+                if self.attack_phase == "Choose interface":
+                    interface = label.split()[0]
+                    self.attack_context["interface"] = interface
+                    if self.hardware and interface == self.hardware.default_route:
+                        self.attack_pending_answer = answer
+                        self.attack_interface_options = self.attack_options
+                        self.attack_phase = "Confirm management interface"
+                        self.attack_options = [("go", f"Use {interface} (connection may drop)"), ("back", "Choose another")]
+                        self._goto("workflow_choice")
+                        return
+                elif self.attack_phase == "Choose network":
+                    if self.attack_records:
+                        chosen = [self.attack_records[i] for i in sorted(self.attack_marked or {self.selected})] if self.attack_multi else [self.attack_records[self.selected]]
+                        self.attack_context["ssid"] = ", ".join(str(item.get("ssid") or "<hidden>") for item in chosen)
+                elif self.attack_phase == "Choose portal page":
+                    self.attack_context["template"] = label
+                elif self.attack_phase == "Choose SSID set":
+                    self.attack_context["ssid_set"] = label
+                self._submit_attack_answer(answer)
+            return
+        if self.screen == "workflow_scan":
+            if key in {"LEFT", "RIGHT", "UP", "DOWN"}:
+                step = {"LEFT": -1, "RIGHT": 1, "UP": 5, "DOWN": -5}[key]
+                self.attack_duration = max(1, min(300, self.attack_duration + step))
+                self.dirty = True
+            elif key == "TEXT" and char.isdigit():
+                self.attack_input = char
+                self.attack_phase = "Scan duration"
+                self._goto("workflow_text")
+            elif key == "ENTER":
+                self._submit_attack_answer(str(self.attack_duration))
+            return
+        if self.screen == "workflow_text":
+            if key == "BACKSPACE":
+                self.attack_input = self.attack_input[:-1]
+            elif key == "TEXT" and char.isprintable() and len(self.attack_input) < 256:
+                self.attack_input += char
+            elif key == "ENTER":
+                if self.attack_phase == "Scan duration":
+                    try:
+                        value = int(self.attack_input)
+                    except ValueError:
+                        value = 0
+                    if not 1 <= value <= 300:
+                        self.attack_input = ""
+                        self.dirty = True
+                        return
+                    self.attack_duration = value
+                if self.attack_input or not self.attack_secret:
+                    self._submit_attack_answer(self.attack_input)
+            self.dirty = True
+            return
+        if self.screen == "workflow_start" and key == "ENTER":
+            self._submit_attack_answer("")
+            return
+        if self.screen == "workflow_live" and key == "ENTER":
+            if self.operation:
+                if self.awaiting_input:
+                    self._submit_attack_answer("")
+                else:
+                    self.operation.cancel()
+                    self.attack_phase = "Stopping"
+                    self._goto("workflow_wait")
+            return
+        if self.screen == "workflow_result" and key == "ENTER":
+            self.menu = self.return_menu
+            self._goto("menu")
+            return
+        if self.screen == "about" and key == "TEXT" and char.lower() == "q":
             self._goto("about_qr")
             return
         if self.screen == "recon_modes":
@@ -590,6 +886,17 @@ class Controller:
         self.record_kind = ""
         self.choices = []
         self.back_choice = ""
+        self.attack_options = []
+        self.attack_records = []
+        self.attack_templates = []
+        self.attack_context = {}
+        self.attack_duration = 15
+        self.attack_marked.clear()
+        self.attack_multi = False
+        self.attack_input = ""
+        self.attack_phase = "Preparing"
+        self.attack_pending_answer = ""
+        self.attack_interface_options = []
         if self.module.key != "Recon":
             self.recon_mode = ""
         self.recon_choice_sent = False
@@ -605,7 +912,23 @@ class Controller:
         self.awaiting_input = False
         self.input_value = ""
         self.follow_output = True
-        self._goto("running")
+        self._goto("workflow_wait" if self.module.key in ATTACK_MODULES else "running")
+
+    def _submit_attack_answer(self, answer: str) -> None:
+        if not self.operation or not self.awaiting_input:
+            return
+        try:
+            self.operation.send(answer)  # type: ignore[attr-defined]
+        except Exception as exc:
+            self.error = str(exc)
+            self._goto("error")
+            return
+        self.awaiting_input = False
+        self.attack_options = []
+        self.attack_marked.clear()
+        self.attack_input = ""
+        self.attack_phase = "Working"
+        self._goto("workflow_wait")
 
     def _stop_sniffer(self) -> None:
         if self.awaiting_input and self.sniffer_active and self.operation:

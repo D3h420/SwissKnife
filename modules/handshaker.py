@@ -38,6 +38,7 @@ except ModuleNotFoundError:
     )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+from core.gui_events import emit as gui_emit
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -295,6 +296,10 @@ def format_on_run_dashboard(
     burst_count: int,
 ) -> str:
     sorted_aps = sorted_access_points(aps)
+    gui_emit("workflow_networks", module="Handshaker", interface=interface, records=[{
+        "ssid": ap.ssid, "bssid": ap.bssid, "channel": ap.channel,
+        "security": ap.security, "clients": len(ap.clients),
+    } for ap in sorted_aps])
     active_aps = [ap for ap in sorted_aps if ap.clients]
     channel_label = str(current_channel) if current_channel else "?"
     lines = [
@@ -1470,6 +1475,10 @@ def run_classic_handshaker(interface: str) -> None:
     )
 
     sorted_aps = sorted_access_points(aps)
+    gui_emit("workflow_networks", module="Handshaker", interface=interface, records=[{
+        "ssid": ap.ssid, "bssid": ap.bssid, "channel": ap.channel,
+        "security": ap.security, "clients": len(ap.clients),
+    } for ap in sorted_aps])
     logging.info("")
     for line in format_network_lines(sorted_aps):
         logging.info("%s", line)
@@ -1486,6 +1495,7 @@ def run_classic_handshaker(interface: str) -> None:
 
     logging.info("")
     logging.info("Selected: %s (%s)", format_ssid(target_ap.ssid), target_ap.bssid)
+    gui_emit("workflow_status", module="Handshaker", phase="ready", interface=interface, ssid=target_ap.ssid, target=target_ap.bssid)
     if target_ap.channel:
         logging.info("Channel: %s", target_ap.channel)
         set_interface_channel(interface, target_ap.channel)
@@ -1530,6 +1540,7 @@ def run_classic_handshaker(interface: str) -> None:
 
     logging.info("")
     input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start deauth + capture...")
+    gui_emit("workflow_status", module="Handshaker", phase="running", interface=interface, ssid=target_ap.ssid, target=target_ap.bssid)
 
     output_dir = DEFAULT_HANDSHAKE_DIR
     summary = capture_full_handshakes(
@@ -1543,6 +1554,7 @@ def run_classic_handshaker(interface: str) -> None:
     )
 
     if summary:
+        gui_emit("workflow_result", module="Handshaker", summary=summary)
         logging.info("")
         logging.info(style("Saved to:", STYLE_BOLD))
         logging.info(f"  -> {summary['path']}")
@@ -1610,7 +1622,9 @@ def run_on_run_handshaker(interface: str) -> None:
     burst_count = max(4, min(128, int(round(deauth_burst_on_sec * 10)))) if deauth_burst_on_sec > 0 else ON_RUN_DEFAULT_BURST_COUNT
 
     logging.info("")
+    gui_emit("workflow_status", module="Handshaker", phase="ready", interface=interface, mode="on_run")
     input(f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to start ON RUN loop...")
+    gui_emit("workflow_status", module="Handshaker", phase="running", interface=interface, mode="on_run")
 
     cumulative_aps: Dict[str, AccessPoint] = {}
     captured_bssids: Set[str] = set()
@@ -1631,6 +1645,10 @@ def run_on_run_handshaker(interface: str) -> None:
                 update_interval=ON_RUN_LIVE_UPDATE_INTERVAL,
             )
             merge_access_point_snapshots(cumulative_aps, aps)
+            gui_emit("workflow_networks", module="Handshaker", interface=interface, records=[{
+                "ssid": ap.ssid, "bssid": ap.bssid, "channel": ap.channel,
+                "security": ap.security, "clients": len(ap.clients),
+            } for ap in sorted_access_points(cumulative_aps)])
 
             candidates = [
                 ap
@@ -1810,6 +1828,7 @@ def main() -> None:
             run_on_run_handshaker(interface)
 
     finally:
+        gui_emit("workflow_status", module="Handshaker", phase="stopped", interface=interface)
         if changed_to_monitor:
             logging.info("Restoring managed mode...")
             restore_managed_mode(interface)

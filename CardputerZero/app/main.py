@@ -41,7 +41,7 @@ def run_device(controller) -> int:
         renderer = Renderer()
         last_draw = 0.0
         while running and not controller.quit_requested:
-            editing = controller.screen == "duration_input" or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
+            editing = controller.screen in {"duration_input", "workflow_text"} or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
             for key, char in keyboard.events(editing=editing):
                 controller.handle(key, char)
             changed = controller.tick()
@@ -76,7 +76,7 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     def key_event(event) -> None:
         mapping = {"Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT", "Return": "ENTER", "Escape": "ESC", "Home": "HOME", "Prior": "PAGEUP", "Next": "PAGEDOWN", "BackSpace": "BACKSPACE"}
         key = mapping.get(event.keysym)
-        editing = controller.screen == "duration_input" or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
+        editing = controller.screen in {"duration_input", "workflow_text"} or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
         if not key and not editing:
             key = {"f": "UP", "x": "DOWN", "z": "LEFT", "c": "RIGHT"}.get(event.char.lower())
         if key:

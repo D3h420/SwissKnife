@@ -29,6 +29,7 @@ except ModuleNotFoundError:
 
 # Logging config
 logging.basicConfig(level=logging.INFO, format='%(message)s')
+from core.gui_events import emit as gui_emit
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -177,6 +178,8 @@ def select_portal_html_file():
         logging.error("No .html files found in: %s", HTML_DIR)
         sys.exit(1)
 
+    gui_emit("portal_templates", module="Portal", records=[{"name": name, "index": index} for index, name in enumerate(html_files, start=1)])
+
     logging.info("")
     logging.info(style("Available portal HTML files:", STYLE_BOLD))
     for index, filename in enumerate(html_files, start=1):
@@ -309,6 +312,11 @@ def select_network_ssid(interface, duration_seconds) -> Optional[str]:
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
+        gui_emit("workflow_networks", module="Portal", interface=interface, records=[{
+            "ssid": network.get("ssid"), "bssid": network.get("bssid"),
+            "channel": network.get("channel"), "signal": network.get("signal"),
+            "security": network.get("security") or network.get("encryption"),
+        } for network in networks])
         for index, network in enumerate(networks, start=1):
             signal = (
                 f"{network['signal']:.1f} dBm"
@@ -716,6 +724,7 @@ def run_portal_session():
         globals()["PORTAL_HTML_PATH"] = select_portal_html_file()
     globals()["PORTAL_HTML"] = None
     logging.info("Selected portal file: %s", os.path.basename(PORTAL_HTML_PATH))
+    gui_emit("workflow_status", module="Portal", phase="ready", interface=AP_INTERFACE, ssid=AP_SSID, template=os.path.basename(PORTAL_HTML_PATH))
 
     logging.info("")
     input(
@@ -743,6 +752,7 @@ def run_portal_session():
         
         # Start Captive Portal.
         http_server = start_captive_portal()
+        gui_emit("workflow_status", module="Portal", phase="running", interface=AP_INTERFACE, ssid=AP_SSID, template=os.path.basename(PORTAL_HTML_PATH))
         
         logging.info("")
         logging.info("=" * 50)
@@ -795,6 +805,7 @@ def run_portal_session():
     except Exception as e:
         logging.error(f"Unexpected error: {e}")
     finally:
+        gui_emit("workflow_status", module="Portal", phase="stopped", interface=AP_INTERFACE, ssid=AP_SSID)
         if http_server:
             http_server.shutdown()
             http_server.server_close()

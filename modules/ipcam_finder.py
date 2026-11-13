@@ -657,7 +657,7 @@ class IpCamFinder(Module):
         while self.running:
             raw = input("Select interface (number): ") if os.environ.get("SWISSKNIFE_GUI") else Prompt.ask("Select interface (number)", default="1", console=self.console)
             try:
-                picked = int(raw)
+                picked = ordered.index(raw) + 1 if os.environ.get("SWISSKNIFE_GUI") and raw in ordered else int(raw)
             except ValueError:
                 self.console.print("[yellow]Enter a numeric interface index.[/yellow]")
                 continue

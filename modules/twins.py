@@ -37,6 +37,7 @@ except ModuleNotFoundError:
     )
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
+from core.gui_events import emit as gui_emit
 
 COLOR_ENABLED = sys.stdout.isatty()
 COLOR_RESET = "\033[0m" if COLOR_ENABLED else ""
@@ -122,6 +123,8 @@ def select_portal_html_file() -> str:
     if not html_files:
         logging.error("No .html files found in: %s", HTML_DIR)
         sys.exit(1)
+
+    gui_emit("portal_templates", module="Evil Twin", records=[{"name": name, "index": index} for index, name in enumerate(html_files, start=1)])
 
     logging.info("")
     logging.info(style("Available portal HTML files:", STYLE_BOLD))
@@ -545,6 +548,11 @@ def select_networks(attack_interface: str, duration_seconds: int) -> Optional[Li
 
         logging.info("")
         logging.info(style("Available networks:", STYLE_BOLD))
+        gui_emit("workflow_networks", module="Evil Twin", interface=attack_interface, records=[{
+            "ssid": net.get("ssid"), "bssid": net.get("bssid"),
+            "channel": net.get("channel"), "signal": net.get("signal"),
+            "security": net.get("security") or net.get("encryption"),
+        } for net in networks])
         for index, net in enumerate(networks, start=1):
             signal = f"{net['signal']:.1f} dBm" if net["signal"] is not None else "signal unknown"
             channel = f"ch {net['channel']}" if net["channel"] else "ch ?"
@@ -1208,6 +1216,7 @@ def run_twins_session() -> bool:
     PORTAL_HTML_PATH = select_portal_html_file()
     PORTAL_HTML = None
     logging.info("Selected portal file: %s", os.path.basename(PORTAL_HTML_PATH))
+    gui_emit("workflow_status", module="Evil Twin", phase="ready", interface=ATTACK_INTERFACE, ap_interface=AP_INTERFACE, ssid=AP_SSID, template=os.path.basename(PORTAL_HTML_PATH), targets=len(target_networks))
 
     primary_channel = target_networks[0].get("channel")
     if not is_monitor_mode(ATTACK_INTERFACE):
@@ -1229,6 +1238,7 @@ def run_twins_session() -> bool:
 
     time.sleep(5)
     HTTP_SERVER = start_captive_portal()
+    gui_emit("workflow_status", module="Evil Twin", phase="running", interface=ATTACK_INTERFACE, ap_interface=AP_INTERFACE, ssid=AP_SSID, targets=len(target_networks))
 
     logging.info("")
     logging.info("=" * 50)
@@ -1296,6 +1306,7 @@ def run_twins_session() -> bool:
     except KeyboardInterrupt:
         logging.info(color_text("Stopping attack...", COLOR_STOP))
     finally:
+        gui_emit("workflow_status", module="Evil Twin", phase="stopped", interface=ATTACK_INTERFACE, ap_interface=AP_INTERFACE, ssid=AP_SSID)
         cleanup()
 
     return False

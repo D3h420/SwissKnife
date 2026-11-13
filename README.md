@@ -9,6 +9,10 @@
   <img alt="Deps" src="https://img.shields.io/badge/Dependencies-auto_check_%26_install-0A7E07?style=for-the-badge" />
 </p>
 
+<p align="center">
+  <a href="CardputerZero/README.md"><img alt="SwissKnife for Cardputer Zero — dedicated APPLaunch app" src="https://img.shields.io/badge/CARDPUTER%20ZERO-DEDICATED%20APPLAUNCH%20APP-D946EF?style=for-the-badge&amp;logo=raspberrypi&amp;logoColor=white" /></a>
+</p>
+
 # SwissKnife 🧰
 
 SwissKnife is a menu-driven wireless security toolkit for recon, attack workflows, captive portals, and wardriving in one place ⚡
@@ -30,6 +34,8 @@ SwissKnife is a menu-driven wireless security toolkit for recon, attack workflow
 
 ## Quick Start 🚀
 
+### A. Command-line edition (Linux)
+
 ```bash
 git clone https://github.com/D3h420/SwissKnife
 cd SwissKnife
@@ -37,7 +43,9 @@ sudo chmod +x swiss_knife.py
 sudo python3 swiss_knife.py
 ```
 
-For M5Stack Cardputer Zero with Raspberry Pi OS and APPLaunch, see [CardputerZero](CardputerZero/README.md). It packages the same `core/` and `modules/` code with a 320 × 170 keyboard-driven interface.
+### B. Cardputer Zero application (APPLaunch)
+
+For M5Stack Cardputer Zero, use the [Cardputer Zero installation and build guide](CardputerZero/README.md) to build the ARM64 package and install it into APPLaunch. The dedicated 320 × 170 interface uses the same `core/` and `modules/` as the terminal edition; changes to those files are included in the next package build.
 
 ## Requirements ✅
 

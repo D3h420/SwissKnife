@@ -121,7 +121,7 @@ class Renderer:
             draw.text((17, 43), "SWISSKNIFE", font=self.menu, fill=GREEN)
             draw.text((17, 67), "LAB5 / D3h420", font=self.body, fill=TEXT)
             draw.text((17, 91), f"Version {state.version}", font=self.body, fill=DIM)
-            self._button(draw, (157, 111, 305, 139), "GitHub QR", True, BLUE)
+            draw.text((17, 117), "github.com/D3h420/SwissKnife", font=self.small, fill=BLUE)
         elif state.screen == "about_qr":
             try:
                 qr = self._qr_image()
@@ -180,6 +180,81 @@ class Renderer:
                 draw.text((15, y + 3), self._clip(draw, str(record.get("ssid") or "<hidden>"), self.body, 205), font=self.body, fill=TEXT)
                 info = f"CH {record.get('channel') or '?'}"
                 draw.text((241, y + 3), info, font=self.small, fill=GREEN)
+        elif state.screen == "workflow_wait":
+            draw.rounded_rectangle((7, 39, 312, 139), radius=11, fill=PANEL)
+            draw.ellipse((17, 52, 28, 63), fill=AMBER)
+            draw.text((40, 47), self._clip(draw, state.status_label or "Preparing", self.menu, 260), font=self.menu, fill=TEXT)
+            draw.text((18, 77), self._clip(draw, state.description or "Checking module and hardware", self.body, 285), font=self.body, fill=DIM)
+            if state.summary:
+                draw.text((18, 109), self._clip(draw, state.summary, self.small, 285), font=self.small, fill=GREEN)
+        elif state.screen == "workflow_choice":
+            if state.description:
+                draw.text((11, 35), self._clip(draw, state.description, self.body, 295), font=self.body, fill=DIM)
+            if state.secondary_label:
+                draw.text((11, 52), self._clip(draw, state.secondary_label, self.small, 295), font=self.small, fill=AMBER)
+            top = 65 if state.secondary_label else (54 if state.description else 37)
+            if state.records:
+                first = max(0, state.selected - 1)
+                for i, record in enumerate(state.records[first:first + 2]):
+                    index = first + i
+                    y = top + i * 42
+                    active = index == state.selected
+                    draw.rounded_rectangle((7, y, 312, y + 38), radius=8, fill=(34, 49, 72) if active else PANEL, outline=BLUE if active else PANEL, width=2 if active else 1)
+                    name = str(record.get("ssid") or record.get("name") or record.get("label") or record.get("interface") or "Unknown")
+                    draw.text((16, y + 2), self._clip(draw, name, self.medium, 214), font=self.medium, fill=TEXT)
+                    signal = record.get("signal", record.get("rssi"))
+                    channel = record.get("channel")
+                    detail = f"CH {channel or '?'}"
+                    if signal is not None:
+                        detail += f"  {signal} dBm"
+                    elif record.get("mode"):
+                        detail = str(record["mode"])
+                    draw.text((16, y + 21), self._clip(draw, detail, self.small, 250), font=self.small, fill=DIM)
+                    if record.get("marked"):
+                        draw.text((286, y + 7), "✓", font=self.medium, fill=GREEN)
+                    elif active:
+                        draw.ellipse((289, y + 13, 301, y + 25), fill=GREEN)
+            else:
+                visible = 3 if top >= 54 else 4
+                first = max(0, state.selected - (visible - 1))
+                for i, row in enumerate(state.rows[first:first + visible]):
+                    y = top + i * 29
+                    active = first + i == state.selected
+                    draw.rounded_rectangle((7, y, 312, y + 25), radius=7, fill=(35, 53, 77) if active else PANEL, outline=BLUE if active else PANEL)
+                    draw.text((17, y + 3), self._clip(draw, str(row), self.body, 278), font=self.body, fill=TEXT if active else DIM)
+        elif state.screen == "workflow_text":
+            draw.rounded_rectangle((7, 39, 312, 109), radius=10, fill=PANEL)
+            draw.text((17, 47), self._clip(draw, state.description or "Enter a value", self.body, 285), font=self.body, fill=DIM)
+            value = "•" * len(state.input_value) if state.secret_input else state.input_value
+            draw.text((17, 72), self._clip(draw, value + "_", self.menu, 282), font=self.menu, fill=TEXT)
+            if state.summary:
+                draw.text((14, 119), self._clip(draw, state.summary, self.small, 290), font=self.small, fill=AMBER)
+        elif state.screen == "workflow_scan":
+            draw.rounded_rectangle((7, 38, 312, 105), radius=10, fill=PANEL)
+            draw.text((17, 44), self._clip(draw, state.description or "Scan duration", self.body, 285), font=self.body, fill=DIM)
+            draw.text((17, 65), state.status_label or "15 s", font=self.large, fill=TEXT)
+            draw.text((177, 76), "Z/C  -/+ 1", font=self.small, fill=DIM)
+            self._button(draw, (7, 112, 312, 143), "Scan networks", True)
+        elif state.screen == "workflow_start":
+            draw.rounded_rectangle((7, 37, 312, 107), radius=10, fill=PANEL)
+            draw.text((17, 44), self._clip(draw, state.description or "Ready to start", self.medium, 282), font=self.medium, fill=TEXT)
+            draw.text((17, 69), self._clip(draw, state.summary or "Review your selection", self.body, 280), font=self.body, fill=DIM)
+            if state.secondary_label:
+                draw.text((17, 90), self._clip(draw, state.secondary_label, self.small, 280), font=self.small, fill=AMBER)
+            self._button(draw, (7, 113, 312, 143), "Start", True)
+        elif state.screen == "workflow_live":
+            draw.text((11, 36), self._clip(draw, state.status_label or "RUNNING", self.small, 296), font=self.small, fill=GREEN)
+            draw.rounded_rectangle((7, 50, 312, 106), radius=9, fill=PANEL)
+            draw.text((17, 55), self._clip(draw, state.summary or "Operation active", self.medium, 280), font=self.medium, fill=TEXT)
+            if state.rows:
+                draw.text((17, 78), self._clip(draw, str(state.rows[0]), self.body, 280), font=self.body, fill=DIM)
+            self._button(draw, (7, 114, 312, 143), "Stop", True, AMBER)
+        elif state.screen == "workflow_result":
+            draw.text((11, 36), self._clip(draw, state.summary or "Finished", self.body, 296), font=self.body, fill=GREEN)
+            for i, row in enumerate(state.rows[:3]):
+                y = 59 + i * 28
+                draw.rounded_rectangle((7, y, 312, y + 25), radius=7, fill=PANEL)
+                draw.text((17, y + 3), self._clip(draw, str(row), self.body, 278), font=self.body, fill=TEXT)
         elif state.screen == "networks":
             draw.text((10, 35), self._clip(draw, state.summary or "Networks", self.body, 300), font=self.body, fill=DIM)
             first = max(0, state.selected - 1)
@@ -270,7 +345,7 @@ class Renderer:
                 draw.text((8, 34 + i * 19), self._clip(draw, row, self.medium, 300), font=self.medium, fill=TEXT)
 
         draw.rounded_rectangle((5, 147, 314, 168), radius=7, fill=PANEL)
-        if state.awaiting_input:
+        if state.awaiting_input and not state.screen.startswith("workflow_"):
             value = "*" * len(state.input_value) if state.secret_input else state.input_value
             if "press enter" in state.prompt_text.lower() and not value:
                 prompt = "ENTER  continue / stop"

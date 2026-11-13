@@ -34,6 +34,8 @@ except ModuleNotFoundError:
         list_wireless_interfaces as core_list_wireless_interfaces,
     )
 
+from core.gui_events import emit as gui_emit
+
 # Rich import with fallback
 try:
     from rich.console import Console, Group
@@ -361,6 +363,7 @@ class WiFiPoet(Module):
         self._set_ssid_set(selected_set)
         self._build_fake_aps()
         set_meta = SSID_SETS[self.ssid_set]
+        gui_emit("workflow_status", module="WiFi Poet", phase="ready", interface=self.interface, ssid_set=self.ssid_set, ssids=len(self._fake_aps))
 
         self.console.print(Panel(
             f"WiFi Poet TEST - {len(self._fake_aps)} SSIDs on all 2.4 GHz channels",
@@ -373,8 +376,11 @@ class WiFiPoet(Module):
         self.console.print(f"[dim]{DISCLAIMER}[/dim]")
 
         try:
+            if os.environ.get("SWISSKNIFE_GUI"):
+                input("Press Enter to start WiFi Poet: ")
             if not self._start_engine():
                 raise RuntimeError("Failed to start mdk4")
+            gui_emit("workflow_status", module="WiFi Poet", phase="running", interface=self.interface, ssid_set=self.ssid_set, ssids=len(self._fake_aps))
             self.console.print("[bold green]BROADCAST STARTED - 100 beacons/s[/bold green]")
             self.console.print("[bold cyan]Ctrl+C to stop[/bold cyan]")
 
@@ -393,6 +399,7 @@ class WiFiPoet(Module):
                     live.update(self._build_view(elapsed))
                     now = time.time()
                     if now - last_emit >= 1.0:
+                        gui_emit("workflow_status", module="WiFi Poet", phase="running", interface=self.interface, ssid_set=self.ssid_set, ssids=len(self._fake_aps), elapsed=elapsed, packets=self._packets_sent)
                         last_emit = now
                     self._sleep_interruptible(self.refresh)
             self.status = "completed"
@@ -404,6 +411,7 @@ class WiFiPoet(Module):
             self._error = str(exc)
             self.console.print(f"[red]Error: {exc}[/red]")
         finally:
+            gui_emit("workflow_status", module="WiFi Poet", phase=self.status if self.status in {"stopped", "error"} else "stopped", interface=self.interface, ssid_set=self.ssid_set)
             self.running = False
             self._stop_event.set()
             self._stop_engine()
@@ -580,7 +588,7 @@ class WiFiPoet(Module):
             display_iface = f"{iface} (AP running)" if iface == "wlan0" else iface
             self.console.print(f"  {i}) {display_iface} - {chipset} [{mode}]")
         while True:
-            choice = Prompt.ask("\nSelect interface (number or name)", default="1")
+            choice = (input("Select interface (number or name, Enter for 1): ").strip() or "1") if os.environ.get("SWISSKNIFE_GUI") else Prompt.ask("\nSelect interface (number or name)", default="1")
             if choice.isdigit() and 0 < int(choice) <= len(interfaces):
                 return interfaces[int(choice) - 1]
             if choice in interfaces:
@@ -608,11 +616,19 @@ class WiFiPoet(Module):
             set_size = len(metadata["lines"])
             self.console.print(f"  {index}) {label} - {set_size} SSIDs ({description})")
 
+        gui_emit("workflow_options", module="WiFi Poet", kind="ssid_set", records=[{
+            "index": index, "key": set_key, "label": SSID_SETS[set_key]["label"],
+            "count": len(SSID_SETS[set_key]["lines"]),
+        } for index, set_key in enumerate(set_keys, 1)])
+
         while True:
-            choice = Prompt.ask(
-                "\nSelect SSID set (number or key)",
-                default=str(default_index),
-            ).strip().lower()
+            if os.environ.get("SWISSKNIFE_GUI"):
+                choice = (input(f"Select SSID set (number or key, Enter for {default_index}): ").strip() or str(default_index)).lower()
+            else:
+                choice = Prompt.ask(
+                    "\nSelect SSID set (number or key)",
+                    default=str(default_index),
+                ).strip().lower()
             if choice.isdigit():
                 index = int(choice)
                 if 1 <= index <= len(set_keys):
