@@ -70,7 +70,23 @@ class Renderer:
         draw.text((9, 5), self._clip(draw, state.title.upper(), self.medium, 250), font=self.medium, fill=TEXT)
         draw.text((278, 7), "LAB5", font=self.small, fill=GREEN)
 
-        if state.screen == "list":
+        if state.screen == "networks":
+            draw.text((8, 33), self._clip(draw, state.summary or "Networks", self.body, 300), font=self.body, fill=GREEN)
+            first = max(0, state.selected - 1)
+            for i, record in enumerate(state.records[first:first + 2]):
+                index = first + i
+                y = 54 + i * 44
+                active = index == state.selected
+                draw.rounded_rectangle((5, y, 314, y + 40), radius=7, fill=(27, 48, 72) if active else PANEL, outline=GREEN if active else PANEL, width=2 if active else 1)
+                name = str(record.get("ssid") or record.get("ip") or record.get("vendor") or "<hidden>")
+                draw.text((12, y + 4), self._clip(draw, name, self.menu, 190), font=self.menu, fill=TEXT)
+                channel = record.get("channel") or "?"
+                strength = record.get("rssi")
+                signal = f"{strength} dBm" if strength is not None else (str(record.get("state") or record.get("source") or ""))
+                draw.text((224, y + 7), self._clip(draw, signal, self.body, 83), font=self.body, fill=AMBER)
+                detail = f"CH {channel}  {record.get('encryption') or '?'}  {record.get('clients') or 0} clients" if "channel" in record else f"{record.get('vendor') or ''}  {record.get('mac') or ''}"
+                draw.text((12, y + 23), self._clip(draw, detail, self.body, 286), font=self.body, fill=DIM)
+        elif state.screen == "list":
             first = max(0, state.selected - 3)
             visible = state.rows[first:first + 4]
             for i, row in enumerate(visible):
@@ -113,7 +129,10 @@ class Renderer:
         draw.line((0, 146, WIDTH - 1, 146), fill=(56, 83, 105))
         if state.awaiting_input:
             value = "*" * len(state.input_value) if state.secret_input else state.input_value
-            prompt = ("PASS> " if state.secret_input else "INPUT> ") + value + "_"
+            if "press enter" in state.prompt_text.lower() and not value:
+                prompt = "ENTER  continue / stop"
+            else:
+                prompt = ("PASS> " if state.secret_input else "INPUT> ") + value + "_"
             draw.text((8, 152), self._clip(draw, prompt, self.small, 300), font=self.small, fill=AMBER)
         else:
             hint = self._clip(draw, state.hint, self.small, 290)

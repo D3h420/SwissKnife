@@ -1585,6 +1585,9 @@ class ArpScanner(Module):
             self._devices_by_ip.values(),
             key=lambda item: tuple(int(part) for part in item.ip.split(".")),
         )
+        if os.environ.get("SWISSKNIFE_GUI"):
+            from core.gui_events import emit
+            emit("arp_devices", records=[{"ip": item.ip, "mac": item.mac, "vendor": item.vendor, "state": item.state} for item in devices], subnet=self._connected_subnet or "")
 
         table = Table(title="ARP Devices", box=box.SIMPLE_HEAVY)
         table.add_column("IP", style="bold")

@@ -1679,6 +1679,9 @@ class IpCamFinder(Module):
                 item.mac,
             ),
         )
+        if os.environ.get("SWISSKNIFE_GUI"):
+            from core.gui_events import emit
+            emit("camera_candidates", records=[{"source": item.source, "ip": item.ip, "mac": item.mac, "vendor": item.vendor, "rssi": item.rssi, "ssid": item.ssid} for item in hits], subnet=self._connected_subnet or "")
 
         for item in hits:
             rssi = f"{item.rssi} dBm" if item.rssi is not None else "-"

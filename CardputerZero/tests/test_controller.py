@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 
 from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY
-from core.engine import SwissKnifeEngine
+from core.engine import EngineEvent, SwissKnifeEngine
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 
@@ -122,6 +122,16 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(answers, ["s"])
         self.assertFalse(c.awaiting_input)
+
+    def test_recon_structured_result_becomes_network_cards(self):
+        c = self.controller
+        c.screen = "running"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        events = [EngineEvent("data", "recon_networks", {"mode": "scan", "networks": [{"ssid": "LAB5", "bssid": "02:00:00:00:00:01", "channel": 6, "rssi": -51, "encryption": "WPA2", "clients": 1}], "remaining": None})]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [])
+        c.tick()
+        self.assertEqual(c.view().screen, "networks")
+        self.assertEqual(c.view().records[0]["ssid"], "LAB5")
 
 
 if __name__ == "__main__":

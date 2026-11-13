@@ -872,6 +872,9 @@ def run_wardrive() -> int:
             first_seen = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             written = append_wigle_rows(log_path, networks, last_fix, first_seen)
             total_rows += written
+            if os.environ.get("SWISSKNIFE_GUI"):
+                from core.gui_events import emit
+                emit("wardrive_cycle", cycle=cycle, total=total_rows, latitude=last_fix.latitude, longitude=last_fix.longitude, path=log_path, records=[{"ssid": item.ssid, "bssid": item.bssid, "channel": item.channel, "rssi": item.signal, "encryption": item.encryption, "clients": 0} for item in networks])
 
             logging.info(
                 color_text(
