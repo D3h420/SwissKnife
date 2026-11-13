@@ -100,12 +100,11 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
             root.after(50, draw_loop)
 
     root.bind("<KeyPress>", key_event)
-    root.protocol("WM_DELETE_WINDOW", lambda: controller.handle("ESC") if controller.screen == "main" else controller.handle("HOME"))
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
     root.after(20, draw_loop)
     root.mainloop()
     if controller.operation and controller.operation.state == "running":
         controller.operation.cancel()
-    controller.close()
     return 0
 
 

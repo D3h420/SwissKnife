@@ -27,6 +27,7 @@ class PackageTests(unittest.TestCase):
             installed = stage / "usr/share/APPLaunch/apps/swissknife-cardputer"
             self.assertTrue((installed / "core/engine.py").exists())
             self.assertTrue((installed / "modules/recon.py").exists())
+            self.assertTrue((installed / "CardputerZero/swiss_intro.png").exists())
             self.assertFalse((installed / "CardputerZero/modules").exists())
             self.assertTrue((stage / "usr/share/APPLaunch/bin/swissknife-cardputer").exists())
 

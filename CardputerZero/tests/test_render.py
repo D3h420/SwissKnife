@@ -17,6 +17,16 @@ class RenderTests(unittest.TestCase):
                 )
                 self.assertEqual(frame.size, (320, 170))
 
+    def test_intro_and_delayed_prompt(self):
+        from CardputerZero.app.render import Renderer
+
+        renderer = Renderer()
+        self.assertIsNotNone(renderer.intro)
+        before = renderer.draw(ViewState(screen="splash"))
+        after = renderer.draw(ViewState(screen="splash", show_prompt=True))
+        self.assertEqual(before.size, (320, 170))
+        self.assertNotEqual(before.getpixel((160, 157)), after.getpixel((160, 157)))
+
 
 
 if __name__ == "__main__":

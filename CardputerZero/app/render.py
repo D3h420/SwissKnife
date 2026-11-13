@@ -18,7 +18,7 @@ DIM = (129, 154, 138)
 
 class Renderer:
     def __init__(self) -> None:
-        from PIL import ImageFont
+        from PIL import Image, ImageFont
         candidates = (
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
@@ -28,6 +28,13 @@ class Renderer:
         self.small = ImageFont.truetype(font_path, 10) if font_path else ImageFont.load_default()
         self.medium = ImageFont.truetype(font_path, 12) if font_path else ImageFont.load_default()
         self.large = ImageFont.truetype(font_path, 25) if font_path else ImageFont.load_default()
+        intro_path = Path(__file__).resolve().parents[1] / "swiss_intro.png"
+        self.intro = None
+        if intro_path.is_file():
+            with Image.open(intro_path) as source:
+                self.intro = source.convert("RGB")
+                resampling = getattr(Image, "Resampling", Image)
+                self.intro.thumbnail((WIDTH, 150), resampling.LANCZOS)
 
     def _clip(self, draw, text: str, font, width: int) -> str:
         if draw.textbbox((0, 0), text, font=font)[2] <= width:
@@ -40,6 +47,19 @@ class Renderer:
         from PIL import Image, ImageDraw
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
+        if state.screen == "splash":
+            if self.intro is not None:
+                image.paste(self.intro, ((WIDTH - self.intro.width) // 2, (150 - self.intro.height) // 2))
+            else:
+                draw.text((20, 63), "SWISSKNIFE", font=self.large, fill=GREEN)
+            draw.rectangle((0, 150, WIDTH, HEIGHT), fill=BG)
+            if state.show_prompt:
+                prompt = "PRESS ANY KEY"
+                width = draw.textbbox((0, 0), prompt, font=self.medium)[2]
+                draw.text(((WIDTH - width) // 2, 152), prompt, font=self.medium, fill=AMBER)
+            if state.simulated:
+                draw.text((4, 153), "DEMO", font=self.small, fill=AMBER)
+            return image
         accent = AMBER if state.accent == "amber" else GREEN
         if bright:
             accent = (170, 255, 193)
@@ -50,13 +70,7 @@ class Renderer:
         draw.text((8, 5), self._clip(draw, state.title.upper(), self.medium, 255), font=self.medium, fill=accent)
         draw.text((278, 5), "LAB5", font=self.small, fill=DIM)
 
-        if state.screen == "splash":
-            draw.text((15, 42), "SWISS", font=self.large, fill=GREEN)
-            draw.text((15, 71), "KNIFE", font=self.large, fill=AMBER)
-            draw.line((15, 104, 210, 104), fill=GREEN, width=2)
-            draw.text((16, 112), "LAB5 / D3h420", font=self.medium, fill=TEXT)
-            draw.text((16, 130), "ONE ENGINE / THREE INTERFACES", font=self.small, fill=DIM)
-        elif state.screen == "list":
+        if state.screen == "list":
             first = max(0, state.selected - 4)
             visible = state.rows[first:first + 5]
             for i, row in enumerate(visible):

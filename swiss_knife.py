@@ -531,7 +531,7 @@ def main() -> None:
 
     while True:
         print_header("Main menu:", MAIN_MENU)
-        choice = input(style("Your choice (0-4): ", STYLE_BOLD)).strip()
+        choice = input(style("Your choice (0-3): ", STYLE_BOLD)).strip()
 
         if choice not in MAIN_MENU:
             print(color_text("Invalid choice, try again.\n", COLOR_HIGHLIGHT))

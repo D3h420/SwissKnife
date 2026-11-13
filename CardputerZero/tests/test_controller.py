@@ -1,8 +1,9 @@
 import time
 import unittest
 
-from CardputerZero.app.controller import Controller
+from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY
 from core.engine import SwissKnifeEngine
+from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
 
 
 class ControllerTests(unittest.TestCase):
@@ -16,9 +17,12 @@ class ControllerTests(unittest.TestCase):
     def test_navigation_and_keyboard_filter(self):
         c = self.controller
         c.handle("ENTER")
-        self.assertEqual(c.screen, "main")
+        self.assertEqual(c.screen, "splash")
+        c.splash_started -= SPLASH_DELAY
+        c.tick()
+        self.assertTrue(c.view().show_prompt)
         c.handle("ENTER")
-        c.handle("ENTER")
+        self.assertEqual(c.screen, "menu")
         c.handle("ENTER")
         self.assertEqual(c.module.key, "Recon")
         c.handle("ENTER")
@@ -30,7 +34,32 @@ class ControllerTests(unittest.TestCase):
         c.handle("BACKSPACE")
         self.assertEqual(c.filter_text, "L")
         c.handle("HOME")
-        self.assertEqual(c.screen, "main")
+        self.assertEqual(c.screen, "menu")
+        self.assertEqual(c.menu, "main")
+
+    def test_menu_hierarchy_matches_terminal(self):
+        c = self.controller
+        self.assertEqual(MAIN, tuple(item["name"] for item in MAIN_MENU.values()))
+        self.assertEqual(SUBMENUS["Attacks"], tuple(item["name"] for item in ATTACKS_MENU.values()))
+        self.assertEqual(SUBMENUS["Wardrive"], tuple(item["name"] for item in WARDRIVE_MENU.values()))
+        c.splash_started -= SPLASH_DELAY
+        c.tick()
+        c.handle("TEXT", "x")
+        self.assertEqual(c.screen, "menu")
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(c.menu, "Attacks")
+        self.assertEqual(c.view().rows, list(SUBMENUS["Attacks"]))
+        c.handle("ESC")
+        self.assertEqual(c.menu, "main")
+        c.handle("DOWN")
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(c.view().rows, list(SUBMENUS["Wardrive"]))
+        c.handle("DOWN")
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(c.menu, "main")
 
     def test_information_only_module_cannot_start(self):
         c = self.controller
