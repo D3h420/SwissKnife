@@ -83,7 +83,7 @@ class CliOperation(Operation):
         if message.get("type") == "input":
             self.secret = bool(message.get("secret", False))
             self.awaiting_input = True
-            self.events.put(EngineEvent("input", "Input required", {"secret": self.secret}))
+            self.events.put(EngineEvent("input", "Input required", {"secret": self.secret, "prompt": str(message.get("prompt") or "")}))
         elif message.get("type") == "data" and isinstance(message.get("kind"), str) and isinstance(message.get("data"), dict):
             self.events.put(EngineEvent("data", message["kind"], message["data"]))
 

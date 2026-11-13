@@ -22,6 +22,7 @@ SUBMENUS = {
     "Wardrive": tuple(item["name"] for item in WARDRIVE_MENU.values()),
 }
 SPLASH_DELAY = 2.5
+SCAN_DEFAULTS = {"Recon": 12, "Start Wardrive": 8, "ARP scan": 15, "IP.CAM finder": 15}
 MODULE_COPY = {
     "Recon": "Discover nearby Wi-Fi networks and inspect radio activity.",
     "Deauth": "Manage the existing Deauth workflow.",
@@ -57,6 +58,7 @@ class ViewState:
     prompt_text: str = ""
     description: str = ""
     status_label: str = ""
+    secondary_label: str = ""
 
 
 class Controller:
@@ -81,6 +83,12 @@ class Controller:
         self.record_kind = ""
         self.choices: list[tuple[str, str]] = []
         self.choice_index = 0
+        self.scan_durations = dict(SCAN_DEFAULTS)
+        self.duration_text = "12"
+        self.duration_pristine = True
+        self.recon_mode = ""
+        self.workflow_interface_selected = False
+        self.current_prompt = ""
         self.error = ""
         self.selected = 0
         self.scroll = 0
@@ -124,7 +132,18 @@ class Controller:
                     self.awaiting_input = True
                     self.secret_input = bool(event.data.get("secret", False))
                     self.input_value = ""
-                    prompt = self.console.prompt()
+                    prompt = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", str(event.data.get("prompt") or self.console.prompt()))
+                    self.current_prompt = prompt
+                    automatic = self._automatic_answer(prompt)
+                    if automatic is not None:
+                        try:
+                            self.operation.send(automatic)  # type: ignore[attr-defined]
+                        except Exception as exc:
+                            self.console.feed(f"Error: {exc}\n")
+                        else:
+                            self.awaiting_input = False
+                            self.choices = []
+                            continue
                     wants_choice = bool(re.search(r"\b(select|choose|choice|option|number)\b", prompt, re.IGNORECASE))
                     self.choices = current_choices(self.console.visible_lines()) if wants_choice and not self.secret_input else []
                     self.choice_index = 0
@@ -164,6 +183,30 @@ class Controller:
                 changed = True
         return changed
 
+    def _automatic_answer(self, prompt: str) -> str | None:
+        if not self.module:
+            return None
+        lowered = prompt.casefold()
+        key = self.module.key
+        if key in SCAN_DEFAULTS and ("scan duration" in lowered or "scan window" in lowered):
+            duration = self.scan_durations[key]
+            return "" if duration == SCAN_DEFAULTS[key] else str(duration)
+        if not self.workflow_interface_selected:
+            return None
+        if key == "Recon":
+            if "press enter" in lowered and "switch" in lowered and "monitor mode" in lowered:
+                return ""
+            if self.recon_mode == "1" and "press enter" in lowered and "start scaner" in lowered:
+                return ""
+            if self.recon_mode == "2" and "press enter" in lowered and "start sniffer" in lowered:
+                return ""
+        if key == "Start Wardrive":
+            if "press enter" in lowered and "switch" in lowered and "managed mode" in lowered:
+                return ""
+            if "press enter" in lowered and "run gps setup" in lowered:
+                return ""
+        return None
+
     def _menu_rows(self) -> list[str]:
         return list(MAIN if self.menu == "main" else SUBMENUS[self.menu])
 
@@ -193,7 +236,9 @@ class Controller:
             rows = [MODULE_COPY.get(self.module.key, self.module.description), labels.get(status, status.replace('_', ' '))]
             if status in {"missing_dependency", "missing_hardware"}:
                 rows.append(reason)
-            return ViewState(screen="module_detail", title=self.module.label, rows=self._wrap(rows), description=rows[0], status_label=rows[1], hint="ENTER start  ESC back", status=status, **common)
+            return ViewState(screen="module_detail", title=self.module.label, rows=self._wrap(rows), description=rows[0], status_label=rows[1], hint="ENTER start  ESC back", status=status, secondary_label=f"Time {self.scan_durations[self.module.key]}s" if self.module.key in SCAN_DEFAULTS else "", **common)
+        if self.screen == "duration_input":
+            return ViewState(screen="duration_input", title="Scan duration", input_value=self.duration_text, rows=["Seconds, 1 to 300"], hint="ENTER save  ESC back", **common)
         if self.screen in {"running", "results"}:
             if self.awaiting_input and self.choices:
                 return ViewState(screen="list", title=(self.console.prompt() or "CHOOSE")[:28], rows=[f"{key}  {label}" for key, label in self.choices], selected=self.choice_index, hint="UP/DOWN select  ENTER", simulated=self.engine.demo)
@@ -243,12 +288,31 @@ class Controller:
                     self.menu = "main"
                     self._goto("menu")
                 return
-            back = {"detail": "menu", "results": "detail", "error": "detail", "network_detail": "results"}
+            back = {"detail": "menu", "duration_input": "detail", "results": "detail", "error": "detail", "network_detail": "results"}
             if self.screen == "detail":
                 self.menu = self.return_menu
             self._goto(back.get(self.screen, "menu"))
             if self.screen == "exit":
                 self.quit_requested = True
+            return
+        if self.screen == "duration_input":
+            if key == "BACKSPACE":
+                self.duration_text = self.duration_text[:-1]
+                self.duration_pristine = False
+            elif key == "TEXT" and char.isdigit() and len(self.duration_text) < 3:
+                self.duration_text = char if self.duration_pristine else self.duration_text + char
+                self.duration_pristine = False
+            elif key == "ENTER":
+                value = int(self.duration_text or "0")
+                if 1 <= value <= 300:
+                    if self.module and self.module.key in SCAN_DEFAULTS:
+                        self.scan_durations[self.module.key] = value
+                    self.selected = 0
+                    self._goto("detail")
+                else:
+                    self.error = "Choose 1 to 300 seconds"
+                    self._goto("error")
+            self.dirty = True
             return
         if self.screen == "running" and self.awaiting_input:
             if self.choices and key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
@@ -272,6 +336,12 @@ class Controller:
                     self.error = str(exc)
                     self.console.feed("Error: " + self.error + "\n")
                 else:
+                    if self.module:
+                        prompt = self.current_prompt.casefold()
+                        if self.module.key == "Recon" and not self.workflow_interface_selected and "your choice" in prompt and answer in {"1", "2"}:
+                            self.recon_mode = answer
+                        elif "select interface" in prompt:
+                            self.workflow_interface_selected = True
                     self.awaiting_input = False
                     self.input_value = ""
                     self.choices = []
@@ -279,6 +349,10 @@ class Controller:
                 return
         if key in {"UP", "DOWN", "PAGEUP", "PAGEDOWN"}:
             step = {"UP": -1, "DOWN": 1, "PAGEUP": -5, "PAGEDOWN": 5}[key]
+            if self.screen == "detail" and self.module and self.module.key in SCAN_DEFAULTS:
+                self.selected = max(0, min(1, self.selected + step))
+                self.dirty = True
+                return
             if self.screen in {"running", "results"} and self.records:
                 self.selected = max(0, min(len(self.records) - 1, self.selected + step))
                 self.dirty = True
@@ -306,7 +380,16 @@ class Controller:
                 self._open_module(label)
             return
         if self.screen == "detail" and key == "ENTER" and self.module and self.module.enabled:
-            self._start_operation()
+            if self.module.key in SCAN_DEFAULTS and self.selected == 1:
+                self.duration_text = str(self.scan_durations[self.module.key])
+                self.duration_pristine = True
+                self._goto("duration_input")
+            else:
+                self._start_operation()
+            return
+        if self.screen == "detail" and key in {"LEFT", "RIGHT"} and self.module and self.module.key in SCAN_DEFAULTS:
+            self.selected = 1 if key == "RIGHT" else 0
+            self.dirty = True
             return
         if self.screen == "results" and self.records and key == "ENTER":
             self.screen = "network_detail"
@@ -334,6 +417,9 @@ class Controller:
         self.record_summary = ""
         self.record_kind = ""
         self.choices = []
+        self.recon_mode = ""
+        self.workflow_interface_selected = False
+        self.current_prompt = ""
         self.console.feed(self.logs[0] + "\n")
         self.awaiting_input = False
         self.input_value = ""

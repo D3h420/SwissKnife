@@ -53,6 +53,10 @@ class Keyboard:
 
     def _map(self, code: int, editing: bool) -> tuple[str, str] | None:
         e = self.ecodes
+        if not editing:
+            direct = {e.KEY_F: "UP", e.KEY_X: "DOWN", e.KEY_Z: "LEFT", e.KEY_C: "RIGHT"}
+            if code in direct:
+                return direct[code], ""
         fixed = {
             e.KEY_UP: "UP", e.KEY_DOWN: "DOWN", e.KEY_LEFT: "LEFT", e.KEY_RIGHT: "RIGHT",
             e.KEY_ENTER: "ENTER", e.KEY_KPENTER: "ENTER", e.KEY_ESC: "ESC",
@@ -60,14 +64,12 @@ class Keyboard:
             e.KEY_BACKSPACE: "BACKSPACE",
         }
         if code in fixed:
+            if editing and fixed[code] in {"UP", "DOWN", "LEFT", "RIGHT", "PAGEUP", "PAGEDOWN"}:
+                return None
             return fixed[code], ""
         name = e.KEY.get(code, "")
         if not isinstance(name, str):
             return None
-        if not editing:
-            direct = {"KEY_F": "UP", "KEY_X": "DOWN", "KEY_Z": "LEFT", "KEY_C": "RIGHT"}
-            if name in direct:
-                return direct[name], ""
         if name.startswith("KEY_") and len(name) == 5 and name[-1].isalpha():
             char = name[-1].upper() if self.shift else name[-1].lower()
             return "TEXT", char

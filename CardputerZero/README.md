@@ -66,7 +66,7 @@ Kolejność etykiet jest pobierana z menu terminalowego, a szczegóły modułów
 
 | Klawisz | Działanie |
 | --- | --- |
-| `fn+F/X/Z/C` lub strzałki | Góra/dół/lewo/prawo |
+| `F/X/Z/C`, `fn+F/X/Z/C` lub strzałki | Góra/dół/lewo/prawo w menu i na listach; podczas wpisywania tekstu `F/X/Z/C` są literami |
 | Enter | Wybór lub wysłanie wpisanej odpowiedzi do modułu |
 | Esc | Powrót; podczas operacji żądanie przerwania modułu |
 | `fn+K` (Home) | Menu główne; aktywny moduł jest przerywany |
@@ -75,6 +75,8 @@ Kolejność etykiet jest pobierana z menu terminalowego, a szczegóły modułów
 | Przytrzymany Esc | Systemowy powrót do APPLaunch |
 
 Kody kierunków, Home i PageUp/PageDown pochodzą z oficjalnego mapowania klawiatury. Aplikacja korzysta ze standardowych zdarzeń Linux evdev; ścieżkę urządzenia można podać przez `APPLAUNCH_KEYBOARD_DEVICE` lub `LV_LINUX_KEYBOARD_DEVICE`. Przy braku zmiennej wybierane jest wykryte urządzenie z Enter i Esc. Nie ma założenia, że adapter USB nazywa się `wlan1`.
+
+Na ekranie Recon, Wardrive, ARP scan i IP.CAM finder przyciski **Start** oraz **Time** pozwalają uruchomić moduł z domyślnym czasem albo wcześniej wpisać własny czas. Po wyborze interfejsu aplikacja automatycznie odpowiada na techniczne pytania o start i czas skanowania; pytania o zatrzymanie, ponowienie GPS oraz inne decyzje użytkownika pozostają dostępne. Podczas edycji pola tekstowego litery `F/X/Z/C` wpisują znaki.
 
 ## Budowanie pakietu
 
@@ -85,7 +87,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.2.3-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.2.4-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -94,7 +96,7 @@ Wynik: `dist/swissknife-cardputer_0.2.3-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.3-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.4-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt --no-install-recommends` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.

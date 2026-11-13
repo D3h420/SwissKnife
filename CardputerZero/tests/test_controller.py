@@ -131,6 +131,71 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.view().screen, "networks")
         self.assertEqual(c.view().records[0]["ssid"], "LAB5")
 
+    def test_recon_auto_confirms_setup_after_interface(self):
+        c = self.controller
+        c.screen = "running"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.recon_mode = "1"
+        c.workflow_interface_selected = True
+        answers = []
+        events = [
+            EngineEvent("input", "Input required", {"prompt": "Press Enter to switch wlan1 to monitor mode...", "secret": False}),
+            EngineEvent("input", "Input required", {"prompt": "Scan duration in seconds (Enter for 12): ", "secret": False}),
+            EngineEvent("input", "Input required", {"prompt": "Press Enter to start scaner on wlan1...", "secret": False}),
+        ]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=answers.append)
+        for _ in range(3):
+            c.tick()
+        self.assertEqual(answers, ["", "", ""])
+        self.assertFalse(c.awaiting_input)
+        c.scan_durations["Recon"] = 25
+        events.append(EngineEvent("input", "Input required", {"prompt": "Scan duration in seconds (Enter for 12): ", "secret": False}))
+        c.tick()
+        self.assertEqual(answers[-1], "25")
+
+    def test_recon_color_prompt_and_stop_remain_distinct(self):
+        c = self.controller
+        c.screen = "running"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.recon_mode = "2"
+        c.workflow_interface_selected = True
+        answers = []
+        events = [
+            EngineEvent("input", "Input required", {"prompt": "\x1b[32mPress Enter\x1b[0m to start sniffer on wlan1..."}),
+            EngineEvent("input", "Input required", {"prompt": "Press Enter to stop sniffer: "}),
+        ]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=answers.append)
+        c.tick()
+        self.assertEqual(answers, [""])
+        c.tick()
+        self.assertTrue(c.awaiting_input)
+        self.assertEqual(answers, [""])
+
+    def test_wardrive_setup_is_automatic_but_gps_retry_is_manual(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Start Wardrive")
+        c.workflow_interface_selected = True
+        self.assertEqual(c._automatic_answer("Press Enter to switch wlan1 to managed mode"), "")
+        self.assertEqual(c._automatic_answer("Scan window in seconds (Enter for 8): "), "")
+        c.scan_durations["Start Wardrive"] = 20
+        self.assertEqual(c._automatic_answer("Scan window in seconds (Enter for 8): "), "20")
+        self.assertEqual(c._automatic_answer("Press Enter to run GPS setup before wardrive"), "")
+        self.assertIsNone(c._automatic_answer("Retry GPS setup (R) or Exit (E): "))
+
+    def test_recon_custom_duration_is_second_action(self):
+        c = self.controller
+        c.screen = "detail"
+        c.module = next(item for item in c.engine.modules() if item.key == "Recon")
+        c.handle("RIGHT")
+        c.handle("ENTER")
+        self.assertEqual(c.screen, "duration_input")
+        c.duration_text = ""
+        c.handle("TEXT", "3")
+        c.handle("TEXT", "0")
+        c.handle("ENTER")
+        self.assertEqual(c.scan_durations["Recon"], 30)
+        self.assertEqual(c.screen, "detail")
+
 
 if __name__ == "__main__":
     unittest.main()

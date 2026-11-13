@@ -120,9 +120,20 @@ class Renderer:
                 draw.text((17, 46 + i * 20), line, font=self.body, fill=TEXT)
             status = state.status_label or "Ready"
             draw.text((13, 101), self._clip(draw, status, self.small, 285), font=self.small, fill=GREEN if state.status == "needs_device_test" else AMBER)
-            draw.rounded_rectangle((7, 118, 312, 142), radius=10, fill=GREEN)
-            draw.text((20, 122), "Start", font=self.medium, fill=BG)
-            draw.text((283, 122), "→", font=self.medium, fill=BG)
+            if state.secondary_label:
+                draw.rounded_rectangle((7, 118, 201, 142), radius=10, fill=GREEN if state.selected == 0 else PANEL, outline=GREEN)
+                draw.text((20, 122), "Start", font=self.medium, fill=BG if state.selected == 0 else TEXT)
+                draw.rounded_rectangle((207, 118, 312, 142), radius=10, fill=BLUE if state.selected == 1 else PANEL, outline=BLUE)
+                draw.text((216, 123), self._clip(draw, state.secondary_label, self.small, 90), font=self.small, fill=BG if state.selected == 1 else TEXT)
+            else:
+                draw.rounded_rectangle((7, 118, 312, 142), radius=10, fill=GREEN)
+                draw.text((20, 122), "Start", font=self.medium, fill=BG)
+                draw.text((283, 122), "→", font=self.medium, fill=BG)
+        elif state.screen == "duration_input":
+            draw.rounded_rectangle((7, 40, 312, 112), radius=11, fill=PANEL)
+            draw.text((17, 48), "Scan duration", font=self.body, fill=DIM)
+            draw.text((17, 72), (state.input_value or "_") + " s", font=self.large, fill=TEXT)
+            draw.text((17, 119), "1–300 seconds", font=self.body, fill=DIM)
         elif state.screen in {"log", "detail"}:
             lines: list[str] = []
             max_chars = 31

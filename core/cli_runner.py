@@ -23,12 +23,12 @@ _input_lock = threading.Lock()
 _raw_stdin = sys.stdin
 
 
-def _request_input(secret: bool, size: int = -1) -> str:
+def _request_input(secret: bool, size: int = -1, prompt: str = "") -> str:
     """Tell the UI about a pending read, then consume one submitted line."""
     with _input_lock:
         control_fd = int(os.environ["SWISSKNIFE_CONTROL_FD"])
         prefix = os.environ.get("SWISSKNIFE_CONTROL_PREFIX", "")
-        message = prefix + json.dumps({"type": "input", "secret": secret}) + "\n"
+        message = prefix + json.dumps({"type": "input", "secret": secret, "prompt": prompt}) + "\n"
         os.write(control_fd, message.encode("utf-8"))
         return _raw_stdin.readline(size)
 
@@ -36,7 +36,7 @@ def _request_input(secret: bool, size: int = -1) -> str:
 def _input(prompt: object = "") -> str:
     sys.stdout.write(str(prompt))
     sys.stdout.flush()
-    line = _request_input(False)
+    line = _request_input(False, prompt=str(prompt))
     if line == "":
         raise EOFError
     return line.rstrip("\r\n")
@@ -46,7 +46,7 @@ def _getpass(prompt: str = "Password: ", stream: TextIO | None = None) -> str:
     destination = stream if stream is not None else sys.stderr
     destination.write(prompt)
     destination.flush()
-    line = _request_input(True)
+    line = _request_input(True, prompt=prompt)
     if line == "":
         raise EOFError
     return line.rstrip("\r\n")
