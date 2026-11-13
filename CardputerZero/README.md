@@ -33,20 +33,6 @@ Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualn
 
 ## Moduły i wymagania
 
-### SDR / RTL-SDR
-
-W menu głównym jest osobny ekran **SDR**. Korzysta z jednego wspólnego modułu [modules/sdr.py](../modules/sdr.py), z którego korzystają również terminal i LCD HAT. `rtl_power` tworzy pasma waterfall, `rtl_fm` + ALSA (`aplay`) odtwarza FM/WFM/AM/USB/LSB, `rtl_sdr` zapisuje surowe próbki I/Q, a `dump1090-mutability` dekoduje ADS-B 1090 MHz. Dostępne są pasma FM, lotnicze, 433 MHz, 868 MHz i 1090 MHz oraz strojenie krokami 10 kHz, 100 kHz i 1 MHz. Dokładny zakres odbioru zależy od tunera i anteny.
-
-Pakiet instaluje `rtl-sdr`, `alsa-utils` i `dump1090-mutability` jako zależności. Po instalacji urządzenie USB może wymagać reguł udev lub poprawnych uprawnień. Jeżeli inna aplikacja albo usługa `dump1090-mutability` zajmuje dongiel, zatrzymaj ją przed uruchomieniem SDR w SwissKnife. Aplikacja sama nie wyłącza innych usług.
-
-Nagrania trafiają do `~/.local/state/swissknife/sub-ghz/` jako pliki `.cu8` (unsigned 8-bit interleaved I/Q) i `.json` z częstotliwością, próbkowaniem i ustawieniami. Domyślnie nagranie kończy się po 30 sekundach; można je zatrzymać wcześniej. Przy 1,024 MS/s zajmuje około 61 MB. Waterfall, odsłuch, nagrywanie i ADS-B są wzajemnie wykluczające dla jednego dongla. Podczas nagrywania waterfall nie odświeża się. Tryb `--dev` pokazuje dane jawnie oznaczone jako symulowane i nie tworzy plików nagrania.
-
-Sterowanie na ekranie SDR: `fn+F/X` wybiera pasmo, `fn+Z/C` przestraja, `fn+L/M` zmienia krok, `T` otwiera wpisanie częstotliwości w MHz, `R` uruchamia/zatrzymuje nagranie, `A` odsłuch, `D` ADS-B, `S` wraca do waterfall, `M` zmienia demodulację, `N` wybiera następny dongiel, `G` cyklicznie ustawia wzmocnienie, `P` korektę PPM, `B` szerokość pasma, `I` częstotliwość próbkowania IQ; Enter zatrzymuje/wznawia, Esc wraca do menu. Każda zmiana trybu zwalnia poprzedni proces przed uruchomieniem nowego.
-
-**Odbiór RTL-SDR, audio, ADS-B i wydajność waterfall nie zostały sprawdzone na fizycznym Cardputer Zero.**
-
-Opcje wywołań odpowiadają dokumentacji [Osmocom `rtl_power`](https://github.com/osmocom/rtl-sdr/blob/master/src/rtl_power.c), [`rtl_fm`](https://github.com/osmocom/rtl-sdr/blob/master/debian/rtl_fm.1), [`rtl_sdr`](https://github.com/osmocom/rtl-sdr/blob/master/debian/rtl_sdr.1) i [dump1090-mutability](https://github.com/adsb-related-code/dump1090-mutability/blob/master/dump1090.c). Pakiet `dump1090-mutability` jest dostępny dla ARM64 w [Debianie](https://packages.debian.org/en/bookworm/dump1090-mutability).
-
 | Moduł | Wersja Cardputer Zero | Wymagania |
 | --- | --- | --- |
 | Recon | GUI skanu `iw`, wyniki strukturalne z istniejącego modułu; test sprzętowy wymagany | Wi-Fi w trybie managed, `iw` |
@@ -85,7 +71,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.1.0-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita dodawany jest znacznik `+dirty<CZAS>`, żeby ponowna instalacja dostrzegła nowy pakiet. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.1.1-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -121,8 +107,6 @@ python3 -m unittest discover -s RPi_LCD_HAT -p 'test_*.py'
 ```
 
 ## Rozwiązywanie problemów i ograniczenia
-
-- Zajęty dongiel: sprawdź `rtl_test -t` oraz stan innych programów SDR. Usługa `dump1090-mutability` może pracować w tle po instalacji pakietu.
 
 - Czarny ekran: sprawdź `/dev/fb0`, format 320 × 170 × 16 bpp i uprawnienia grupy `video`.
 - Brak reakcji klawiszy: sprawdź `/dev/input/`, grupę `input` i ścieżkę w `APPLAUNCH_KEYBOARD_DEVICE`.

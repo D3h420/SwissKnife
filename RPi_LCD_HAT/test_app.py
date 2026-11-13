@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from core.features import features_for
 from RPi_LCD_HAT.app import MENUS, MenuItem, SwissKnifOS
-from modules.sdr import SDRSession
 
 
 class FakeProcess:
@@ -60,33 +59,6 @@ class FakeHardware:
 
 
 class AppTests(unittest.TestCase):
-    def test_sdr_menu_uses_shared_session_and_returns(self):
-        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
-        app.sdr = SDRSession(demo=True)
-        app._menu_action(MenuItem("Waterfall", "sdr-mode", args=("spectrum",)))
-        deadline = time.monotonic() + 2
-        while app.sdr_busy and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertEqual(app.sdr.snapshot().mode, "spectrum")
-        app._handle_key("K3")
-        while app.sdr_busy and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertEqual(app.screen, "menu")
-        self.assertEqual(app.sdr.snapshot().mode, "idle")
-
-    def test_sdr_frequency_keyboard(self):
-        app = SwissKnifOS(hardware=None, renderer=FakeRenderer())
-        app.sdr = SDRSession(demo=True)
-        app._menu_action(MenuItem("Tune MHz", "sdr-tune"))
-        self.assertEqual(app.screen, "sdr_tune")
-        app.keyboard.value = "868.3"
-        app._handle_key("K4")
-        deadline = time.monotonic() + 2
-        while app.sdr_busy and time.monotonic() < deadline:
-            time.sleep(0.01)
-        self.assertEqual(app.sdr.config.center_hz, 868_300_000)
-        app.sdr.close()
-
     def test_git_update_restarts_idle_app(self):
         hardware = FakeHardware()
         app = SwissKnifOS(hardware, renderer=FakeRenderer())
