@@ -27,14 +27,21 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(module_status(recon, hardware(wifi=False))[0], "missing_hardware")
         self.assertEqual(module_status(recon, hardware())[0], "needs_device_test")
 
-    def test_active_modules_are_not_exposed(self):
-        engine = SwissKnifeEngine(demo=True)
-        with self.assertRaises(PermissionError):
-            engine.start("Deauth", {"interface": "wlan1"})
+    def test_every_terminal_module_has_a_cardputer_entry(self):
+        from pathlib import Path
+        from core.features import FEATURES
 
-    def test_information_only_module_has_hardware_diagnostics(self):
+        root = Path(__file__).resolve().parents[2]
+        modules = {module.key: module for module in available_modules()}
+        self.assertEqual(set(modules), {feature.label for feature in FEATURES})
+        for feature in FEATURES:
+            with self.subTest(feature=feature.label):
+                self.assertTrue(modules[feature.label].enabled)
+                self.assertTrue((root / feature.script).is_file())
+
+    def test_terminal_module_has_hardware_diagnostics(self):
         deauth = next(module for module in available_modules() if module.key == "Deauth")
-        self.assertEqual(module_status(deauth, hardware())[0], "unsupported")
+        self.assertEqual(module_status(deauth, hardware(tools=set()))[0], "missing_dependency")
         self.assertIn("Monitor-mode adapter not confirmed", compatibility_issues(deauth, hardware(wifi=False)))
 
     def test_management_connection_requires_confirmation(self):
@@ -54,6 +61,18 @@ class EngineTests(unittest.TestCase):
         operation.thread.join(timeout=2)
         self.assertEqual(operation.state, "cancelled")
         self.assertTrue(any(event.kind == "finished" for event in operation.poll()))
+
+    def test_every_terminal_module_starts_in_simulation(self):
+        engine = SwissKnifeEngine(demo=True)
+        for module in engine.modules():
+            with self.subTest(module=module.key):
+                operation = engine.start_terminal(module.key)
+                operation.thread.join(timeout=2)
+                self.assertFalse(operation.thread.is_alive())
+                self.assertEqual(operation.state, "completed")
+                events = operation.poll()
+                self.assertTrue(any(event.kind == "finished" for event in events))
+                self.assertTrue(any("SIMULATED" in event.message for event in events))
 
     def test_backend_exception_becomes_error_event(self):
         engine = SwissKnifeEngine(demo=False)

@@ -32,6 +32,8 @@ class PackageTests(unittest.TestCase):
             self.assertFalse((installed / "CardputerZero/modules").exists())
             self.assertTrue((stage / "usr/share/APPLaunch/bin/swissknife-cardputer").exists())
             self.assertTrue((stage / "usr/libexec/swissknife-cardputer/scan-wifi").exists())
+            self.assertTrue((stage / "usr/libexec/swissknife-cardputer/run-module").exists())
+            self.assertTrue((installed / "RPi_LCD_HAT/runner.py").exists())
 
 
 if __name__ == "__main__":

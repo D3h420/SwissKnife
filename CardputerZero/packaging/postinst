@@ -1,6 +1,7 @@
 #!/bin/sh
 set -e
 # Framebuffer, keyboard, and USB GPS access remain with the normal login user.
+install -d -o root -g root -m 0700 /var/lib/swissknife
 app_user=${SUDO_USER:-}
 if [ -z "$app_user" ]; then
     app_user=$(getent passwd 1000 | cut -d: -f1)
@@ -13,7 +14,7 @@ if [ "$app_user" != root ] && id -u "$app_user" >/dev/null 2>&1; then
         fi
     done
     rule=/etc/sudoers.d/swissknife-cardputer
-    printf '%s ALL=(root) NOPASSWD: /usr/libexec/swissknife-cardputer/scan-wifi *\n' "$app_user" > "$rule"
+    printf 'Defaults!/usr/libexec/swissknife-cardputer/run-module !use_pty\n%s ALL=(root) NOPASSWD: /usr/libexec/swissknife-cardputer/scan-wifi *, /usr/libexec/swissknife-cardputer/run-module *\n' "$app_user" > "$rule"
     chmod 0440 "$rule"
     if ! visudo -cf "$rule" >/dev/null; then
         rm -f "$rule"

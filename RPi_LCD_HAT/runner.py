@@ -27,7 +27,8 @@ def _request_input(secret: bool, size: int = -1) -> str:
     """Tell the UI about a pending read, then consume one submitted line."""
     with _input_lock:
         control_fd = int(os.environ["SWISSKNIFE_CONTROL_FD"])
-        message = json.dumps({"type": "input", "secret": secret}) + "\n"
+        prefix = os.environ.get("SWISSKNIFE_CONTROL_PREFIX", "")
+        message = prefix + json.dumps({"type": "input", "secret": secret}) + "\n"
         os.write(control_fd, message.encode("utf-8"))
         return _raw_stdin.readline(size)
 
@@ -89,6 +90,10 @@ def main() -> None:
     builtins.input = _input
     getpass.getpass = _getpass
     sys.stdin = _PromptingStdin(_raw_stdin)  # type: ignore[assignment]
+    # The Cardputer worker reserves the original stderr pipe for prompt
+    # messages.  Ordinary module diagnostics still belong in the output log.
+    if os.environ.get("SWISSKNIFE_CONTROL_PREFIX"):
+        sys.stderr = sys.stdout
 
     runpy.run_path(str(script), run_name="__main__")
 

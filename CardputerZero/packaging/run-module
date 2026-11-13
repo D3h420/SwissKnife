@@ -1,0 +1,103 @@
+#!/usr/bin/python3 -I
+"""Run one installed SwissKnife module as root for the Cardputer GUI.
+
+The caller supplies a catalogue label, never a path or command.  The module
+and runner are taken from root-owned files in the installed Debian package.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import stat
+import sys
+
+
+APP = Path("/usr/share/APPLaunch/apps/swissknife-cardputer")
+RUNNER = APP / "RPi_LCD_HAT" / "runner.py"
+MODULE_DIR = APP / "modules"
+
+
+def _trusted_file(path: Path) -> bool:
+    """Refuse to execute package files that a non-root user can replace."""
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.stat()
+        return (
+            resolved == path
+            and stat.S_ISREG(metadata.st_mode)
+            and metadata.st_uid == 0
+            and not metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        )
+    except OSError:
+        return False
+
+
+def _trusted_directory(path: Path) -> bool:
+    try:
+        resolved = path.resolve(strict=True)
+        metadata = resolved.stat()
+        return (
+            resolved == path
+            and stat.S_ISDIR(metadata.st_mode)
+            and metadata.st_uid == 0
+            and not metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        )
+    except OSError:
+        return False
+
+
+def main() -> int:
+    if os.geteuid() != 0:
+        print("The module worker requires root", file=sys.stderr)
+        return 1
+    if len(sys.argv) != 2:
+        print("Expected exactly one module label", file=sys.stderr)
+        return 2
+    if not all(
+        _trusted_directory(path)
+        for path in (APP, APP / "core", MODULE_DIR, APP / "RPi_LCD_HAT")
+    ) or not _trusted_file(RUNNER):
+        print("Installed runner is missing or unsafe", file=sys.stderr)
+        return 1
+
+    # -I ignores PYTHONPATH and user site packages.  Add only package code
+    # installed and owned by root before loading the shared catalogue.
+    sys.path.insert(0, str(APP))
+    from core.features import FEATURES
+
+    feature = next((item for item in FEATURES if item.label == sys.argv[1]), None)
+    if feature is None:
+        print("Unknown module label", file=sys.stderr)
+        return 2
+    script = (APP / feature.script).resolve()
+    if not script.is_relative_to(MODULE_DIR) or not _trusted_file(script):
+        print("Installed module is missing or unsafe", file=sys.stderr)
+        return 1
+
+    environment = {
+        "HOME": "/root",
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PYTHONUNBUFFERED": "1",
+        "PYTHONIOENCODING": "utf-8:replace",
+        "SWISSKNIFE_DATA_DIR": "/var/lib/swissknife",
+        "SWISSKNIFE_CONTROL_FD": "2",
+        "SWISSKNIFE_CONTROL_PREFIX": "SKINPUT:",
+        "SWISSKNIFOS_LCD": "1",
+        "TERM": "dumb",
+        "NO_COLOR": "1",
+        "CLICOLOR": "0",
+        "FORCE_COLOR": "0",
+    }
+    os.chdir(APP)
+    python = "/usr/bin/python3"
+    os.execve(
+        python,
+        [python, "-I", "-u", str(RUNNER), str(script), *feature.args],
+        environment,
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

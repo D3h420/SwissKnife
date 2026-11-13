@@ -9,8 +9,11 @@ mkdir -p "$DEST" "$STAGE$INSTALL_PREFIX/bin"
 mkdir -p "$STAGE/usr/libexec/swissknife-cardputer"
 tar -C "$ROOT" --exclude='__pycache__' --exclude='*.pyc' -cf - \
     core modules html swiss_knife.py requirements.txt \
-    CardputerZero/__init__.py CardputerZero/app CardputerZero/swiss_intro.png | tar -C "$DEST" -xf -
+    CardputerZero/__init__.py CardputerZero/app CardputerZero/swiss_intro.png \
+    RPi_LCD_HAT/__init__.py RPi_LCD_HAT/runner.py | tar -C "$DEST" -xf -
 install -m 0755 "$ROOT/CardputerZero/packaging/swissknife-cardputer" \
     "$STAGE$INSTALL_PREFIX/bin/swissknife-cardputer"
 install -m 0755 "$ROOT/CardputerZero/packaging/scan-wifi" \
     "$STAGE/usr/libexec/swissknife-cardputer/scan-wifi"
+install -m 0755 "$ROOT/CardputerZero/packaging/run-module" \
+    "$STAGE/usr/libexec/swissknife-cardputer/run-module"

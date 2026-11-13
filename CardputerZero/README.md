@@ -4,9 +4,9 @@
 
 ## Stan implementacji
 
-To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik. Dotychczasowe `swiss_knife.py` i `RPi_LCD_HAT/` nadal działają swoimi dotychczasowymi ścieżkami.
+To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik; istniejące skrypty wymagające roota są wywoływane przez kontrolowany proces. Dotychczasowe `swiss_knife.py` i `RPi_LCD_HAT/` zachowują swoje wejścia.
 
-Kod działa w trybie symulacji na komputerze. Instalacja pakietu oraz skan Recon na `wlan0` zostały sprawdzone na fizycznym Cardputer Zero z Debianem 13. Pozostałe moduły, adaptery i obsługa GUI nadal wymagają testów sprzętowych.
+Kod działa w trybie symulacji na komputerze. Instalacja wcześniejszego pakietu oraz skan Recon na `wlan0` zostały sprawdzone na fizycznym Cardputer Zero z Debianem 13. Nowa ścieżka uruchamiania interaktywnych skryptów, pozostałe moduły i adaptery wymagają testów sprzętowych. Dostępność pozycji w menu nie oznacza potwierdzonego działania na urządzeniu.
 
 ## Podstawa platformowa
 
@@ -27,26 +27,28 @@ CardputerZero/ ─┘                     │
               └── core/engine.py + core/hardware.py
 ```
 
-`core/engine.py` udostępnia listę modułów, status zależności i sprzętu, konfigurację, zdarzenia wyniku, postęp, błąd i anulowanie. Operacje pracują w wątku roboczym; GUI czyta kolejkę zdarzeń bez blokowania pętli rysowania. `core/hardware.py` wykrywa interfejsy, USB, GPS, trasę domyślną, narzędzia i uprawnienia. Warstwa Cardputer zawiera tylko ekran, klawiaturę i nawigację.
+`core/engine.py` udostępnia listę modułów, status zależności i sprzętu oraz operacje z wynikami, błędami i anulowaniem. Dla wszystkich pozycji menu uruchamia **ten sam plik modułu**, którego używa terminal. Warstwa wejścia przechwytuje terminalowe pytania `input`, `getpass` i `stdin.readline`, aby odpowiedzi dało się wpisać fizyczną klawiaturą. Skrypt działa w osobnym procesie, a GUI odczytuje zdarzenia bez blokowania ekranu. `core/hardware.py` wykrywa interfejsy, USB, GPS, trasę domyślną, narzędzia i uprawnienia.
+
+Uprawnienia root otrzymuje tylko proces uruchamiający wybrany moduł. Pomocnik w pakiecie przyjmuje wyłącznie nazwy z `core/features.py` i mapuje je na pliki wspólnego silnika. GUI nie otrzymuje ogólnego `sudo` ani możliwości podania dowolnej komendy. Zatrzymanie modułu sygnalizuje przerwanie całej jego grupie procesów, aby istniejąca obsługa `KeyboardInterrupt` mogła posprzątać interfejsy i procesy potomne.
 
 Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualnych katalogów `core/`, `modules/`, `html/` i `swiss_knife.py` w tym repozytorium. Zmiana modułu nie wymaga ręcznego kopiowania go do `CardputerZero/`. Samo `git pull` aktualizuje źródła, ale **nie zmienia aplikacji już zainstalowanej z `.deb`**. Po zmianie źródeł zbuduj nowy pakiet i zainstaluj go na urządzeniu.
 
 ## Moduły i wymagania
 
-| Moduł | Wersja Cardputer Zero | Wymagania |
+| Moduł | Ścieżka uruchamiania | Główne wymagania |
 | --- | --- | --- |
-| Recon | GUI skanu `iw`, wyniki strukturalne z istniejącego modułu; skan `wlan0` sprawdzony na Cardputer Zero | Wi-Fi w trybie managed, `iw` |
-| Wardrive | GUI GPS + cykliczny skan + Wigle log; test sprzętowy wymagany | Wi-Fi, GPS z NMEA, `iw`, `stty` |
-| ARP Scan | GUI bezpiecznego przeglądu połączonej sieci: ping + sąsiedzi ARP; test sprzętowy wymagany | Połączony IPv4, `ip`, `ping` |
-| IP.CAM Finder | GUI kandydatów kamer z podłączonej sieci i istniejących heurystyk OUI; test sprzętowy wymagany | Połączony IPv4, `ip`, `ping` |
-| Deauth | Ekran informacyjny, uruchamianie wyłączone | Adapter monitor, `iw`, `aireplay-ng`, opcjonalnie `mdk4`/`bully` |
-| Portal | Ekran informacyjny, uruchamianie wyłączone | Adapter AP, `hostapd`, `dnsmasq`, `iptables` |
-| Evil Twin | Ekran informacyjny, uruchamianie wyłączone | Dwa odpowiednie adaptery, `hostapd`, `dnsmasq` |
-| Handshaker | Ekran informacyjny, uruchamianie wyłączone | Monitor, `aircrack-ng`, Scapy |
-| WiFi Poet | Ekran informacyjny, uruchamianie wyłączone | Monitor, `mdk4` |
-| Dragon Drain | Ekran informacyjny, uruchamianie wyłączone | Monitor, narzędzia budowania i źródła zewnętrzne |
+| Recon | `modules/recon.py` | Wi-Fi, `iw`; funkcje monitor wymagają zgodnego adaptera |
+| Start Wardrive / GPS setup | `modules/wardrive.py` | Wi-Fi, odbiornik GPS i poprawka NMEA |
+| ARP scan | `modules/arp_scanner.py` | Połączenie IPv4, narzędzia sieciowe |
+| IP.CAM finder | `modules/ipcam_finder.py` | Połączenie IPv4, narzędzia sieciowe |
+| Deauth | `modules/deauth.py` | Zgodny adapter monitor, Aircrack-ng; opcjonalnie `mdk4`/`bully` |
+| Portal | `modules/portal.py` | Adapter AP, `hostapd`, `dnsmasq`, `iptables` |
+| Evil Twin | `modules/twins.py` | Odpowiednie adaptery AP i monitor, `hostapd`, `dnsmasq` |
+| Handshaker | `modules/handshaker.py` | Adapter monitor, Aircrack-ng, Scapy |
+| WiFi Poet | `modules/wifi_poet.py` | Adapter monitor, `mdk4` i biblioteki Python |
+| Dragon Drain | `modules/dragon_drain.py` | Specjalistyczne narzędzia i źródła zewnętrzne |
 
-Interfejs nie uruchamia operacji zakłócających sieć, podszywania się pod AP ani zbierania danych logowania. Pełne terminalowe kreatory ARP/IP.CAM potrafią łączyć się z wybraną siecią; GUI **nie wykonuje tej części**. Działa wyłącznie na już połączonym interfejsie i ogranicza przegląd do 128 adresów w podsieciach nie większych niż 4096 adresów. Recon korzysta z aktywnego skanu `iw`, więc nie jest snifferem pasywnym. Nie przełącza trybu karty. Pakiet instaluje wymagane narzędzia działających modułów przez `apt`, ustawia ścieżkę do `/usr/sbin` i dodaje wąsko uprawniony pomocnik wyłącznie do skanu `iw`. GUI pozostaje zwykłym procesem użytkownika. Narzędzia modułów informacyjnych nie są instalowane, ponieważ tych modułów GUI nie uruchamia.
+Pozycje uruchamiają **oryginalny interaktywny kreator modułu**, a nie uproszczoną wersję funkcji. Pytania modułu są wyświetlane na ekranie; odpowiedzi wpisuje się klawiaturą. Funkcje zależne od trybu monitorowania, AP, GPS lub zewnętrznych źródeł nadal wymagają zgodnego sprzętu i testów. Root nie zastąpi brakującego narzędzia ani możliwości adaptera. Część modułów może zmienić tryb interfejsu lub profil sieci i przerwać połączenie używane do SSH; przed uruchomieniem wybierz kartę przeznaczoną do danej operacji.
 
 ## Menu i ekran startowy
 
@@ -59,18 +61,18 @@ Układ menu jest taki sam jak w terminalowym `swiss_knife.py`:
 - **Wardrive** — Start Wardrive, GPS setup, Back.
 - **Exit** — powrót do APPLaunch.
 
-Kolejność etykiet jest pobierana z menu terminalowego, a szczegóły modułów ze wspólnego silnika. Moduły bez ścieżki wykonania w GUI pokazują tylko informacje i diagnostykę zgodności.
+Kolejność etykiet jest pobierana z menu terminalowego, a szczegóły modułów ze wspólnego silnika. Po uruchomieniu modułu aplikacja pokazuje jego bieżące wyjście i pytania. Wybory wewnątrz modułu są tymi samymi wyborami co w terminalu.
 
 ## Sterowanie
 
 | Klawisz | Działanie |
 | --- | --- |
 | `fn+F/X/Z/C` lub strzałki | Góra/dół/lewo/prawo |
-| Enter | Wybór, uruchomienie po konfiguracji |
-| Esc | Powrót; podczas operacji żądanie anulowania |
-| `fn+K` (Home) | Menu główne; aktywna operacja jest anulowana |
+| Enter | Wybór lub wysłanie wpisanej odpowiedzi do modułu |
+| Esc | Powrót; podczas operacji żądanie przerwania modułu |
+| `fn+K` (Home) | Menu główne; aktywny moduł jest przerywany |
 | `fn+L/M` (PageUp/PageDown) | Szybsze przewijanie |
-| Litery/cyfry/Backspace | Pole filtra SSID w konfiguracji |
+| Litery/cyfry/Backspace | Edycja odpowiedzi na pytanie modułu; hasła są ukryte |
 | Przytrzymany Esc | Systemowy powrót do APPLaunch |
 
 Kody kierunków, Home i PageUp/PageDown pochodzą z oficjalnego mapowania klawiatury. Aplikacja korzysta ze standardowych zdarzeń Linux evdev; ścieżkę urządzenia można podać przez `APPLAUNCH_KEYBOARD_DEVICE` lub `LV_LINUX_KEYBOARD_DEVICE`. Przy braku zmiennej wybierane jest wykryte urządzenie z Enter i Esc. Nie ma założenia, że adapter USB nazywa się `wlan1`.
