@@ -121,9 +121,11 @@ class CliOperation(Operation):
                     if cancel_started is None:
                         cancel_started = time.monotonic()
                     elapsed = time.monotonic() - cancel_started
-                    if elapsed > 7 and process.poll() is None:
+                    # Radio modules may need several seconds to stop their
+                    # children and restore an adapter before exiting.
+                    if elapsed > 30 and process.poll() is None:
                         process.kill()
-                    elif elapsed > 4 and process.poll() is None:
+                    elif elapsed > 20 and process.poll() is None:
                         process.terminate()
                 for key, _ in selector.select(timeout=0.05):
                     stream = key.fileobj

@@ -1,8 +1,11 @@
 import time
 import unittest
+import tempfile
 from types import SimpleNamespace
+from unittest.mock import patch
+from pathlib import Path
 
-from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY
+from CardputerZero.app.controller import Controller, MAIN, SUBMENUS, SPLASH_DELAY, HARDWARE_REFRESH_SECONDS
 from core.engine import EngineEvent, SwissKnifeEngine
 from core.hardware import HardwareSnapshot, WiFiAdapter
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
@@ -38,9 +41,11 @@ class ControllerTests(unittest.TestCase):
 
     def test_menu_hierarchy_matches_terminal(self):
         c = self.controller
-        self.assertEqual(MAIN, tuple(item["name"] for item in MAIN_MENU.values()))
+        terminal_main = tuple(item["name"] for item in MAIN_MENU.values())
+        self.assertEqual(MAIN, (*terminal_main[:-1], "Settings", terminal_main[-1]))
         self.assertEqual(SUBMENUS["Attacks"], tuple(item["name"] for item in ATTACKS_MENU.values() if item["name"] != "Back"))
         self.assertEqual(SUBMENUS["Wardrive"], tuple(item["name"] for item in WARDRIVE_MENU.values() if item["name"] != "Back"))
+        self.assertEqual(SUBMENUS["Settings"], ("Screen", "About"))
         c.splash_started -= SPLASH_DELAY
         c.tick()
         c.handle("TEXT", "x")
@@ -107,6 +112,51 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.hardware.wifi, ())
         c.handle("ENTER")
         self.assertEqual(c.screen, "running")
+
+    def test_new_adapter_is_shown_from_live_module_inventory(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
+        c.screen = "workflow_wait"
+        c.hardware = HardwareSnapshot((), (), (), (), "", False, frozenset())
+        events = [
+            EngineEvent("data", "workflow_interfaces", {"module": "Deauth", "records": [{"name": "wlx123", "chipset": "test-driver"}]}),
+            EngineEvent("input", "Input required", {"prompt": "Select interface (number or name): "}),
+        ]
+        answers = []
+        c.operation = SimpleNamespace(state="running", poll=lambda: events[:], send=answers.append)
+        c.tick()
+        self.assertEqual(c.screen, "workflow_choice")
+        self.assertEqual(c.attack_options, [("1", "wlx123  test-driver")])
+        c.handle("ENTER")
+        self.assertEqual(answers, ["1"])
+
+    def test_hardware_inventory_refreshes_after_adapter_changes(self):
+        c = self.controller
+        disconnected = HardwareSnapshot(("wlan0",), (), (), (), "wlan0", False, frozenset())
+        reconnected = HardwareSnapshot(("wlan0", "wlan2"), (WiFiAdapter("wlan2", "test-driver", "managed", True, True),), ("USB Wi-Fi",), (), "wlan0", False, frozenset())
+        with patch.object(c.engine, "hardware", side_effect=[disconnected, reconnected]):
+            for expected in (disconnected, reconnected):
+                c._last_hardware_refresh -= HARDWARE_REFRESH_SECONDS
+                c.tick()
+                deadline = time.monotonic() + 2
+                while c.hardware != expected and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                    c.tick()
+                self.assertEqual(c.hardware, expected)
+                self.assertEqual(c.usb_wifi_connected, expected is reconnected)
+
+    def test_back_from_live_workflow_uses_stop_prompt(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
+        c.screen = "workflow_live"
+        c.awaiting_input = True
+        c.current_prompt = "Press Enter to stop attack and exit: "
+        answers = []
+        cancelled = []
+        c.operation = SimpleNamespace(state="running", send=answers.append, cancel=lambda: cancelled.append(True))
+        c.handle("ESC")
+        self.assertEqual(answers, [""])
+        self.assertFalse(cancelled)
 
     def test_terminal_prompt_accepts_text_and_hides_secret(self):
         c = self.controller
@@ -275,6 +325,12 @@ class ControllerTests(unittest.TestCase):
         c = self.controller
         c.screen = "menu"
         c.handle("TEXT", "a")
+        self.assertEqual(c.screen, "menu")
+        c.selected = MAIN.index("Settings")
+        c.handle("ENTER")
+        self.assertEqual(c.menu, "Settings")
+        c.handle("DOWN")
+        c.handle("ENTER")
         self.assertEqual(c.screen, "about")
         self.assertEqual(c.view().hint, "Q - QR CODE  ESC - back")
         c.handle("ENTER")
@@ -283,6 +339,27 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(c.screen, "about_qr")
         c.handle("ESC")
         self.assertEqual(c.screen, "about")
+        c.handle("ESC")
+        self.assertEqual(c.menu, "Settings")
+
+    def test_screen_timeout_is_saved_and_reloaded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            c = Controller(SwissKnifeEngine(demo=True), preferences_path=path)
+            c.screen = "menu"
+            c.selected = MAIN.index("Settings")
+            c.handle("ENTER")
+            c.handle("ENTER")
+            self.assertEqual(c.screen, "screen_settings")
+            self.assertEqual(c.screen_timeout_seconds, 0)
+            c.handle("DOWN")
+            c.handle("DOWN")
+            c.handle("ENTER")
+            self.assertEqual(c.screen_timeout_seconds, 60)
+            self.assertEqual(c.view().status_label, "Saved")
+            self.assertEqual(Controller(SwissKnifeEngine(demo=True), preferences_path=path).screen_timeout_seconds, 60)
+            c.handle("ESC")
+            self.assertEqual(c.menu, "Settings")
 
     def test_esc_uses_module_back_choice_without_showing_back_card(self):
         c = self.controller

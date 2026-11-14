@@ -58,7 +58,7 @@ class Renderer:
         font = self.small if box[2] - box[0] < 80 else self.medium
         draw.text((box[0] + 9, box[1] + (7 if font == self.small else 4)), self._clip(draw, label, font, box[2] - box[0] - 15), font=font, fill=BG if active else TEXT)
 
-    def _draw_status(self, draw) -> None:
+    def _draw_status(self, draw, *, usb_wifi_connected: bool = False) -> None:
         battery = self._battery_percent()
         x = 240
         draw.rounded_rectangle((x, 10, x + 27, 23), radius=2, outline=DIM, width=1)
@@ -67,6 +67,13 @@ class Renderer:
             draw.rectangle((x + 3, 13, x + 3 + round(21 * battery / 100), 20), fill=GREEN if battery > 20 else AMBER)
         else:
             draw.text((x + 10, 10), "?", font=self.small, fill=DIM)
+        if usb_wifi_connected:
+            # A compact USB Wi-Fi card indicator between battery and skull.
+            draw.rounded_rectangle((272, 11, 284, 24), radius=2, outline=GREEN, width=1)
+            draw.line((275, 14, 281, 14), fill=GREEN, width=1)
+            draw.rectangle((276, 18, 280, 21), fill=GREEN)
+            draw.line((276, 8, 276, 10), fill=GREEN, width=1)
+            draw.line((280, 8, 280, 10), fill=GREEN, width=1)
         # Draw the skull as shapes so it does not depend on emoji fonts.
         draw.ellipse((287, 8, 307, 25), fill=MAGENTA)
         draw.rectangle((292, 19, 302, 27), fill=MAGENTA)
@@ -92,7 +99,7 @@ class Renderer:
             text = text[:-1]
         return text + "…"
 
-    def draw(self, state: ViewState, *, bright: bool = False):
+    def draw(self, state: ViewState, *, bright: bool = False, usb_wifi_connected: bool = False):
         from PIL import Image, ImageDraw
         image = Image.new("RGB", (WIDTH, HEIGHT), BG)
         draw = ImageDraw.Draw(image)
@@ -114,7 +121,7 @@ class Renderer:
             accent = (170, 255, 193)
         draw.rounded_rectangle((5, 4, 314, 29), radius=8, fill=PANEL)
         draw.text((13, 8), self._clip(draw, state.title, self.medium, 210), font=self.medium, fill=TEXT)
-        self._draw_status(draw)
+        self._draw_status(draw, usb_wifi_connected=usb_wifi_connected)
 
         if state.screen == "about":
             draw.rounded_rectangle((7, 36, 312, 143), radius=10, fill=PANEL)
@@ -132,6 +139,15 @@ class Renderer:
             draw.text((135, 47), "SwissKnife", font=self.menu, fill=TEXT)
             draw.text((135, 79), "GitHub repo", font=self.body, fill=DIM)
             draw.text((135, 107), "Scan to open", font=self.body, fill=GREEN)
+        elif state.screen == "screen_settings":
+            draw.text((11, 36), self._clip(draw, state.status_label, self.body, 295), font=self.body, fill=GREEN if state.status_label == "Saved" else DIM)
+            first = max(0, min(state.selected - 1, max(0, len(state.rows) - 3)))
+            for index in range(first, min(len(state.rows), first + 3)):
+                y = 59 + (index - first) * 29
+                active = index == state.selected
+                draw.rounded_rectangle((7, y, 312, y + 25), radius=7, fill=(35, 53, 77) if active else PANEL, outline=BLUE if active else PANEL)
+                draw.text((17, y + 3), self._clip(draw, state.rows[index], self.body, 278), font=self.body, fill=TEXT if active else DIM)
+            draw.text((278, 39), f"{state.selected + 1}/{len(state.rows)}", font=self.small, fill=DIM)
         elif state.screen == "recon_modes":
             draw.rounded_rectangle((7, 36, 312, 86), radius=10, fill=PANEL)
             draw.text((17, 44), "Wi-Fi discovery", font=self.menu, fill=TEXT)

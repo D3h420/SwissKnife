@@ -6,7 +6,7 @@
 
 To niezależny interfejs do istniejącego SwissKnife. Kod modułów pozostaje w `../modules/`, a wspólne API, katalog funkcji, wykrywanie sprzętu i ścieżki danych w `../core/`. Aplikacja nie zawiera kopii modułów. GUI uruchamia się jako zwykły użytkownik; istniejące skrypty wymagające roota są wywoływane przez kontrolowany proces. Terminalowy `swiss_knife.py` pozostaje drugim wejściem do tego samego silnika.
 
-Kod działa w trybie symulacji na komputerze. Pakiet 0.2.5 zainstalowano na fizycznym Cardputer Zero z Debianem 13; potwierdzono dostęp do ekranu 320 × 170, klawiatury oraz mapowanie klawiszy. Wcześniejszy skan Recon na `wlan0` także został sprawdzony. Nowy widok sniffera, zatrzymywanie, wznawianie i kod QR wymagają testu na urządzeniu. Pozostałe moduły i adaptery również wymagają testów sprzętowych.
+Kod działa w trybie symulacji na komputerze. Pakiet 0.2.8 zainstalowano na fizycznym Cardputer Zero z Debianem 13; potwierdzono dostęp do ekranu 320 × 170, klawiatury oraz mapowanie klawiszy. Wcześniejszy skan Recon na `wlan0` także został sprawdzony. Wygaszanie podświetlenia i nowy ekran Settings wymagają testu na urządzeniu. Pozostałe moduły i adaptery również wymagają testów sprzętowych.
 
 ## Podstawa platformowa
 
@@ -53,14 +53,15 @@ Recon otwiera wybór Scaner/Sniffer. Scaner ma osobny ekran ustawienia czasu i S
 
 Po uruchomieniu APPLaunch wyświetla `CardputerZero/swiss_intro.png` na ekranie 320 × 170. Po 2,5 sekundy u dołu pojawia się „PRESS ANY KEY”; dopiero następny klawisz otwiera menu. Ikona APPLaunch pochodzi z `CardputerZero/icon.png` i jest przygotowana jako `packaging/icon.png` (128 × 128).
 
-Układ menu jest taki sam jak w terminalowym `swiss_knife.py`:
+Menu Cardputera zachowuje kolejność modułów z terminalowego `swiss_knife.py` i dodaje własne ustawienia:
 
 - **Recon** — wybór Scaner albo Sniffer.
 - **Attacks** — Deauth, Portal, Evil Twin, Handshaker, WiFi Poet, Dragon Drain, ARP scan, IP.CAM finder.
 - **Wardrive** — Start Wardrive, GPS setup.
+- **Settings** — Screen, About.
 - **Exit** — powrót do APPLaunch.
 
-Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji Back: cofanie obsługuje Esc. Klawisz A w głównym menu otwiera About; tam Q pokazuje kod QR do repozytorium.
+Pozycje modułów są pobierane z menu terminalowego, z pominięciem Back: cofanie obsługuje Esc. About znajduje się w Settings; tam Q pokazuje kod QR do repozytorium. Screen pozwala ustawić wygaszanie po 30 sekundach, 1, 2, 5 lub 10 minutach bezczynności albo wybrać Never. Ustawienie jest zapisywane w `~/.local/state/swissknife/cardputer-settings.json` i wczytywane przy kolejnym uruchomieniu. Pierwszy klawisz po wygaszeniu jedynie wybudza ekran. Aplikacja próbuje wyłączyć podświetlenie przez dostępny interfejs systemowy; gdy zwykły użytkownik nie ma do niego dostępu, wyświetla czarną ramkę. Zielona ikonka obok baterii oznacza wykryty interfejs Wi-Fi z adaptera USB; samo urządzenie widoczne w `lsusb` bez interfejsu sieciowego nie zapala ikonki.
 
 ## Sterowanie
 
@@ -68,7 +69,8 @@ Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji 
 | --- | --- |
 | `F/X/Z/C`, `fn+F/X/Z/C` lub strzałki | Góra/dół/lewo/prawo w menu i na listach; podczas wpisywania tekstu `F/X/Z/C` są literami |
 | Enter | Wybór lub wysłanie wpisanej odpowiedzi do modułu |
-| A w głównym menu | About i kod QR do repozytorium |
+| Settings → About | Informacje o projekcie i wersji |
+| Settings → Screen | Czas wygaszania ekranu; Enter zapisuje wybór |
 | Q w About | Kod QR repozytorium |
 | Spacja w wyborze wielu sieci | Zaznaczenie lub odznaczenie sieci; Enter zatwierdza wybór |
 | Z/C lub F/X w ustawieniu Scaner | Zmiana czasu o 1 s lub 5 s; T pozwala wpisać wartość |
@@ -91,7 +93,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.2.7-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.2.10-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -100,7 +102,7 @@ Wynik: `dist/swissknife-cardputer_0.2.7-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.7-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.10-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt --no-install-recommends` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.
@@ -135,6 +137,7 @@ python3 -m unittest discover -s CardputerZero/tests -p 'test_*.py'
 - Brak reakcji klawiszy: sprawdź `/dev/input/`, grupę `input` i ścieżkę w `APPLAUNCH_KEYBOARD_DEVICE`.
 - Brak GPS: sprawdź port `/dev/ttyUSB*`/`/dev/ttyACM*`, grupę `dialout` i rzeczywisty NMEA fix.
 - Skan Wi-Fi odmawia dostępu: sprawdź, czy instalacja pakietu utworzyła `/etc/sudoers.d/swissknife-cardputer`, czy użytkownik uruchamiający APPLaunch jest w tej regule oraz czy `iw dev <interfejs> info` rozpoznaje adapter. Pomocnik nie zmienia trybu karty ani profili sieciowych.
+- Adapter USB znika z listy interfejsów: porównaj `lsusb -t`, `ip -br link` i `iw dev`, a następnie sprawdź `journalctl -k -b --no-pager` pod kątem resetu USB, błędu firmware lub sterownika. Sama obecność w `lsusb` nie oznacza, że sterownik utworzył interfejs sieciowy. Logi przebiegu aplikacji są w `~/.local/state/swissknife/log/cardputer-*.log` (lub w katalogu wskazanym przez `SWISSKNIFE_DATA_DIR`). Jeśli interfejs zniknął z `ip link`, ponowne `ip link set up` nie może go odtworzyć; potrzebna jest diagnoza sterownika i zasilania USB. Nie uruchamiaj aktywnych operacji radiowych, aby zebrać te dane.
 - Anulowanie przerywa bieżące wywołanie `iw`, odczyt NMEA i kolejne zadania skanowania LAN. Działające już procesy `ping` mają krótki limit czasu; działanie na Cardputer Zero wymaga testu urządzenia.
 - Pojawienie się ikony w APPLaunch i wydajność framebuffer/klawiatury nie zostały jeszcze potwierdzone na urządzeniu.
 

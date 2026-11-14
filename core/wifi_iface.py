@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+import logging
 from typing import List, Optional, Tuple
 
 
@@ -215,12 +216,22 @@ def set_interface_type(
     enable_otherbss: bool = False,
     settle_seconds: float = 0.5,
 ) -> Tuple[bool, Optional[str]]:
+    # Re-setting an already active mode needlessly resets some USB adapters.
+    if not enable_otherbss and get_interface_mode(interface) == mode and is_interface_up(interface):
+        return True, None
+
+    error: Optional[str] = None
+    down_done = False
     try:
-        subprocess.run(
+        down = subprocess.run(
             ["ip", "link", "set", interface, "down"],
             check=False,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
         )
+        if down.returncode != 0:
+            return False, down.stderr.strip() or f"Could not disable {interface}"
+        down_done = True
         result = subprocess.run(
             ["iw", "dev", interface, "set", "type", mode],
             stderr=subprocess.PIPE,
@@ -228,14 +239,8 @@ def set_interface_type(
             check=False,
         )
         if result.returncode != 0:
-            return False, result.stderr.strip() or "unknown error"
-
-        subprocess.run(
-            ["ip", "link", "set", interface, "up"],
-            check=False,
-            stderr=subprocess.DEVNULL,
-        )
-        if mode == "monitor" and enable_otherbss:
+            error = result.stderr.strip() or f"Could not set {interface} to {mode}"
+        elif mode == "monitor" and enable_otherbss:
             subprocess.run(
                 ["iw", "dev", interface, "set", "monitor", "otherbss"],
                 stdout=subprocess.DEVNULL,
@@ -243,11 +248,28 @@ def set_interface_type(
                 check=False,
             )
 
-        if settle_seconds > 0:
-            time.sleep(settle_seconds)
-        return True, None
     except Exception as exc:
-        return False, str(exc)
+        error = str(exc)
+    finally:
+        # Even when iw fails, leave a still-present adapter enabled.
+        if down_done:
+            try:
+                up = subprocess.run(
+                    ["ip", "link", "set", interface, "up"],
+                    check=False,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if up.returncode != 0:
+                    up_error = up.stderr.strip() or f"Could not enable {interface}"
+                    error = f"{error}; {up_error}" if error else up_error
+            except Exception as exc:
+                error = f"{error}; {exc}" if error else str(exc)
+    if error:
+        return False, error
+    if settle_seconds > 0:
+        time.sleep(settle_seconds)
+    return True, None
 
 
 def set_interface_mode(
@@ -288,23 +310,9 @@ def set_interface_mode(
     return True, None
 
 
-def restore_managed_mode(interface: str) -> None:
-    try:
-        subprocess.run(
-            ["ip", "link", "set", interface, "down"],
-            check=False,
-            stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(
-            ["iw", "dev", interface, "set", "type", "managed"],
-            check=False,
-            stderr=subprocess.DEVNULL,
-        )
-        subprocess.run(
-            ["ip", "link", "set", interface, "up"],
-            check=False,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        pass
+def restore_managed_mode(interface: str) -> bool:
+    ok, error = set_interface_mode(interface, "managed", managed_settle_seconds=0)
+    if not ok:
+        logging.error("Could not restore %s to managed mode: %s", interface, error)
+    return ok
 

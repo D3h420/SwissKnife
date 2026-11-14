@@ -115,6 +115,10 @@ def select_interface(interfaces: List[str]) -> str:
         label = f"{index}) {display_name} -"
         logging.info("  %s %s", color_text(label, COLOR_HIGHLIGHT), chipset)
 
+    gui_emit("workflow_interfaces", module="Deauth", records=[
+        {"name": name, "chipset": get_interface_chipset(name)} for name in interfaces
+    ])
+
     while True:
         choice = input(f"{style('Select interface', STYLE_BOLD)} (number or name): ").strip()
         if not choice:
@@ -276,6 +280,9 @@ def set_interface_mode(interface: str, mode: str) -> bool:
         elif mode == "managed":
             time.sleep(MANAGED_SETTLE_SECONDS)
         return True
+    if interface not in list_network_interfaces():
+        logging.error("Interface %s disappeared during the %s mode change; check USB/kernel logs.", interface, mode)
+        return False
     try:
         subprocess.run(["ifconfig", interface, "down"], check=False, stderr=subprocess.DEVNULL)
         result = subprocess.run(
@@ -678,9 +685,18 @@ SELECTED_INTERFACE: Optional[str] = None
 
 
 def cleanup() -> None:
-    if SELECTED_INTERFACE:
-        restore_managed_mode(SELECTED_INTERFACE)
-    stop_attack()
+    try:
+        stop_attack()
+    finally:
+        if SELECTED_INTERFACE:
+            if restore_managed_mode(SELECTED_INTERFACE):
+                logging.info("Interface %s restored to managed mode.", SELECTED_INTERFACE)
+            else:
+                logging.error(
+                    "Interface %s could not be restored (netdev present=%s, mode=%s, up=%s); check USB and kernel logs.",
+                    SELECTED_INTERFACE, SELECTED_INTERFACE in list_network_interfaces(),
+                    get_interface_mode(SELECTED_INTERFACE), is_interface_up(SELECTED_INTERFACE),
+                )
 
 
 def test_packet_injection(interface: str) -> bool:
@@ -1205,12 +1221,18 @@ def run_deauth_session() -> bool:
 
     interfaces = list_network_interfaces()
     SELECTED_INTERFACE = select_interface(interfaces)
+    logging.info(
+        "Adapter selected: %s; driver=%s; mode=%s; up=%s",
+        SELECTED_INTERFACE, get_interface_chipset(SELECTED_INTERFACE),
+        get_interface_mode(SELECTED_INTERFACE), is_interface_up(SELECTED_INTERFACE),
+    )
 
     logging.info("")
     input(
         f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {SELECTED_INTERFACE} to managed mode for scanning..."
     )
     if not set_interface_mode(SELECTED_INTERFACE, "managed"):
+        gui_emit("workflow_status", module="Deauth", phase="error", reason="Adapter did not enter managed mode")
         return False
     logging.info(color_text("✓ Managed mode confirmed", COLOR_SUCCESS))
 
@@ -1238,20 +1260,24 @@ def run_deauth_session() -> bool:
         style(str(target_network["channel"]), COLOR_HIGHLIGHT) if target_network["channel"] else "unknown"
     )
 
-    logging.info("")
-    input(
-        f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode for attack..."
-    )
+    if os.environ.get("SWISSKNIFE_GUI"):
+        input("Press Enter to start deauth attack: ")
+    else:
+        logging.info("")
+        input(
+            f"{style('Press Enter', COLOR_SUCCESS, STYLE_BOLD)} to switch {SELECTED_INTERFACE} to monitor mode for attack..."
+        )
     if not set_interface_mode(SELECTED_INTERFACE, "monitor"):
+        logging.error("Monitor mode setup failed for %s; no operation started.", SELECTED_INTERFACE)
+        reason = "Adapter disconnected during mode change" if SELECTED_INTERFACE not in list_network_interfaces() else "Adapter did not enter monitor mode"
+        gui_emit("workflow_status", module="Deauth", phase="error", reason=reason)
         return False
     if not is_monitor_mode(SELECTED_INTERFACE):
         logging.error("Monitor mode could not be confirmed on %s.", SELECTED_INTERFACE)
+        gui_emit("workflow_status", module="Deauth", phase="error", reason="Monitor mode could not be confirmed")
         return False
     logging.info(color_text("✓ Monitor mode confirmed", COLOR_SUCCESS))
     gui_emit("workflow_status", module="Deauth", phase="ready", interface=SELECTED_INTERFACE, ssid=target_network["ssid"], target=target_network["bssid"])
-
-    if os.environ.get("SWISSKNIFE_GUI"):
-        input("Press Enter to start deauth attack: ")
 
     logging.info("")
     logging.info(style("="*60, STYLE_BOLD))
@@ -1260,6 +1286,7 @@ def run_deauth_session() -> bool:
     
     if not start_deauth_attack(SELECTED_INTERFACE, target_network):
         logging.error(color_text("Attack failed to start!", COLOR_ERROR))
+        gui_emit("workflow_status", module="Deauth", phase="error", reason="Operation stopped before starting; inspect adapter and module log")
         return False
     gui_emit("workflow_status", module="Deauth", phase="running", interface=SELECTED_INTERFACE, ssid=target_network["ssid"], target=target_network["bssid"])
     

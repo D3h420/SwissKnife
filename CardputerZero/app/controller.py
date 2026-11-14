@@ -15,14 +15,18 @@ from core.hardware import HardwareSnapshot
 from core.terminal_buffer import TerminalBuffer
 from core.gui_choices import current_choices
 from swiss_knife import MAIN_MENU, ATTACKS_MENU, WARDRIVE_MENU
+from .settings import SCREEN_TIMEOUTS, load_screen_timeout, save_screen_timeout, settings_path
 
 
-MAIN = tuple(item["name"] for item in MAIN_MENU.values())
+_TERMINAL_MAIN = tuple(item["name"] for item in MAIN_MENU.values())
+MAIN = (*_TERMINAL_MAIN[:-1], "Settings", _TERMINAL_MAIN[-1])
 SUBMENUS = {
     "Attacks": tuple(item["name"] for item in ATTACKS_MENU.values() if item["name"] != "Back"),
     "Wardrive": tuple(item["name"] for item in WARDRIVE_MENU.values() if item["name"] != "Back"),
+    "Settings": ("Screen", "About"),
 }
 SPLASH_DELAY = 2.5
+HARDWARE_REFRESH_SECONDS = 5.0
 SCAN_DEFAULTS = {"Recon": 12, "Start Wardrive": 8, "ARP scan": 15, "IP.CAM finder": 15}
 ATTACK_MODULES = frozenset(SUBMENUS["Attacks"])
 MODULE_COPY = {
@@ -80,8 +84,11 @@ class ViewState:
 
 
 class Controller:
-    def __init__(self, engine: SwissKnifeEngine) -> None:
+    def __init__(self, engine: SwissKnifeEngine, *, preferences_path: Path | None = None) -> None:
         self.engine = engine
+        self.preferences_path = preferences_path or settings_path()
+        self.screen_timeout_seconds = load_screen_timeout(self.preferences_path)
+        self.settings_message = ""
         self.screen = "splash"
         self.splash_started = time.monotonic()
         self.splash_ready = False
@@ -127,6 +134,7 @@ class Controller:
         self.attack_phase = "Preparing"
         self.attack_pending_answer = ""
         self.attack_interface_options: list[tuple[str, str]] = []
+        self.attack_discovered_interfaces: list[tuple[str, str]] = []
         self.error = ""
         self.selected = 0
         self.scroll = 0
@@ -134,9 +142,15 @@ class Controller:
         self.quit_requested = False
         self.dirty = True
         self._hardware_events: queue.Queue[HardwareSnapshot | Exception] = queue.Queue()
+        self._hardware_refresh_pending = False
+        self._last_hardware_refresh = 0.0
         self.refresh_hardware()
 
     def refresh_hardware(self) -> None:
+        if self._hardware_refresh_pending:
+            return
+        self._hardware_refresh_pending = True
+        self._last_hardware_refresh = time.monotonic()
         def worker() -> None:
             try:
                 self._hardware_events.put(self.engine.hardware())
@@ -144,15 +158,22 @@ class Controller:
                 self._hardware_events.put(exc)
         threading.Thread(target=worker, daemon=True).start()
 
+    @property
+    def usb_wifi_connected(self) -> bool:
+        return self.hardware is not None and any(adapter.usb for adapter in self.hardware.wifi)
+
     def tick(self) -> bool:
         changed = self.dirty
         self.dirty = False
+        if time.monotonic() - self._last_hardware_refresh >= HARDWARE_REFRESH_SECONDS:
+            self.refresh_hardware()
         if self.screen == "splash" and not self.splash_ready and time.monotonic() - self.splash_started >= SPLASH_DELAY:
             self.splash_ready = True
             changed = True
         try:
             while True:
                 result = self._hardware_events.get_nowait()
+                self._hardware_refresh_pending = False
                 if isinstance(result, Exception):
                     self.error = f"Hardware discovery: {result}"
                 else:
@@ -242,6 +263,13 @@ class Controller:
                     if event.data.get("module") == self.module.key:
                         self.attack_records = list(event.data.get("records") or [])
                         self.attack_context["interface"] = str(event.data.get("interface") or self.attack_context.get("interface", ""))
+                elif event.kind == "data" and event.message == "workflow_interfaces" and self.module and self.module.key in ATTACK_MODULES:
+                    if event.data.get("module") == self.module.key:
+                        self.attack_discovered_interfaces = [
+                            (str(index), f"{record['name']}  {record.get('chipset') or 'unknown'}")
+                            for index, record in enumerate(event.data.get("records") or [], 1)
+                            if isinstance(record, dict) and record.get("name")
+                        ]
                 elif event.kind == "data" and event.message == "portal_templates" and self.module and self.module.key in ATTACK_MODULES:
                     self.attack_templates = list(event.data.get("records") or [])
                 elif event.kind == "data" and event.message == "workflow_options" and self.module and self.module.key in ATTACK_MODULES:
@@ -255,6 +283,8 @@ class Controller:
                         phase = str(event.data.get("phase") or "")
                         if phase:
                             self.attack_phase = phase.replace("_", " ").title()
+                        if phase == "error":
+                            self.error = str(event.data.get("reason") or "Adapter operation failed")
                         if phase in {"running", "active", "started"}:
                             self.screen = "workflow_live"
                             self.selected = 0
@@ -357,7 +387,7 @@ class Controller:
             return
         if "select" in lowered and "interface" in lowered:
             self.attack_phase = "Choose interface"
-            available = current_choices(self.console.visible_lines())
+            available = self.attack_discovered_interfaces or current_choices(self.console.visible_lines())
             if available:
                 self.attack_options = [(key, label) for key, label in available if "back" not in label.casefold()]
             elif self.hardware:
@@ -459,7 +489,10 @@ class Controller:
         if self.screen == "splash":
             return ViewState(screen="splash", show_prompt=self.splash_ready, simulated=self.engine.demo)
         if self.screen == "menu":
-            return ViewState(screen="list", title="MAIN MENU" if self.menu == "main" else self.menu.upper(), rows=self._menu_rows(), hint="F/X move  ENTER select  A about" if self.menu == "main" else "F/X move  ENTER select  ESC back", **common)
+            return ViewState(screen="list", title="MAIN MENU" if self.menu == "main" else self.menu.upper(), rows=self._menu_rows(), hint="F/X move  ENTER select  ESC back", **common)
+        if self.screen == "screen_settings":
+            rows = [("● " if seconds == self.screen_timeout_seconds else "○ ") + label for label, seconds in SCREEN_TIMEOUTS]
+            return ViewState(screen="screen_settings", title="SCREEN", rows=rows, status_label=self.settings_message or "Auto sleep after inactivity", hint="F/X choose  ENTER save  ESC back", **common)
         if self.screen == "about":
             return ViewState(screen="about", title="ABOUT", version=app_version(), hint="Q - QR CODE  ESC - back", **common)
         if self.screen == "about_qr":
@@ -544,9 +577,6 @@ class Controller:
             if self.splash_ready:
                 self._goto("menu")
             return
-        if self.screen == "menu" and self.menu == "main" and key == "TEXT" and char.lower() == "a":
-            self._goto("about")
-            return
         if key == "HOME":
             if self.module and self.module.key == "Recon" and self.recon_mode == "2" and self.screen in {"sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
                 self.sniffer_exit_requested = True
@@ -559,14 +589,14 @@ class Controller:
                 elif self.operation:
                     self.operation.cancel()
             elif self.operation and self.operation.state == "running":
-                self.operation.cancel()
+                self._stop_or_cancel_workflow()
             self.menu = "main"
             self._goto("menu")
             return
         if key == "ESC":
             if self.screen.startswith("workflow_"):
                 if self.screen != "workflow_result" and self.operation and self.operation.state in {"starting", "running"}:
-                    self.operation.cancel()
+                    self._stop_or_cancel_workflow()
                 self.menu = self.return_menu
                 self._goto("menu")
                 return
@@ -604,7 +634,7 @@ class Controller:
                     self._goto("menu")
                 return
             results_back = "recon_modes" if self.module and self.module.key == "Recon" else "menu" if self.module and self.module.key in ATTACK_MODULES else "detail"
-            back = {"about": "menu", "about_qr": "about", "recon_modes": "menu", "recon_scan_setup": "recon_modes", "detail": "menu", "duration_input": "recon_scan_setup" if self.module and self.module.key == "Recon" else "detail", "results": results_back, "error": "detail", "network_detail": "results"}
+            back = {"about": "menu", "about_qr": "about", "screen_settings": "menu", "recon_modes": "menu", "recon_scan_setup": "recon_modes", "detail": "menu", "duration_input": "recon_scan_setup" if self.module and self.module.key == "Recon" else "detail", "results": results_back, "error": "detail", "network_detail": "results"}
             if self.screen == "detail":
                 self.menu = self.return_menu
             if self.screen == "results" and self.module and self.module.key in ATTACK_MODULES:
@@ -726,6 +756,23 @@ class Controller:
             return
         if self.screen == "about" and key == "TEXT" and char.lower() == "q":
             self._goto("about_qr")
+            return
+        if self.screen == "screen_settings":
+            if key in {"UP", "DOWN", "LEFT", "RIGHT", "PAGEUP", "PAGEDOWN"}:
+                step = -1 if key in {"UP", "LEFT", "PAGEUP"} else 1
+                self.selected = max(0, min(len(SCREEN_TIMEOUTS) - 1, self.selected + step))
+                self.settings_message = "Auto sleep after inactivity"
+                self.dirty = True
+            elif key == "ENTER":
+                seconds = SCREEN_TIMEOUTS[self.selected][1]
+                try:
+                    save_screen_timeout(self.preferences_path, seconds)
+                except OSError as exc:
+                    self.settings_message = f"Save failed: {exc.strerror or exc}"
+                else:
+                    self.screen_timeout_seconds = seconds
+                    self.settings_message = "Saved"
+                self.dirty = True
             return
         if self.screen == "recon_modes":
             if key in {"UP", "DOWN", "LEFT", "RIGHT"}:
@@ -858,6 +905,12 @@ class Controller:
             elif self.menu == "main" and label in SUBMENUS:
                 self.menu = label
                 self._goto("menu")
+            elif self.menu == "Settings" and label == "About":
+                self._goto("about")
+            elif self.menu == "Settings" and label == "Screen":
+                self.settings_message = "Auto sleep after inactivity"
+                self._goto("screen_settings")
+                self.selected = next(index for index, (_label, seconds) in enumerate(SCREEN_TIMEOUTS) if seconds == self.screen_timeout_seconds)
             else:
                 self._open_module(label)
             return
@@ -911,6 +964,7 @@ class Controller:
         self.attack_phase = "Preparing"
         self.attack_pending_answer = ""
         self.attack_interface_options = []
+        self.attack_discovered_interfaces = []
         if self.module.key != "Recon":
             self.recon_mode = ""
         self.recon_choice_sent = False
@@ -943,6 +997,18 @@ class Controller:
         self.attack_input = ""
         self.attack_phase = "Working"
         self._goto("workflow_wait")
+
+    def _stop_or_cancel_workflow(self) -> None:
+        if not self.operation:
+            return
+        if self.screen == "workflow_live" and self.awaiting_input and "stop" in self.current_prompt.casefold():
+            try:
+                self.operation.send("")  # type: ignore[attr-defined]
+                self.awaiting_input = False
+                return
+            except RuntimeError:
+                pass
+        self.operation.cancel()
 
     def _stop_sniffer(self) -> None:
         if self.awaiting_input and self.sniffer_active and self.operation:

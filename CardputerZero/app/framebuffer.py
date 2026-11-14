@@ -6,6 +6,7 @@ import fcntl
 import mmap
 import os
 import struct
+from pathlib import Path
 
 
 FBIOGET_VSCREENINFO = 0x4600
@@ -41,6 +42,7 @@ class Framebuffer:
             if memory_length < self.stride * self.height:
                 raise RuntimeError("Framebuffer memory is smaller than visible screen")
             self.memory = mmap.mmap(self.fd, memory_length, mmap.MAP_SHARED, mmap.PROT_WRITE | mmap.PROT_READ)
+            self._saved_brightness: tuple[Path, str] | None = None
         except Exception:
             os.close(self.fd)
             raise
@@ -65,6 +67,31 @@ class Framebuffer:
                 self.memory.seek(y * self.stride)
                 self.memory.write(frame[y * row_bytes:(y + 1) * row_bytes])
 
+    def sleep(self) -> None:
+        """Turn off a writable backlight, or draw black when access is unavailable."""
+        from PIL import Image
+
+        for brightness in Path("/sys/class/backlight").glob("*/brightness"):
+            try:
+                previous = brightness.read_text(encoding="ascii").strip()
+                if int(previous) > 0:
+                    brightness.write_text("0\n", encoding="ascii")
+                    self._saved_brightness = (brightness, previous)
+                    return
+            except (OSError, ValueError):
+                continue
+        self.show(Image.new("RGB", (self.width, self.height), (0, 0, 0)))
+
+    def wake(self) -> None:
+        if self._saved_brightness is not None:
+            path, value = self._saved_brightness
+            self._saved_brightness = None
+            try:
+                path.write_text(value + "\n", encoding="ascii")
+            except OSError:
+                pass
+
     def close(self) -> None:
+        self.wake()
         self.memory.close()
         os.close(self.fd)

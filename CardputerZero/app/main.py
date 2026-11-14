@@ -23,6 +23,7 @@ def run_device(controller) -> int:
     from .framebuffer import Framebuffer
     from .keyboard import Keyboard
     from .render import Renderer
+    from .settings import IdleScreen
     display = Framebuffer(os.environ.get("APPLAUNCH_LINUX_FBDEV_DEVICE") or os.environ.get("LV_LINUX_FBDEV_DEVICE") or Framebuffer.detect_path())
     try:
         keyboard = Keyboard()
@@ -30,6 +31,7 @@ def run_device(controller) -> int:
         display.close()
         raise
     running = True
+    idle = IdleScreen()
 
     def stop(_signum, _frame):
         nonlocal running
@@ -42,19 +44,28 @@ def run_device(controller) -> int:
         last_draw = 0.0
         while running and not controller.quit_requested:
             editing = controller.screen in {"duration_input", "workflow_text"} or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
-            for key, char in keyboard.events(editing=editing):
-                controller.handle(key, char)
+            events = keyboard.events(editing=editing)
+            if idle.blanked and events:
+                idle.key_pressed()
+                display.wake()
+                controller.dirty = True
+            else:
+                for key, char in events:
+                    idle.key_pressed()
+                    controller.handle(key, char)
             changed = controller.tick()
             now = time.monotonic()
-            if changed or now - last_draw > 1.0:
-                display.show(renderer.draw(controller.view(), bright=controller.theme_bright))
+            if idle.should_blank(controller.screen_timeout_seconds, now):
+                display.sleep()
+            if not idle.blanked and (changed or now - last_draw > 1.0):
+                display.show(renderer.draw(controller.view(), bright=controller.theme_bright, usb_wifi_connected=controller.usb_wifi_connected))
                 last_draw = now
             time.sleep(0.04)
     finally:
         if controller.operation and controller.operation.state == "running":
             controller.operation.cancel()
             if controller.operation.thread:
-                controller.operation.thread.join(timeout=8)
+                controller.operation.thread.join(timeout=35)
         keyboard.close()
         display.close()
     return 0
@@ -62,9 +73,11 @@ def run_device(controller) -> int:
 
 def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     import tkinter as tk
-    from PIL import ImageTk
+    from PIL import Image, ImageTk
     from .render import Renderer
+    from .settings import IdleScreen
     renderer = Renderer()
+    idle = IdleScreen()
     root = tk.Tk()
     root.title("SwissKnife / Cardputer Zero [SIMULATED]")
     root.resizable(False, False)
@@ -74,6 +87,9 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     image_ref = None
 
     def key_event(event) -> None:
+        if idle.key_pressed():
+            controller.dirty = True
+            return
         mapping = {"Up": "UP", "Down": "DOWN", "Left": "LEFT", "Right": "RIGHT", "Return": "ENTER", "Escape": "ESC", "Home": "HOME", "Prior": "PAGEUP", "Next": "PAGEDOWN", "BackSpace": "BACKSPACE"}
         key = mapping.get(event.keysym)
         editing = controller.screen in {"duration_input", "workflow_text"} or (controller.screen == "running" and controller.awaiting_input and not controller.choices)
@@ -87,8 +103,11 @@ def run_desktop(controller, *, snapshot: Path | None = None) -> int:
     def draw_loop() -> None:
         nonlocal image_ref
         changed = controller.tick()
-        if changed:
-            image = renderer.draw(controller.view(), bright=controller.theme_bright)
+        if idle.should_blank(controller.screen_timeout_seconds):
+            image_ref = ImageTk.PhotoImage(Image.new("RGB", (960, 510), (0, 0, 0)))
+            label.configure(image=image_ref)
+        elif changed and not idle.blanked:
+            image = renderer.draw(controller.view(), bright=controller.theme_bright, usb_wifi_connected=controller.usb_wifi_connected)
             if snapshot:
                 snapshot.parent.mkdir(parents=True, exist_ok=True)
                 image.save(snapshot)
