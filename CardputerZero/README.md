@@ -47,7 +47,7 @@ Zależności kodu są pobierane **podczas każdego budowania pakietu** z aktualn
 | WiFi Poet | `modules/wifi_poet.py` | Adapter monitor, `mdk4` i biblioteki Python |
 | Dragon Drain | `modules/dragon_drain.py` | Specjalistyczne narzędzia i źródła zewnętrzne |
 
-Recon otwiera wybór Scaner/Sniffer. Scaner ma osobny ekran ustawienia czasu i Start; wyniki trafiają na karty sieci. Sniffer pokazuje na żywo liczby AP, probes i pakietów oraz pozwala zatrzymać, przejrzeć wykryte SSID i pobliskie AP, wznowić lub wrócić do menu. Zdarzenia z danymi pochodzą bezpośrednio ze wspólnego modułu `modules/recon.py`. Wardrive pokazuje bieżące sieci i licznik zapisów, ARP scan urządzenia, a IP.CAM finder kandydatów kamer. Pozostałe moduły korzystają z graficznego wyboru numerowanych opcji, lecz ich wyniki nadal wymagają osobnych widoków danych. Funkcje zależne od trybu monitorowania, AP, GPS lub zewnętrznych źródeł wymagają zgodnego sprzętu i testów. Część modułów może zmienić tryb interfejsu lub profil sieci i przerwać połączenie używane do SSH; przed uruchomieniem wybierz kartę przeznaczoną do danej operacji.
+Recon otwiera wybór Scaner/Sniffer. Scaner ma osobny ekran ustawienia czasu i Start; wyniki trafiają na karty sieci. Sniffer pokazuje na żywo liczby AP, probes i pakietów oraz pozwala zatrzymać, przejrzeć wykryte SSID i pobliskie AP, wznowić lub wrócić do menu. Zdarzenia z danymi pochodzą bezpośrednio ze wspólnego modułu `modules/recon.py`. Moduły Attacks otwierają od razu graficzny przebieg: interfejs, źródło SSID, czas skanu, sieć, szablon HTML i Start, zależnie od modułu. Techniczne potwierdzenia Enter są automatyczne. Wyniki skanów i stan pracy są zdarzeniami z istniejących plików modułów; GUI ich nie odczytuje z tabel terminalowych. Deauth, Portal, Evil Twin, Handshaker, WiFi Poet i Dragon Drain mają pulpit Start/Stop. ARP scan i IP.CAM finder zachowują karty wyników. Wardrive pokazuje bieżące sieci i licznik zapisów. Funkcje zależne od trybu monitorowania, AP, GPS lub zewnętrznych źródeł wymagają zgodnego sprzętu i testów. Część modułów może zmienić tryb interfejsu lub profil sieci i przerwać połączenie używane do SSH; wybór interfejsu zarządzającego wymaga dodatkowego potwierdzenia.
 
 ## Menu i ekran startowy
 
@@ -60,7 +60,7 @@ Układ menu jest taki sam jak w terminalowym `swiss_knife.py`:
 - **Wardrive** — Start Wardrive, GPS setup.
 - **Exit** — powrót do APPLaunch.
 
-Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji Back: cofanie obsługuje Esc. Klawisz A w głównym menu otwiera About z wersją i kodem QR do repozytorium.
+Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji Back: cofanie obsługuje Esc. Klawisz A w głównym menu otwiera About; tam Q pokazuje kod QR do repozytorium.
 
 ## Sterowanie
 
@@ -69,6 +69,8 @@ Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji 
 | `F/X/Z/C`, `fn+F/X/Z/C` lub strzałki | Góra/dół/lewo/prawo w menu i na listach; podczas wpisywania tekstu `F/X/Z/C` są literami |
 | Enter | Wybór lub wysłanie wpisanej odpowiedzi do modułu |
 | A w głównym menu | About i kod QR do repozytorium |
+| Q w About | Kod QR repozytorium |
+| Spacja w wyborze wielu sieci | Zaznaczenie lub odznaczenie sieci; Enter zatwierdza wybór |
 | Z/C lub F/X w ustawieniu Scaner | Zmiana czasu o 1 s lub 5 s; T pozwala wpisać wartość |
 | Esc | Powrót; podczas operacji żądanie przerwania modułu |
 | `fn+K` (Home) | Menu główne; aktywny moduł jest przerywany |
@@ -78,7 +80,7 @@ Kolejność etykiet jest pobierana z menu terminalowego, z pominięciem pozycji 
 
 Kody kierunków, Home i PageUp/PageDown pochodzą z oficjalnego mapowania klawiatury. Aplikacja korzysta ze standardowych zdarzeń Linux evdev; ścieżkę urządzenia można podać przez `APPLAUNCH_KEYBOARD_DEVICE` lub `LV_LINUX_KEYBOARD_DEVICE`. Przy braku zmiennej wybierane jest wykryte urządzenie z Enter i Esc. Nie ma założenia, że adapter USB nazywa się `wlan1`.
 
-Na ekranach Wardrive, ARP scan i IP.CAM finder przyciski **Start** oraz **Time** pozwalają uruchomić moduł z domyślnym czasem albo wcześniej wpisać własny czas. Po wyborze interfejsu aplikacja automatycznie odpowiada na techniczne pytania o start i czas skanowania. Sniffer zatrzymuje się przyciskiem Stop lub Esc, a Resume wznawia tę samą sesję. Podczas edycji pola tekstowego litery `F/X/Z/C` wpisują znaki. Pasek statusu odczytuje poziom baterii z `/sys/class/power_supply`; gdy system go nie udostępnia, pokazuje `?`.
+W modułach Attacks ekran czasu skanu pozwala regulować wartość strzałkami lub wpisać liczbę. Start uruchamia wybraną konfigurację, Stop kończy proces i uruchamia sprzątanie zasobów przez wspólny moduł. Sniffer Recon zatrzymuje się przyciskiem Stop lub Esc, a Resume wznawia tę samą sesję. Podczas edycji pola tekstowego litery `F/X/Z/C` wpisują znaki. Pasek statusu odczytuje poziom baterii z `/sys/class/power_supply`; gdy system go nie udostępnia, pokazuje `?`.
 
 ## Budowanie pakietu
 
@@ -89,7 +91,7 @@ git clone https://github.com/CardputerZero/AppBuilder.git ../AppBuilder
 APPBUILDER_DIR=../AppBuilder bash CardputerZero/scripts/build.sh
 ```
 
-Wynik: `dist/swissknife-cardputer_0.2.6-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
+Wynik: `dist/swissknife-cardputer_0.2.7-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to liczba commitów). Przy lokalnych zmianach bez commita do nazwy pliku dodawany jest znacznik `+dirty<CZAS>`. Aktualizacja zainstalowanego pakietu wymaga podniesienia `PKG_VERSION` w `packaging/meta.env`. Skrypt wywołuje **oficjalny** `AppBuilder/scripts/pack-deb.sh`. W repozytorium jest także [workflow GitHub Actions](../.github/workflows/cardputer-zero.yml), który pobiera aktualny AppBuilder, buduje pakiet i sprawdza, czy zawiera wspólny silnik oraz wpis APPLaunch. Oficjalny workflow „Build DEB Package” obecnie oczekuje projektu SCons, dlatego dla tego pakietu Pythona używany jest oficjalny pakowacz w naszym workflow.
 
 `CardputerZero/app-builder.json` dostarcza pola do wykrycia projektu. Nie ma jeszcze sekcji `store`: publikacja w AppStore wymaga ustalenia licencji projektu, zrzutów 320 × 170 i przeprowadzenia testu na prawdziwym urządzeniu. Lokalny pakiet `.deb` i wpis APPLaunch nie wymagają publikacji w sklepie.
 
@@ -98,7 +100,7 @@ Wynik: `dist/swissknife-cardputer_0.2.6-m5stack1+git<N>.<SHA>_arm64.deb` (`N` to
 Na komputerze, na którym zbudowano pakiet, uruchom:
 
 ```bash
-bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.6-*_arm64.deb one@c0.local
+bash CardputerZero/scripts/deploy.sh dist/swissknife-cardputer_0.2.7-*_arm64.deb one@c0.local
 ```
 
 Skrypt przygotowuje pliki pakietu z właścicielem `root`, kopiuje `.deb` do `/tmp` na Cardputerze, instaluje go przez `apt --no-install-recommends` i usuwa przesłany plik także wtedy, gdy instalacja się nie powiedzie. Aktualizacja pakietu przez `apt` zastępuje poprzednią wersję; dane użytkownika w katalogu domowym pozostają na miejscu.

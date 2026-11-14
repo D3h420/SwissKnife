@@ -268,7 +268,7 @@ class Controller:
                     self.screen = "workflow_result" if self.module and self.module.key in ATTACK_MODULES else "results"
                 elif event.kind == "finished" and self.screen.startswith("workflow_"):
                     self.awaiting_input = False
-                    self.screen = "workflow_result"
+                    self.screen = "results" if self.record_kind in {"arp_devices", "camera_candidates"} and self.records else "workflow_result"
                 elif event.kind == "finished" and self.screen in {"running", "sniffer_live", "sniffer_stopped", "sniffer_probes", "sniffer_aps"}:
                     self.awaiting_input = False
                     if self.sniffer_exit_requested:
@@ -362,6 +362,12 @@ class Controller:
                 self.attack_options = [(key, label) for key, label in available if "back" not in label.casefold()]
             elif self.hardware:
                 self.attack_options = [(item.name, f"{item.name}  {item.mode}") for item in self.hardware.wifi]
+            if not self.attack_options:
+                self.error = "No Wi-Fi interface available"
+                if self.operation:
+                    self.operation.cancel()
+                self._goto("workflow_result")
+                return
             self._goto("workflow_choice")
             return
         if "ssid source" in lowered:
@@ -396,8 +402,13 @@ class Controller:
             self.attack_options = [("1", "Classic"), ("2", "ON RUN")]
             self._goto("workflow_choice")
             return
-        if ("proceed" in lowered and "y/n" in lowered) or ("install all required tools" in lowered and "y/n" in lowered):
-            self.attack_phase = "Confirm configuration"
+        if "install all required tools" in lowered and "y/n" in lowered:
+            self.attack_phase = "Install missing tools?"
+            self.attack_options = [("y", "Install tools"), ("n", "Skip")]
+            self._goto("workflow_choice")
+            return
+        if "proceed" in lowered and "y/n" in lowered:
+            self.attack_phase = "Authorized use only"
             self.attack_options = [("y", "Continue"), ("n", "Cancel")]
             self._goto("workflow_choice")
             return
@@ -592,8 +603,11 @@ class Controller:
                     self.menu = "main"
                     self._goto("menu")
                 return
-            back = {"about": "menu", "about_qr": "about", "recon_modes": "menu", "recon_scan_setup": "recon_modes", "detail": "menu", "duration_input": "recon_scan_setup" if self.module and self.module.key == "Recon" else "detail", "results": "recon_modes" if self.module and self.module.key == "Recon" else "detail", "error": "detail", "network_detail": "results"}
+            results_back = "recon_modes" if self.module and self.module.key == "Recon" else "menu" if self.module and self.module.key in ATTACK_MODULES else "detail"
+            back = {"about": "menu", "about_qr": "about", "recon_modes": "menu", "recon_scan_setup": "recon_modes", "detail": "menu", "duration_input": "recon_scan_setup" if self.module and self.module.key == "Recon" else "detail", "results": results_back, "error": "detail", "network_detail": "results"}
             if self.screen == "detail":
+                self.menu = self.return_menu
+            if self.screen == "results" and self.module and self.module.key in ATTACK_MODULES:
                 self.menu = self.return_menu
             self._goto(back.get(self.screen, "menu"))
             if self.screen == "exit":

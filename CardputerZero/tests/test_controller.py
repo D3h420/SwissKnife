@@ -383,6 +383,65 @@ class ControllerTests(unittest.TestCase):
         c.handle("ENTER")
         self.assertEqual(cancelled, [True])
 
+    def test_evil_twin_multi_target_and_confirmation(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Evil Twin")
+        c.screen = "workflow_wait"
+        sent = []
+        events = [
+            EngineEvent("data", "workflow_networks", {"module": "Evil Twin", "interface": "wlan1", "records": [{"ssid": "A"}, {"ssid": "B"}]}),
+            EngineEvent("input", "Input required", {"prompt": "Select network(s) (number, e.g. 1 or 1,3; R to rescan; E to exit): "}),
+        ]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=sent.append)
+        c.tick()
+        c.tick()
+        self.assertTrue(c.attack_multi)
+        c.handle("TEXT", " ")
+        c.handle("DOWN")
+        c.handle("TEXT", " ")
+        self.assertTrue(all(record["marked"] for record in c.view().records))
+        c.handle("ENTER")
+        self.assertEqual(sent, ["1,2"])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Proceed? (Y/N): "}))
+        c.tick()
+        self.assertEqual(c.view().rows, ["Continue", "Cancel"])
+
+    def test_management_interface_requires_explicit_choice(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "Deauth")
+        c.hardware = HardwareSnapshot(("wlan0",), (WiFiAdapter("wlan0", "builtin", "managed", False, None),), (), (), "wlan0", False, frozenset())
+        c.screen = "workflow_wait"
+        sent = []
+        events = [EngineEvent("input", "Input required", {"prompt": "Select interface (number or name): "})]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=sent.append)
+        c.tick()
+        c.handle("ENTER")
+        self.assertEqual(sent, [])
+        self.assertEqual(c.attack_phase, "Confirm management interface")
+        c.handle("ENTER")
+        self.assertEqual(sent, ["wlan0"])
+
+    def test_wifi_poet_ssid_sets_and_secret_input(self):
+        c = self.controller
+        c.module = next(item for item in c.engine.modules() if item.key == "WiFi Poet")
+        c.screen = "workflow_wait"
+        sent = []
+        events = [
+            EngineEvent("data", "workflow_options", {"module": "WiFi Poet", "kind": "ssid_set", "records": [{"index": 1, "key": "chaos", "label": "Chaos"}, {"index": 2, "key": "custom", "label": "Custom"}]}),
+            EngineEvent("input", "Input required", {"prompt": "Select SSID set (number or key, Enter for 1): "}),
+        ]
+        c.operation = SimpleNamespace(state="running", poll=lambda: [events.pop(0)] if events else [], send=sent.append)
+        c.tick()
+        c.tick()
+        self.assertEqual(c.view().rows, ["Chaos", "Custom"])
+        c.handle("DOWN")
+        c.handle("ENTER")
+        self.assertEqual(sent, ["2"])
+        events.append(EngineEvent("input", "Input required", {"prompt": "Password for LAB:", "secret": True}))
+        c.tick()
+        self.assertEqual(c.screen, "workflow_text")
+        self.assertTrue(c.view().secret_input)
+
 
 if __name__ == "__main__":
     unittest.main()

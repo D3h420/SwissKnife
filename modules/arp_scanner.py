@@ -877,6 +877,12 @@ class ArpScanner(Module):
         self.console.print(table)
 
     def _choose_target_network(self, networks: List[WiFiNetwork]) -> WiFiNetwork:
+        if os.environ.get("SWISSKNIFE_GUI"):
+            from core.gui_events import emit
+            emit("workflow_networks", module="ARP scan", interface=self.interface or "", records=[{
+                "ssid": net.ssid or "<hidden>", "bssid": net.bssid,
+                "channel": net.channel, "signal": net.signal, "security": net.security,
+            } for net in networks])
         if self.preferred_ssid:
             for network in networks:
                 if network.ssid == self.preferred_ssid:
@@ -909,6 +915,9 @@ class ArpScanner(Module):
             return ""
         if self.password:
             return self.password
+        if os.environ.get("SWISSKNIFE_GUI"):
+            import getpass
+            return getpass.getpass(f"Password for {network.ssid or network.bssid}: ")
         return Prompt.ask(
             f"Password for [bold]{network.ssid or network.bssid}[/bold]",
             password=False,
